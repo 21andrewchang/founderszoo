@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy, setContext } from 'svelte';
+	import '../app.css';
 	import { writable, type Writable } from 'svelte/store';
 	import type { User } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
@@ -30,6 +31,7 @@
 		const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
 			applyUser(s?.user ?? null);
 		});
+		onDestroy(() => sub.subscription.unsubscribe());
 	});
 
 	// Close modal if signed in
@@ -44,13 +46,11 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<div class="flex min-h-screen w-full flex-col bg-stone-50 text-stone-900">
-	<div class="flex h-10 bg-stone-50 p-2">
+<div class="flex h-dvh w-full flex-col justify-center overflow-hidden bg-stone-50 text-stone-900">
+	<div class="fixed top-2 left-2">
 		{#if $session.loading}
-			<div class="px-3 py-1 text-xs font-medium text-stone-50">Hello</div>
-		{:else if $session.user}
-			<div class="px-3 py-1 text-xs font-medium text-stone-800">Hello, {$session.name}</div>
-		{:else}
+			<div class="px-3 py-1 text-xs font-medium text-stone-50"></div>
+		{:else if !$session.user}
 			<button
 				class="rounded-lg border border-stone-300 bg-stone-50 px-2 py-1 text-xs font-medium text-stone-800 transition hover:bg-stone-100"
 				onclick={() => (authModalOpen = true)}
