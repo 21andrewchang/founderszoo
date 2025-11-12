@@ -602,16 +602,9 @@
 					{/if}
 				</div>
 
-				{#if dayIdByUser[person.user_id] === undefined}
+				{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
 					{#each hours as _}
-						<div class="flex h-6 w-full flex-row space-x-1">
-							<div class="flex w-full rounded-md bg-stone-100"></div>
-							<div class="flex w-full rounded-md bg-stone-100"></div>
-						</div>
-					{/each}
-				{:else if dayIdByUser[person.user_id] === null}
-					{#each hours as _}
-						<div class="flex h-6 w-full flex-row space-x-1">
+						<div class="flex h-7 w-full flex-row space-x-1">
 							<div class="flex w-full rounded-md bg-stone-100"></div>
 							<div class="flex w-full rounded-md bg-stone-100"></div>
 						</div>
