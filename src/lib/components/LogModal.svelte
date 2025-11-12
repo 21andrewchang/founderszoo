@@ -26,23 +26,69 @@
 		initialHalf?: 0 | 1 | null;
 	}>();
 
+	type ModalMode = 'insert' | 'normal';
+
 	let text = $state('');
 	let todo = $state<boolean | null>(null);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
+	let modalEl: HTMLDivElement | null = $state(null);
 	let makeHabit = $state(false);
 	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
+	let mode = $state<ModalMode>('insert');
+
+	function focusInputSoon() {
+		queueMicrotask(() => inputEl?.focus());
+	}
+	function focusModalSoon() {
+		queueMicrotask(() => modalEl?.focus());
+	}
+	function enterInsertMode() {
+		mode = 'insert';
+		focusInputSoon();
+	}
+	function enterNormalMode() {
+		mode = 'normal';
+		inputEl?.blur();
+		focusModalSoon();
+	}
 
 	function handleBackdropClick(e: MouseEvent) {
 		if (e.target === e.currentTarget) onClose();
 	}
 	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			onClose();
+		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+		if (key === 'Escape') {
+			if (mode === 'insert') {
+				enterNormalMode();
+			} else {
+				onClose();
+			}
+			e.preventDefault();
 			return;
 		}
-		if (e.key === 'Enter' && e.metaKey) {
+		if (mode === 'normal' && key === 'i') {
+			enterInsertMode();
+			e.preventDefault();
+			return;
+		}
+		if (mode === 'normal' && (key === 't' || key === 'h')) {
+			e.preventDefault();
+			if (key === 't') {
+				todo = todo === null ? false : null;
+				if (todo === null) makeHabit = false;
+			} else if (key === 'h') {
+				makeHabit = !makeHabit;
+				if (makeHabit) {
+					todo = false;
+				} else {
+					todo = null;
+				}
+			}
+			return;
+		}
+		if (key === 'Enter' && e.metaKey) {
 			e.preventDefault();
 			void handleSubmit();
 		}
@@ -71,7 +117,11 @@
 		}
 	}
 	$effect(() => {
-		if (open) queueMicrotask(() => inputEl?.focus());
+		if (open) {
+			enterInsertMode();
+		} else {
+			mode = 'insert';
+		}
 	});
 
 	$effect(() => {
@@ -80,7 +130,8 @@
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		makeHabit = false;
-	});
+			mode = 'insert';
+		});
 
 	function fillPreset(s: string) {
 		text = s;
@@ -89,19 +140,20 @@
 </script>
 
 {#if open}
-	<div
-		in:fade={{ duration: 150 }}
-		class="fixed inset-0 z-[130] flex items-center justify-center bg-stone-900/30 backdrop-blur-sm"
-		role="dialog"
+		<div
+			bind:this={modalEl}
+			in:fade={{ duration: 150 }}
+			class="fixed inset-0 z-[130] flex items-center justify-center bg-stone-900/30 backdrop-blur-sm"
+			role="dialog"
 		aria-modal="true"
 		aria-label="New log"
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
 	>
-		<div
-			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-xl rounded-xl border border-stone-200 bg-white/95 text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+			<div
+				in:scale={{ start: 0.95, duration: 160 }}
+				class="w-full max-w-xl rounded-xl border border-stone-200 bg-white/95 text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
 			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
 				<select
@@ -131,15 +183,16 @@
 					</span>
 				</button>
 			</div>
-			<div class="flex w-full flex-row items-center">
-				<input
-					bind:this={inputEl}
-					type="text"
-					placeholder="Title"
-					class="w-full p-5 text-2xl text-stone-800 transition outline-none"
-					bind:value={text}
-					autocomplete="off"
-				/>
+				<div class="flex w-full flex-row items-center">
+					<input
+						bind:this={inputEl}
+						type="text"
+						placeholder="Title"
+						class="w-full p-5 text-2xl text-stone-800 transition outline-none"
+						onfocus={enterInsertMode}
+						bind:value={text}
+						autocomplete="off"
+					/>
 				{#if todo === false}
 					<div class="relative mr-5 grid h-3 w-3 rounded-full p-3">
 						<span
