@@ -929,8 +929,8 @@
 			{#each hours as h}
 				<div
 					class="flex h-7 items-center justify-center rounded px-1 text-stone-300"
-					class:bg-amber-200={isCurrent(h)}
-					class:text-stone-900={isCurrent(h)}
+					class:bg-stone-700={isCurrent(h)}
+					class:text-white={isCurrent(h)}
 				>
 					{hh(h)}
 				</div>
