@@ -955,7 +955,7 @@
 					{#each people as person}
 						<div class="flex w-full flex-col space-y-1 transition-opacity">
 							<div class="flex h-6 items-center gap-2">
-								{#if !viewerUserId}
+								{#if true}
 									{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
 									{#if trackedKey}
 										<PlayerStatusTag
