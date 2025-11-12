@@ -26,6 +26,7 @@
 		onSelect?: () => void;
 		onToggleTodo?: () => void;
 		selected?: boolean;
+		habit?: string | null;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -34,11 +35,12 @@
 	const todo = $derived(props.todo ?? null);
 	const onToggleTodo = $derived(props.onToggleTodo ?? (() => {}));
 	const selected = $derived(props.selected ?? false);
+	const habitPlaceholder = $derived((props.habit ?? '').trim());
 
 	const trimmed = $derived((title ?? '').trim());
 	const isFilled = $derived(trimmed.length > 0);
-	const habitKey = $derived(trimmed.toLowerCase());
-	const habit = $derived(HABITS[habitKey]);
+	const habitKey = $derived(habitPlaceholder.toLowerCase());
+	const habitPreset = $derived(HABITS[habitKey]);
 
 	const BASE_SLOT =
 		'flex flex-row w-full items-center gap-2 rounded-md border px-2 py-1 text-xs font-medium bg-stone-50';
@@ -46,17 +48,13 @@
 	const DEFAULT_EMPTY = 'border-stone-100 bg-stone-100 text-stone-600 hover:bg-stone-200';
 	const DEFAULT_EMPTY_DISABLED = 'border-stone-100 bg-stone-100 text-stone-400';
 
-	const slotClasses = $derived(() => {
-		if (isFilled) {
-			return `${BASE_SLOT} ${habit ? habit.filled : DEFAULT_FILLED} flex flex-row justify-between w-full`;
-		}
-		const baseEmpty = habit ? habit.empty : DEFAULT_EMPTY;
-		const disabledState = `${BASE_SLOT} ${habit ? habit.empty : DEFAULT_EMPTY_DISABLED}  cursor-not-allowed`;
-		return editable ? `${BASE_SLOT} ${baseEmpty} cursor-pointer` : disabledState;
-	});
-
 	const showTodo = $derived(todo !== null);
-	const canOpen = $derived(editable && !isFilled);
+	const canOpen = $derived(
+		editable &&
+			!isFilled && // don’t open if already has text
+			!habitPreset && // don’t open if this title maps to a known habit
+			!habitPlaceholder // don’t open if a habit placeholder is shown
+	);
 
 	function handleSlotClick() {
 		onToggleTodo();
@@ -83,12 +81,14 @@
 	onclick={handleSlotClick}
 	onkeydown={handleSlotKeydown}
 >
-	{#if habit}
-		<span class="text-xs leading-none">{habit.icon}</span>
+	{#if habitPreset}
+		<span class="text-xs leading-none">{habitPreset.icon}</span>
 	{/if}
 	<span class="ml-1 flex-1 truncate text-left text-xs">
 		{#if isFilled}
 			{trimmed}
+		{:else if habitPlaceholder}
+			<span class="text-stone-400">{habitPlaceholder}</span>
 		{:else}
 			&nbsp;
 		{/if}

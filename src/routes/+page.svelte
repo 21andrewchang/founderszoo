@@ -34,10 +34,12 @@
 
 	type SlotValue = { title: string; todo: boolean | null };
 	type SlotRow = { first: SlotValue; second: SlotValue };
+	type HabitSlotRow = { first: string | null; second: string | null };
 	type SelectedSlot = { hourIndex: number; half: 0 | 1 };
 
 	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
+	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
 
 	// modal + draft
 	let logOpen = $state(false);
@@ -92,6 +94,21 @@
 	}
 	function getTodo(user_id: string, h: number, half01: 0 | 1) {
 		return getSlot(user_id, h, half01).todo ?? null;
+	}
+	function ensureHabitRow(user_id: string, h: number): HabitSlotRow {
+		habitsByUser[user_id] ??= {};
+		habitsByUser[user_id][h] ??= { first: null, second: null };
+		return habitsByUser[user_id][h];
+	}
+	function setHabitTitle(user_id: string, h: number, half01: 0 | 1, name: string | null) {
+		const row = ensureHabitRow(user_id, h);
+		if (half01 === 0) row.first = name;
+		else row.second = name;
+	}
+	function getHabitTitle(user_id: string, h: number, half01: 0 | 1) {
+		const row = habitsByUser[user_id]?.[h];
+		if (!row) return null;
+		return half01 === 0 ? row.first : row.second;
 	}
 	function getHourIndex(value: number) {
 		return hours.findIndex((hour) => hour === value);
@@ -148,16 +165,25 @@
 		if (!viewerUserId || !selectedSlot) return false;
 		const hour = hours[selectedSlot.hourIndex];
 		if (hour === undefined) return false;
+
+		// 1) If this slot has a todo bubble, toggle it.
 		const todoValue = getTodo(viewerUserId, hour, selectedSlot.half);
 		if (todoValue !== null) {
 			toggleTodo(viewerUserId, hour, selectedSlot.half);
 			return true;
 		}
+
+		// 2) Block opening if this slot is a habit.
+		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
+		if ((habitName ?? '').trim().length > 0) return true; // handled: habits are not editable
+
+		// 3) Only open editor if empty and not a habit.
 		const title = getTitle(viewerUserId, hour, selectedSlot.half);
 		if (title.trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half);
 		return true;
 	}
+
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (!viewerUserId || logOpen) return;
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -235,6 +261,23 @@
 		}
 		slotsByUser[user_id] = next;
 	}
+	async function loadHabitsForUser(user_id: string) {
+		const { data, error } = await supabase
+			.from('habits')
+			.select('hour, half, name')
+			.eq('user_id', user_id);
+		if (error) throw error;
+		const next: Record<number, HabitSlotRow> = {};
+		for (const r of data ?? []) {
+			const h = r.hour as number;
+			const half01 = (r.half ? 1 : 0) as 0 | 1;
+			const name = r.name ?? '';
+			next[h] ??= { first: null, second: null };
+			if (half01 === 0) next[h].first = name;
+			else next[h].second = name;
+		}
+		habitsByUser[user_id] = next;
+	}
 
 	function openEditor(user_id: string, h: number, half01: 0 | 1) {
 		if (viewerUserId !== user_id) return; // only edit your own column
@@ -246,7 +289,11 @@
 		logOpen = true;
 	}
 
-	async function saveLog(text: string, todo: boolean | null) {
+	async function saveLog(
+		text: string,
+		todo: boolean | null,
+		habit?: { name: string; hour: number; half: 0 | 1 } | null
+	) {
 		const { user_id, hour, half } = draft;
 		if (!user_id || hour == null || half == null) return;
 		const day_id = dayIdByUser[user_id];
@@ -266,6 +313,24 @@
 
 		// update local cache with both title and todo
 		setTitle(user_id, hour, half, text, todo);
+
+		if (habit && viewerUserId === user_id) {
+			const { name, hour: habitHour, half: habitHalf } = habit;
+			const { error: habitErr } = await supabase.from('habits').upsert(
+				{
+					user_id,
+					name,
+					hour: habitHour,
+					half: habitHalf === 1
+				},
+				{ onConflict: 'user_id,hour,half' }
+			);
+			if (habitErr) {
+				console.error('habit save error', habitErr);
+			} else {
+				setHabitTitle(user_id, habitHour, habitHalf, name);
+			}
+		}
 
 		logOpen = false;
 	}
@@ -419,7 +484,9 @@
 				const create = viewerUserId === user_id;
 				const dayId = await getTodayDayIdForUser(user_id, create);
 				dayIdByUser[user_id] = dayId;
-				if (dayId) await loadHoursForDay(user_id, dayId);
+				const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
+				await Promise.all(tasks);
 			})
 		);
 
@@ -496,6 +563,7 @@
 								editable={viewerUserId === person.user_id}
 								onSelect={() => openEditor(person.user_id, h, 0)}
 								onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
+								habit={getHabitTitle(person.user_id, h, 0)}
 								selected={viewerUserId === person.user_id &&
 									selectedSlot?.hourIndex === hourIndex &&
 									selectedSlot?.half === 0}
@@ -506,6 +574,7 @@
 								editable={viewerUserId === person.user_id}
 								onSelect={() => openEditor(person.user_id, h, 1)}
 								onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
+								habit={getHabitTitle(person.user_id, h, 1)}
 								selected={viewerUserId === person.user_id &&
 									selectedSlot?.hourIndex === hourIndex &&
 									selectedSlot?.half === 1}
@@ -518,4 +587,10 @@
 	</div>
 </div>
 
-<LogModal open={logOpen} onClose={() => (logOpen = false)} onSave={saveLog} />
+<LogModal
+	open={logOpen}
+	onClose={() => (logOpen = false)}
+	onSave={saveLog}
+	initialHour={draft.hour}
+	initialHalf={draft.half}
+/>

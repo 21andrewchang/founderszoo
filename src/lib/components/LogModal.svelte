@@ -1,20 +1,34 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 
+	const HOURS = Array.from({ length: 24 }, (_, i) => i);
+	const hh = (n: number) => n.toString().padStart(2, '0');
+
 	let {
 		open = false,
 		onClose = () => {},
-		onSave = () => {}
+		onSave = () => {},
+		initialHour = null,
+		initialHalf = null
 	} = $props<{
 		open?: boolean;
 		onClose?: () => void;
-		onSave?: (text: string, todo: boolean | null) => void;
+		onSave?: (
+			text: string,
+			todo: boolean | null,
+			habit?: { name: string; hour: number; half: 0 | 1 } | null
+		) => void;
+		initialHour?: number | null;
+		initialHalf?: 0 | 1 | null;
 	}>();
 
 	let text = $state('');
 	let todo = $state<boolean | null>(null);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
+	let makeHabit = $state(false);
+	let habitHour = $state(currentSlot().hour);
+	let habitHalf = $state<0 | 1>(currentSlot().half);
 
 	function handleBackdropClick(e: MouseEvent) {
 		if (e.target === e.currentTarget) onClose();
@@ -35,9 +49,11 @@
 		if (!value || saving) return;
 		saving = true;
 		try {
-			onSave(value, todo);
+			const habitPayload = makeHabit ? { name: value, hour: habitHour, half: habitHalf } : null;
+			onSave(value, todo, habitPayload);
 			text = '';
 			todo = null;
+			makeHabit = false;
 			onClose();
 		} finally {
 			saving = false;
@@ -47,6 +63,13 @@
 	// autofocus when opened
 	$effect(() => {
 		if (open) queueMicrotask(() => inputEl?.focus());
+	});
+	$effect(() => {
+		if (!open) return;
+		const fallback = currentSlot();
+		habitHour = initialHour ?? fallback.hour;
+		habitHalf = (initialHalf ?? fallback.half) as 0 | 1;
+		makeHabit = false;
 	});
 
 	function fillPreset(s: string) {
@@ -84,6 +107,53 @@
 						<span
 							class="pointer-events-none absolute inset-0 rounded-full border border-[1px] border-stone-400 transition duration-200 ease-out"
 						/>
+					</div>
+				{/if}
+			</div>
+			<div class="flex flex-col gap-2 border-t border-stone-100 px-4 pt-2 pb-4">
+				<label class="flex items-center gap-2 text-xs font-medium text-stone-700">
+					<input
+						type="checkbox"
+						class="rounded border-stone-300 text-stone-900 focus:ring-stone-500"
+						checked={makeHabit}
+						onchange={(event) => (makeHabit = (event.currentTarget as HTMLInputElement).checked)}
+					/>
+					<span>Save as habit</span>
+				</label>
+				{#if makeHabit}
+					<div class="flex flex-col gap-2 text-xs text-stone-600 sm:flex-row sm:items-center">
+						<div class="flex items-center gap-2">
+							<span class="text-[11px] tracking-wide text-stone-500 uppercase">Hour</span>
+							<select
+								class="rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs text-stone-900 shadow-sm focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none"
+								value={habitHour}
+								onchange={(event) =>
+									(habitHour = Number((event.currentTarget as HTMLSelectElement).value))}
+							>
+								{#each HOURS as h}
+									<option value={h}>{hh(h)}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="flex items-center gap-2">
+							<span class="text-[11px] tracking-wide text-stone-500 uppercase">Block</span>
+							<div class="flex gap-1">
+								<button
+									type="button"
+									class={`rounded-lg border px-2 py-1 text-xs font-medium transition ${habitHalf === 0 ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 text-stone-700 hover:border-stone-300'}`}
+									onclick={() => (habitHalf = 0)}
+								>
+									:00
+								</button>
+								<button
+									type="button"
+									class={`rounded-lg border px-2 py-1 text-xs font-medium transition ${habitHalf === 1 ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 text-stone-700 hover:border-stone-300'}`}
+									onclick={() => (habitHalf = 1)}
+								>
+									:30
+								</button>
+							</div>
+						</div>
 					</div>
 				{/if}
 			</div>
