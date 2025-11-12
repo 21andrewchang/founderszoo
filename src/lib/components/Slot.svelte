@@ -57,15 +57,16 @@
 	// Build classes
 	const baseClasses =
 		'flex w-full min-w-0 flex-row items-center rounded-sm  p-2 transition overflow-hidden focus:outline-0';
+	const canHover = $derived(editable);
 	const habitClasses = $derived(
 		isHabit
-			? `border-dotted hover:border-solid border ${theme?.border ?? 'border-stone-300'} ${
+			? `border-dotted ${canHover ? 'hover:border-solid' : ''} border ${theme?.border ?? 'border-stone-300'} ${
 					isFilled
 						? (theme?.filled ?? 'bg-stone-50 text-stone-900')
-						: (theme?.empty ?? 'bg-stone-50 text-stone-700 hover:bg-stone-100')
+						: (theme?.empty ?? 'bg-stone-50 text-stone-700') + (canHover ? ' hover:bg-stone-100' : '')
 				}`
 			: `${isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'} ${
-					editable && !isFilled ? 'hover:bg-stone-200' : 'hover:bg-stone-200'
+					canHover ? 'hover:bg-stone-200' : ''
 				}`
 	);
 
