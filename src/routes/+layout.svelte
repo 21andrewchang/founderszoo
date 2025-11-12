@@ -31,5 +31,5 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<OnlineCount dedupe={true} />
+<OnlineCount dedupe={false} />
 {@render children()}
