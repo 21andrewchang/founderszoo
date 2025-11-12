@@ -11,6 +11,7 @@
 	const START_HOUR = 8;
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
+	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	const TEST_CLOCK = {
@@ -31,6 +32,7 @@
 	// auth + data
 	let viewerUserId = $state<string | null>(null);
 	let dayIdByUser = $state<Record<string, string | null>>({});
+	let isLoading = $state(true);
 
 	type SlotValue = { title: string; todo: boolean | null };
 	type SlotRow = { first: SlotValue; second: SlotValue };
@@ -524,38 +526,44 @@
 	}
 
 	async function init() {
-		const { data: auth, error: authErr } = await supabase.auth.getUser();
-		if (authErr) throw authErr;
-		viewerUserId = auth.user?.id ?? null;
-		if (!viewerUserId) selectedSlot = null;
+		try {
+			const { data: auth, error: authErr } = await supabase.auth.getUser();
+			if (authErr) throw authErr;
+			viewerUserId = auth.user?.id ?? null;
+			if (!viewerUserId) selectedSlot = null;
 
-		const { data: rows, error: uerr } = await supabase
-			.from('users')
-			.select('id, display_name')
-			.order('display_name', { ascending: true });
-		if (uerr) throw uerr;
+			const { data: rows, error: uerr } = await supabase
+				.from('users')
+				.select('id, display_name')
+				.order('display_name', { ascending: true });
+			if (uerr) throw uerr;
 
-		people = (rows ?? []).map((r) => ({
-			label: r.display_name as string,
-			user_id: r.id as string
-		}));
+			people = (rows ?? []).map((r) => ({
+				label: r.display_name as string,
+				user_id: r.id as string
+			}));
 
-		await Promise.all(
-			people.map(async ({ user_id }) => {
-				const create = viewerUserId === user_id;
-				const dayId = await getTodayDayIdForUser(user_id, create);
-				dayIdByUser[user_id] = dayId;
-				const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
-				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
-				await Promise.all(tasks);
-				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
-			})
-		);
+			await Promise.all(
+				people.map(async ({ user_id }) => {
+					const create = viewerUserId === user_id;
+					const dayId = await getTodayDayIdForUser(user_id, create);
+					dayIdByUser[user_id] = dayId;
+					const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+					if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
+					await Promise.all(tasks);
+					if (dayId) await ensureHabitHoursForDay(user_id, dayId);
+				})
+			);
 
-		// Try prompting once right after initial load
-		maybePromptForMissing();
-		startHalfHourNotifier();
-		ensureSelectionExists();
+			// Try prompting once right after initial load
+			maybePromptForMissing();
+			startHalfHourNotifier();
+			ensureSelectionExists();
+		} catch (e) {
+			console.error('init failed', e);
+		} finally {
+			isLoading = false;
+		}
 	}
 
 	onMount(() => {
@@ -568,7 +576,7 @@
 		};
 		tick();
 		const i = setInterval(tick, 60_000);
-		init().catch((e) => console.error('init failed', e));
+		init();
 		const keyHandler = (event: KeyboardEvent) => handleGlobalKeydown(event);
 		window.addEventListener('keydown', keyHandler);
 		return () => {
@@ -593,52 +601,68 @@
 			{/each}
 		</div>
 
-		{#each people as person}
-			<div class="flex w-full flex-col space-y-1">
-				<div class="flex items-center gap-2">
-					<span>{person.label}</span>
-					{#if viewerUserId === person.user_id}
-						<span class="rounded bg-stone-200 px-2 py-0.5 text-[10px] text-stone-700">you</span>
-					{/if}
-				</div>
-
-				{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+		{#if isLoading}
+			{#each loadingPlaceholderColumns as _}
+				<div class="flex w-full flex-col space-y-1" aria-hidden="true">
+					<div class="flex items-center gap-2">
+						<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
+					</div>
 					{#each hours as _}
 						<div class="flex h-7 w-full flex-row space-x-1">
-							<div class="flex w-full rounded-md bg-stone-100"></div>
-							<div class="flex w-full rounded-md bg-stone-100"></div>
+							<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+							<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
 						</div>
 					{/each}
-				{:else}
-					{#each hours as h, hourIndex}
-						<div class="flex h-7 w-full flex-row space-x-1">
-							<Slot
-								title={getTitle(person.user_id, h, 0)}
-								todo={getTodo(person.user_id, h, 0)}
-								editable={viewerUserId === person.user_id}
-								onSelect={() => openEditor(person.user_id, h, 0)}
-								onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
-								habit={getHabitTitle(person.user_id, h, 0)}
-								selected={viewerUserId === person.user_id &&
-									selectedSlot?.hourIndex === hourIndex &&
-									selectedSlot?.half === 0}
-							/>
-							<Slot
-								title={getTitle(person.user_id, h, 1)}
-								todo={getTodo(person.user_id, h, 1)}
-								editable={viewerUserId === person.user_id}
-								onSelect={() => openEditor(person.user_id, h, 1)}
-								onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
-								habit={getHabitTitle(person.user_id, h, 1)}
-								selected={viewerUserId === person.user_id &&
-									selectedSlot?.hourIndex === hourIndex &&
-									selectedSlot?.half === 1}
-							/>
-						</div>
-					{/each}
-				{/if}
-			</div>
-		{/each}
+				</div>
+			{/each}
+		{:else}
+			{#each people as person}
+				<div class="flex w-full flex-col space-y-1">
+					<div class="flex items-center gap-2">
+						<span>{person.label}</span>
+						{#if viewerUserId === person.user_id}
+							<span class="rounded bg-stone-200 px-2 py-0.5 text-[10px] text-stone-700">you</span>
+						{/if}
+					</div>
+
+					{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+						{#each hours as _}
+							<div class="flex h-7 w-full flex-row space-x-1">
+								<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+								<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+							</div>
+						{/each}
+					{:else}
+						{#each hours as h, hourIndex}
+							<div class="flex h-7 w-full flex-row space-x-1">
+								<Slot
+									title={getTitle(person.user_id, h, 0)}
+									todo={getTodo(person.user_id, h, 0)}
+									editable={viewerUserId === person.user_id}
+									onSelect={() => openEditor(person.user_id, h, 0)}
+									onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
+									habit={getHabitTitle(person.user_id, h, 0)}
+									selected={viewerUserId === person.user_id &&
+										selectedSlot?.hourIndex === hourIndex &&
+										selectedSlot?.half === 0}
+								/>
+								<Slot
+									title={getTitle(person.user_id, h, 1)}
+									todo={getTodo(person.user_id, h, 1)}
+									editable={viewerUserId === person.user_id}
+									onSelect={() => openEditor(person.user_id, h, 1)}
+									onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
+									habit={getHabitTitle(person.user_id, h, 1)}
+									selected={viewerUserId === person.user_id &&
+										selectedSlot?.hourIndex === hourIndex &&
+										selectedSlot?.half === 1}
+								/>
+							</div>
+						{/each}
+					{/if}
+				</div>
+			{/each}
+		{/if}
 	</div>
 </div>
 
@@ -649,3 +673,32 @@
 	initialHour={draft.hour}
 	initialHalf={draft.half}
 />
+
+<style>
+	.loading-slot,
+	.loading-sheen {
+		position: relative;
+		overflow: hidden;
+	}
+
+	.loading-slot::after,
+	.loading-sheen::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(
+			120deg,
+			transparent 0%,
+			rgba(255, 255, 255, 0.65) 50%,
+			transparent 100%
+		);
+		transform: translateX(-100%);
+		animation: slot-sheen 0.5s linear infinite;
+	}
+
+	@keyframes slot-sheen {
+		100% {
+			transform: translateX(100%);
+		}
+	}
+</style>
