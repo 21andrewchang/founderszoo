@@ -1,8 +1,10 @@
 <script lang="ts">
 	import ConfirmMoveModal from '$lib/components/ConfirmMoveModal.svelte';
 	import LogModal from '$lib/components/LogModal.svelte';
+	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
 	import Slot from '$lib/components/Slot.svelte';
-	import { getContext, onMount } from 'svelte';
+	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
+	import { getContext, onDestroy, onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
 	import type { Session } from '$lib/session';
@@ -11,6 +13,83 @@
 
 	let people = $state<Person[]>([]);
 	const session = getContext<Writable<Session>>('session');
+
+	const TRACKED_PLAYERS = [
+		{ key: 'andrew', fallbackLabel: 'Andrew', tokens: ['andrew', 'graves'] },
+		{ key: 'nico', fallbackLabel: 'Nico', tokens: ['nico', 'cho'] }
+	] as const;
+
+	type PlayerKey = (typeof TRACKED_PLAYERS)[number]['key'];
+	type PlayerDisplay = { label: string; user_id: string | null };
+
+	let playerDisplays = $state<Record<PlayerKey, PlayerDisplay>>({
+		andrew: { label: 'Andrew', user_id: null },
+		nico: { label: 'Nico', user_id: null }
+	});
+	let playerStatuses = $state<Record<PlayerKey, PlayerStatus>>({
+		andrew: 'offline',
+		nico: 'offline'
+	});
+
+	let playerStatusUnsubscribers: (() => void)[] = [];
+	let stopLocalPlayerPresence: (() => void) | null = null;
+
+	function updateTrackedPlayersFromPeople(list: Person[]) {
+		const next = {} as Record<PlayerKey, PlayerDisplay>;
+		for (const def of TRACKED_PLAYERS) {
+			const match = list.find((person) => {
+				const label = person.label.toLowerCase();
+				return def.tokens.some((token) => label.includes(token));
+			});
+			next[def.key] = {
+				label: match?.label ?? def.fallbackLabel,
+				user_id: match?.user_id ?? null
+			};
+		}
+		playerDisplays = next;
+	}
+
+	function stopPlayerStatusWatchers() {
+		for (const unsub of playerStatusUnsubscribers) {
+			unsub?.();
+		}
+		playerStatusUnsubscribers = [];
+	}
+
+	function startPlayerStatusWatchers(viewerId: string | null) {
+		stopPlayerStatusWatchers();
+		if (viewerId) return;
+		for (const def of TRACKED_PLAYERS) {
+			const display = playerDisplays[def.key];
+			if (!display?.user_id) {
+				playerStatuses = { ...playerStatuses, [def.key]: 'offline' };
+				continue;
+			}
+			const store = watchPlayerStatus(display.user_id);
+			const unsub = store.subscribe((status) => {
+				playerStatuses = { ...playerStatuses, [def.key]: status };
+			});
+			playerStatusUnsubscribers.push(unsub);
+		}
+	}
+
+	function startLocalPlayerPresenceIfTracked(userId: string | null) {
+		stopLocalPlayerPresence?.();
+		stopLocalPlayerPresence = null;
+		if (!userId) return;
+		const isTracked = Object.values(playerDisplays).some((display) => display.user_id === userId);
+		if (!isTracked) return;
+		stopLocalPlayerPresence = trackPlayerPresence(userId);
+	}
+
+	function getTrackedPlayerKeyForUser(user_id: string): PlayerKey | null {
+		for (const def of TRACKED_PLAYERS) {
+			if (playerDisplays[def.key]?.user_id === user_id) {
+				return def.key;
+			}
+		}
+		return null;
+	}
 
 	const START_HOUR = 8;
 	const END_HOUR = 24;
@@ -788,6 +867,10 @@
 				user_id: r.id as string
 			}));
 
+			updateTrackedPlayersFromPeople(people);
+			startPlayerStatusWatchers(viewerUserId);
+			startLocalPlayerPresenceIfTracked(viewerUserId);
+
 			await Promise.all(
 				people.map(async ({ user_id }) => {
 					const create = viewerUserId === user_id;
@@ -830,6 +913,11 @@
 			window.removeEventListener('keydown', keyHandler);
 		};
 	});
+
+	onDestroy(() => {
+		stopPlayerStatusWatchers();
+		stopLocalPlayerPresence?.();
+	});
 </script>
 
 <div class="flex h-dvh w-full flex-col justify-center overflow-clip bg-stone-50 p-10">
@@ -867,7 +955,15 @@
 					{#each people as person}
 						<div class="flex w-full flex-col space-y-1 transition-opacity">
 							<div class="flex h-6 items-center gap-2">
-								<span>{person.label}</span>
+								{#if !viewerUserId}
+									{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
+									{#if trackedKey}
+										<PlayerStatusTag
+											label={playerDisplays[trackedKey]?.label ?? null}
+											status={playerStatuses[trackedKey]}
+										/>
+									{/if}
+								{/if}
 								{#if viewerUserId === person.user_id}
 									<span class="rounded bg-stone-200 px-2 py-0.5 text-[10px] text-stone-700"
 										>you</span
