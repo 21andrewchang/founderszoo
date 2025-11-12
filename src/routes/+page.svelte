@@ -15,7 +15,7 @@
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	const TEST_CLOCK = {
-		enabled: true,
+		enabled: false,
 		hour: 12,
 		minute: 0
 	};
@@ -389,10 +389,9 @@
 				console.error('habit save error', habitErr);
 			} else {
 				setHabitTitle(user_id, habitHour, habitHalf, name);
-				if (slotIsEmpty(user_id, habitHour, habitHalf)) {
-					await insertHabitHours(user_id, day_id, [{ hour: habitHour, half: habitHalf, name }]);
-				}
 			}
+
+			await insertHabitHours(user_id, day_id, [{ hour: habitHour, half: habitHalf, name }]);
 		}
 
 		logOpen = false;
