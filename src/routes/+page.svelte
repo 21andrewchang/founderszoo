@@ -277,6 +277,7 @@
 				break;
 			case 'Enter':
 				handled = activateSelectedSlotFromKeyboard();
+				setSelectedSlot(null);
 				break;
 		}
 		if (handled) event.preventDefault();
@@ -353,9 +354,12 @@
 	async function saveLog(
 		text: string,
 		todo: boolean | null,
-		habit?: { name: string; hour: number; half: 0 | 1 } | null
+		hour: number,
+		half: 0 | 1,
+		habit: boolean
 	) {
-		const { user_id, hour, half } = draft;
+		console.log('submitting???');
+		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
@@ -374,9 +378,6 @@
 			title: text,
 			todo
 		};
-		if (habit && habit.hour === hour && habit.half === half) {
-			hourPayload.habit = true;
-		}
 		const { error } = await supabase
 			.from('hours')
 			.upsert(hourPayload, { onConflict: 'day_id,hour,half' });
@@ -390,23 +391,22 @@
 		setTitle(user_id, hour, half, text, todo);
 
 		if (habit && viewerUserId === user_id) {
-			const { name, hour: habitHour, half: habitHalf } = habit;
 			const { error: habitErr } = await supabase.from('habits').upsert(
 				{
 					user_id,
-					name,
-					hour: habitHour,
-					half: habitHalf === 1
+					name: text,
+					hour: hour,
+					half: half === 1
 				},
 				{ onConflict: 'user_id,hour,half' }
 			);
 			if (habitErr) {
 				console.error('habit save error', habitErr);
 			} else {
-				setHabitTitle(user_id, habitHour, habitHalf, name);
+				setHabitTitle(user_id, hour, half, text);
 			}
 
-			await insertHabitHours(user_id, day_id, [{ hour: habitHour, half: habitHalf, name }]);
+			await insertHabitHours(user_id, day_id, [{ hour: hour, half: half, name: text }]);
 		}
 
 		logOpen = false;
