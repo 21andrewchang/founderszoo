@@ -11,7 +11,7 @@
 	const START_HOUR = 8;
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
-	const loadingPlaceholderColumns = Array.from({ length: 3 });
+	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	const TEST_CLOCK = {
@@ -27,8 +27,22 @@
 	}
 	let currentHour = $state(-1);
 	let currentHalf = $state<0 | 1>(0);
+	let currentMinute = $state(0);
 	const isCurrent = (h: number) => h === currentHour;
 	const isNightWindow = () => currentHour >= 0 && currentHour < START_HOUR;
+	const minutesUntilDayStart = () => {
+		if (currentHour < 0 || currentMinute < 0) return 0;
+		const totalMinutes = currentHour * 60 + currentMinute;
+		const dayStartMinutes = START_HOUR * 60;
+		if (totalMinutes >= dayStartMinutes) return 0;
+		return dayStartMinutes - totalMinutes;
+	};
+	const countdownText = () => {
+		const minutes = minutesUntilDayStart();
+		const hours = Math.floor(minutes / 60);
+		const mins = minutes % 60;
+		return `${hours}h ${mins}m until day starts`;
+	};
 
 	// auth + data
 	let viewerUserId = $state<string | null>(null);
@@ -570,6 +584,7 @@
 		const tick = () => {
 			const now = getNow();
 			currentHour = now.getHours();
+			currentMinute = now.getMinutes();
 			currentHalf = now.getMinutes() < 30 ? 0 : 1;
 			// Re-check at each minute tick (will only open once per slot)
 			maybePromptForMissing();
@@ -599,95 +614,94 @@
 					{hh(h)}
 				</div>
 			{/each}
-			<div
-				class="flex h-7 items-center justify-center rounded px-1 text-stone-300"
-				class:bg-amber-200={isNightWindow()}
-				class:text-stone-900={isNightWindow()}
-				aria-label="Early morning indicator"
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					class="h-4 w-4"
-					style="transform: scaleX(-1); transform-box: fill-box; transform-origin: center;"
-					viewBox="0 0 64 64"
-					aria-hidden="true"
-				>
-					<defs>
-						<mask id="moon-cut">
-							<rect width="100%" height="100%" fill="black" />
-							<circle cx="32" cy="32" r="22" fill="white" />
-							<circle cx="44" cy="24" r="18" fill="black" />
-						</mask>
-					</defs>
-					<!-- Fill with the shared dot color -->
-					<rect width="64" height="64" fill="#a8a29e" mask="url(#moon-cut)" />
-				</svg>
-			</div>
 		</div>
 
-		{#if isLoading}
-			{#each loadingPlaceholderColumns as _}
-				<div class="flex w-full flex-col space-y-1" aria-hidden="true">
-					<div class="flex items-center gap-2">
-						<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
-					</div>
-					{#each hours as _}
-						<div class="flex h-7 w-full flex-row space-x-1">
-							<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-							<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+		<div class="flex w-full flex-col">
+			<div class="flex w-full flex-row gap-4">
+				{#if isLoading}
+					{#each loadingPlaceholderColumns as _}
+						<div class="flex w-full flex-col space-y-1" aria-hidden="true">
+							<div class="flex h-6 items-center gap-2">
+								<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
+							</div>
+							{#each hours as _}
+								<div class="flex h-7 w-full flex-row space-x-1">
+									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+								</div>
+							{/each}
 						</div>
 					{/each}
-				</div>
-			{/each}
-		{:else}
-			{#each people as person}
-				<div class="flex w-full flex-col space-y-1">
-					<div class="flex items-center gap-2">
-						<span>{person.label}</span>
-						{#if viewerUserId === person.user_id}
-							<span class="rounded bg-stone-200 px-2 py-0.5 text-[10px] text-stone-700">you</span>
-						{/if}
-					</div>
+				{:else}
+					{#each people as person}
+						<div class="flex w-full flex-col space-y-1">
+							<div class="flex h-6 items-center gap-2 bg-red-400">
+								<span>{person.label}</span>
+								{#if viewerUserId === person.user_id}
+									<span class="rounded bg-stone-200 px-2 py-0.5 text-[10px] text-stone-700"
+										>you</span
+									>
+								{/if}
+							</div>
 
-					{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
-						{#each hours as _}
-							<div class="flex h-7 w-full flex-row space-x-1">
-								<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-								<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-							</div>
-						{/each}
-					{:else}
-						{#each hours as h, hourIndex}
-							<div class="flex h-7 w-full flex-row space-x-1">
-								<Slot
-									title={getTitle(person.user_id, h, 0)}
-									todo={getTodo(person.user_id, h, 0)}
-									editable={viewerUserId === person.user_id}
-									onSelect={() => openEditor(person.user_id, h, 0)}
-									onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
-									habit={getHabitTitle(person.user_id, h, 0)}
-									selected={viewerUserId === person.user_id &&
-										selectedSlot?.hourIndex === hourIndex &&
-										selectedSlot?.half === 0}
-								/>
-								<Slot
-									title={getTitle(person.user_id, h, 1)}
-									todo={getTodo(person.user_id, h, 1)}
-									editable={viewerUserId === person.user_id}
-									onSelect={() => openEditor(person.user_id, h, 1)}
-									onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
-									habit={getHabitTitle(person.user_id, h, 1)}
-									selected={viewerUserId === person.user_id &&
-										selectedSlot?.hourIndex === hourIndex &&
-										selectedSlot?.half === 1}
-								/>
-							</div>
-						{/each}
-					{/if}
-				</div>
-			{/each}
-		{/if}
+							{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+								{#each hours as _}
+									<div class="flex h-7 w-full flex-row space-x-1">
+										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+									</div>
+								{/each}
+							{:else}
+								{#each hours as h, hourIndex}
+									<div class="flex h-7 w-full flex-row space-x-1">
+										<Slot
+											title={getTitle(person.user_id, h, 0)}
+											todo={getTodo(person.user_id, h, 0)}
+											editable={viewerUserId === person.user_id}
+											onSelect={() => openEditor(person.user_id, h, 0)}
+											onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
+											habit={getHabitTitle(person.user_id, h, 0)}
+											selected={viewerUserId === person.user_id &&
+												selectedSlot?.hourIndex === hourIndex &&
+												selectedSlot?.half === 0}
+										/>
+										<Slot
+											title={getTitle(person.user_id, h, 1)}
+											todo={getTodo(person.user_id, h, 1)}
+											editable={viewerUserId === person.user_id}
+											onSelect={() => openEditor(person.user_id, h, 1)}
+											onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
+											habit={getHabitTitle(person.user_id, h, 1)}
+											selected={viewerUserId === person.user_id &&
+												selectedSlot?.hourIndex === hourIndex &&
+												selectedSlot?.half === 1}
+										/>
+									</div>
+								{/each}
+							{/if}
+						</div>
+					{/each}
+				{/if}
+			</div>
+		</div>
 	</div>
+	{#if isNightWindow()}
+		<div
+			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
+			class:bg-amber-200={isNightWindow}
+			class:bg-stone-100={!isNightWindow}
+			class:text-stone-900={isNightWindow}
+		>
+			{countdownText()}
+		</div>
+	{:else}
+		<div
+			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
+			class:bg-amber-200={isNightWindow}
+			class:bg-stone-100={!isNightWindow}
+			class:text-stone-900={isNightWindow}
+		></div>
+	{/if}
 </div>
 
 <LogModal
