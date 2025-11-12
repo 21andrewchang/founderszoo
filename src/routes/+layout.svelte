@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, setContext } from 'svelte';
 	import '../app.css';
+	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { writable, type Writable } from 'svelte/store';
 	import { supabase } from '$lib/supabaseClient';
 	import favicon from '$lib/assets/favicon.svg';
@@ -30,4 +31,5 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
+<OnlineCount dedupe={true} />
 {@render children()}

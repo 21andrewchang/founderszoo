@@ -126,9 +126,6 @@
 	<div
 		class="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-white/10 p-6 text-stone-50 shadow-[0_25px_60px_rgba(15,15,15,0.45)] backdrop-blur"
 	>
-		<div class="mb-5 space-y-2 text-center text-stone-200">
-			<p class="text-2xl font-semibold tracking-tight text-white">welcome back jittington</p>
-		</div>
 		<form class="space-y-4" onsubmit={handleSubmit}>
 			<label class="block text-xs font-semibold text-stone-300">
 				<input
