@@ -324,35 +324,35 @@
 		}
 		draggingSlot = { user_id, hour, half };
 		dragHoverSlot = { hourIndex, half };
-			if (event.dataTransfer) {
-				event.dataTransfer.effectAllowed = 'move';
-				event.dataTransfer.setData('text/plain', `${hour}-${half}`);
-				const currentTarget = event.currentTarget as HTMLElement | null;
-				const buttonEl = currentTarget?.querySelector('button');
-				if (buttonEl) {
-					const rect = buttonEl.getBoundingClientRect();
-					if (typeof document !== 'undefined') {
-						cleanupDragImage();
-						const clone = buttonEl.cloneNode(true) as HTMLElement;
-						const computed = getComputedStyle(buttonEl);
-						clone.style.position = 'fixed';
-						clone.style.top = '-9999px';
-						clone.style.left = '-9999px';
-						clone.style.width = `${rect.width}px`;
-						clone.style.height = `${rect.height}px`;
-						clone.style.pointerEvents = 'none';
-						clone.style.margin = '0';
-						clone.style.boxShadow = computed.boxShadow || '0 10px 25px rgba(15,15,15,0.15)';
-						clone.style.borderRadius = computed.borderRadius;
-						document.body.appendChild(clone);
-						dragImageEl = clone;
-						event.dataTransfer.setDragImage(clone, rect.width / 2, rect.height / 2);
-					} else {
-						event.dataTransfer.setDragImage(buttonEl, rect.width / 2, rect.height / 2);
-					}
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', `${hour}-${half}`);
+			const currentTarget = event.currentTarget as HTMLElement | null;
+			const buttonEl = currentTarget?.querySelector('button');
+			if (buttonEl) {
+				const rect = buttonEl.getBoundingClientRect();
+				if (typeof document !== 'undefined') {
+					cleanupDragImage();
+					const clone = buttonEl.cloneNode(true) as HTMLElement;
+					const computed = getComputedStyle(buttonEl);
+					clone.style.position = 'fixed';
+					clone.style.top = '-9999px';
+					clone.style.left = '-9999px';
+					clone.style.width = `${rect.width}px`;
+					clone.style.height = `${rect.height}px`;
+					clone.style.pointerEvents = 'none';
+					clone.style.margin = '0';
+					clone.style.boxShadow = computed.boxShadow || '0 10px 25px rgba(15,15,15,0.15)';
+					clone.style.borderRadius = computed.borderRadius;
+					document.body.appendChild(clone);
+					dragImageEl = clone;
+					event.dataTransfer.setDragImage(clone, rect.width / 2, rect.height / 2);
+				} else {
+					event.dataTransfer.setDragImage(buttonEl, rect.width / 2, rect.height / 2);
 				}
 			}
 		}
+	}
 	function handleSlotDragOver(event: DragEvent, user_id: string, half: 0 | 1, hourIndex: number) {
 		if (!draggingSlot || draggingSlot.user_id !== user_id) return;
 		event.preventDefault();
@@ -734,6 +734,8 @@
 
 		const notifTitle = `${blockLabel} • ${hourLabel}`;
 		const body = titleTxt ? `TODO: ${titleTxt}` : undefined;
+		console.log('title: ', notifTitle);
+		console.log('body: ', body);
 
 		new Notification(notifTitle, {
 			body,
@@ -746,7 +748,6 @@
 
 	let notifTimer: number | null = null;
 	function startHalfHourNotifier() {
-		// wait until we know who the viewer is
 		if (!ENABLE_NOTIFS) return;
 		window.clearTimeout(notifTimer as unknown as number);
 
@@ -754,7 +755,6 @@
 			const ok = await ensureNotifPermission();
 			if (!ok) return;
 			notifyCurrentSlot();
-			// schedule next boundary precisely every 30 minutes
 			window.clearTimeout(notifTimer as unknown as number);
 			notifTimer = window.setTimeout(arm, msUntilNextBoundary());
 		};
