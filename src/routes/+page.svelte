@@ -11,7 +11,7 @@
 	const START_HOUR = 8;
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
-	const loadingPlaceholderColumns = Array.from({ length: 2 });
+	const loadingPlaceholderColumns = Array.from({ length: 3 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	const TEST_CLOCK = {
@@ -28,6 +28,7 @@
 	let currentHour = $state(-1);
 	let currentHalf = $state<0 | 1>(0);
 	const isCurrent = (h: number) => h === currentHour;
+	const isNightWindow = () => currentHour >= 0 && currentHour < START_HOUR;
 
 	// auth + data
 	let viewerUserId = $state<string | null>(null);
@@ -598,6 +599,30 @@
 					{hh(h)}
 				</div>
 			{/each}
+			<div
+				class="flex h-7 items-center justify-center rounded px-1 text-stone-300"
+				class:bg-amber-200={isNightWindow()}
+				class:text-stone-900={isNightWindow()}
+				aria-label="Early morning indicator"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					class="h-4 w-4"
+					style="transform: scaleX(-1); transform-box: fill-box; transform-origin: center;"
+					viewBox="0 0 64 64"
+					aria-hidden="true"
+				>
+					<defs>
+						<mask id="moon-cut">
+							<rect width="100%" height="100%" fill="black" />
+							<circle cx="32" cy="32" r="22" fill="white" />
+							<circle cx="44" cy="24" r="18" fill="black" />
+						</mask>
+					</defs>
+					<!-- Fill with the shared dot color -->
+					<rect width="64" height="64" fill="#a8a29e" mask="url(#moon-cut)" />
+				</svg>
+			</div>
 		</div>
 
 		{#if isLoading}
