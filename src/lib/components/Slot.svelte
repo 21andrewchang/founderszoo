@@ -1,21 +1,28 @@
 <script lang="ts">
-	type HabitConfig = { icon: string; filled: string; empty: string };
+	type HabitConfig = { icon: string };
 
 	const HABITS: Record<string, HabitConfig> = {
+		read: { icon: '📖' },
+		meditate: { icon: '🧘' },
+		gym: { icon: '🏋️' }
+	};
+
+	// Theme tokens per habit
+	const HABIT_STYLES: Record<string, { filled: string; empty: string; border: string }> = {
+		gym: {
+			filled: 'bg-red-50 text-red-900',
+			empty: 'bg-red-50 text-red-700 hover:bg-red-100',
+			border: 'border-red-200'
+		},
 		read: {
-			icon: '📖',
-			filled: 'border-amber-200 bg-amber-50 text-amber-900',
-			empty: 'border-amber-100 bg-amber-50 text-amber-700 hover:bg-amber-100'
+			filled: 'bg-blue-50 text-blue-900',
+			empty: 'bg-blue-50 text-blue-700 hover:bg-blue-100',
+			border: 'border-blue-200'
 		},
 		meditate: {
-			icon: '🧘',
-			filled: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-			empty: 'border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-		},
-		gym: {
-			icon: '🏋️',
-			filled: 'border-sky-200 bg-sky-50 text-sky-900',
-			empty: 'border-sky-100 bg-sky-50 text-sky-800 hover:bg-sky-100'
+			filled: 'bg-emerald-50 text-emerald-900',
+			empty: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+			border: 'border-emerald-200'
 		}
 	};
 
@@ -39,15 +46,32 @@
 
 	const trimmed = $derived((title ?? '').trim());
 	const isFilled = $derived(trimmed.length > 0);
+
 	const habitKey = $derived(habitPlaceholder.toLowerCase());
 	const habitPreset = $derived(HABITS[habitKey]);
+	const isHabit = $derived(Boolean(props.habit));
+
+	// Choose theme or fallback
+	const theme = $derived(HABIT_STYLES[habitKey] ?? null);
+
+	// Build classes
+	const baseClasses =
+		'flex w-full flex-row items-center rounded-sm  p-2 transition  focus:outline-0';
+	const habitClasses = $derived(
+		isHabit
+			? `border-dotted hover:border-solid border ${theme?.border ?? 'border-stone-300'} ${
+					isFilled
+						? (theme?.filled ?? 'bg-stone-50 text-stone-900')
+						: (theme?.empty ?? 'bg-stone-50 text-stone-700 hover:bg-stone-100')
+				}`
+			: `${isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'} ${
+					editable && !isFilled ? 'hover:bg-stone-200' : 'hover:bg-stone-200'
+				}`
+	);
 
 	const showTodo = $derived(todo !== null);
 	const canOpen = $derived(
-		editable &&
-			!isFilled && // don’t open if already has text
-			!habitPreset && // don’t open if this title maps to a known habit
-			!habitPlaceholder // don’t open if a habit placeholder is shown
+		editable && !isFilled && !habitPlaceholder // habits/filled don't open editor
 	);
 
 	function handleSlotClick() {
@@ -55,7 +79,6 @@
 		if (!canOpen) return;
 		onSelect();
 	}
-
 	function handleSlotKeydown(event: KeyboardEvent) {
 		if (!canOpen) return;
 		if (event.key === 'Enter' || event.key === ' ') {
@@ -66,7 +89,7 @@
 </script>
 
 <button
-	class={`flex w-full flex-row items-center rounded-sm bg-stone-100 p-2 transition ${editable ? 'hover:bg-stone-200' : ''} focus:border-0 focus:outline-0`}
+	class={`${baseClasses} ${habitClasses}`}
 	class:ring-2={selected}
 	class:ring-stone-400={selected}
 	class:ring-offset-1={selected}
@@ -78,19 +101,22 @@
 	{#if habitPreset}
 		<span class="text-xs leading-none">{habitPreset.icon}</span>
 	{/if}
+
 	<span class="ml-1 flex-1 truncate text-left text-xs">
 		{#if isFilled}
 			{trimmed}
 		{:else if habitPlaceholder}
-			<span class="text-stone-400">{habitPlaceholder}</span>
+			<span class="opacity-70">{habitPlaceholder}</span>
 		{:else}
 			&nbsp;
 		{/if}
 	</span>
+
 	{#if showTodo}
 		<div
-			class="relative ml-3 grid h-3 w-3 place-items-center rounded-full focus:outline-none
-			       {todo ? 'bg-stone-900' : ''}"
+			class="relative ml-3 grid h-3 w-3 place-items-center rounded-full focus:outline-none {todo
+				? 'bg-stone-900'
+				: ''}"
 		>
 			{#if todo}
 				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-50" fill="none">
