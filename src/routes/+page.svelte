@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ConfirmMoveModal from '$lib/components/ConfirmMoveModal.svelte';
 	import LogModal from '$lib/components/LogModal.svelte';
 	import Slot from '$lib/components/Slot.svelte';
 	import { onMount } from 'svelte';
@@ -13,6 +14,9 @@
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
+	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
+	const slotTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;
+	const formatSlotLabel = (hour: number, half: 0 | 1) => `${slotTimeLabel(hour, half)} (${blockLabelText(half)})`;
 
 	const TEST_CLOCK = {
 		enabled: false,
@@ -53,6 +57,8 @@
 	type SlotRow = { first: SlotValue; second: SlotValue };
 	type HabitSlotRow = { first: string | null; second: string | null };
 	type SelectedSlot = { hourIndex: number; half: 0 | 1 };
+	type DraggingSlot = { user_id: string; hour: number; half: 0 | 1 };
+	type PendingMove = { user_id: string; fromHour: number; fromHalf: 0 | 1; toHour: number; toHalf: 0 | 1 };
 
 	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
@@ -66,6 +72,28 @@
 		half: null
 	});
 	let selectedSlot = $state<SelectedSlot | null>(null);
+	let draggingSlot = $state<DraggingSlot | null>(null);
+	let dragHoverSlot = $state<SelectedSlot | null>(null);
+	let pendingMove = $state<PendingMove | null>(null);
+	let isMoveSubmitting = $state(false);
+	const pendingMoveSummary = $derived.by(() => {
+		if (!pendingMove) return null;
+		const { user_id, fromHour, fromHalf, toHour, toHalf } = pendingMove;
+		const sourceTitle = (getTitle(user_id, fromHour, fromHalf) ?? '').trim();
+		const sourceHabit = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
+		const destinationTitle = (getTitle(user_id, toHour, toHalf) ?? '').trim();
+		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		const destinationTodo = getTodo(user_id, toHour, toHalf);
+		return {
+			slotLabel: sourceTitle || sourceHabit || 'this slot',
+			fromLabel: formatSlotLabel(fromHour, fromHalf),
+			toLabel: formatSlotLabel(toHour, toHalf),
+			destinationLabel: destinationTitle || destinationHabit || null,
+			hasDestinationContent:
+				destinationTitle.length > 0 || destinationHabit.length > 0 || destinationTodo !== null,
+			isHabit: sourceHabit.length > 0
+		};
+	});
 
 	// prevent re-prompting within same slot
 	let lastPromptKey = $state<string | null>(null);
@@ -136,6 +164,16 @@
 	function slotIsEmpty(user_id: string, h: number, half01: 0 | 1) {
 		return getTitle(user_id, h, half01).trim().length === 0;
 	}
+	function slotHasContent(user_id: string, h: number, half01: 0 | 1) {
+		const title = getTitle(user_id, h, half01).trim();
+		const todo = getTodo(user_id, h, half01);
+		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
+		return title.length > 0 || todo !== null || habitName.length > 0;
+	}
+	function canDragSlot(user_id: string, h: number, half01: 0 | 1) {
+		if (!viewerUserId || viewerUserId !== user_id) return false;
+		return slotHasContent(user_id, h, half01);
+	}
 	async function insertHabitHours(
 		user_id: string,
 		day_id: string | null,
@@ -196,6 +234,13 @@
 			half
 		});
 	}
+	function slotMatches(selection: SelectedSlot | null, hourIndex: number, half: 0 | 1) {
+		return selection?.hourIndex === hourIndex && selection?.half === half;
+	}
+	function slotIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
+		if (viewerUserId !== user_id) return false;
+		return slotMatches(selectedSlot, hourIndex, half) || slotMatches(dragHoverSlot, hourIndex, half);
+	}
 	function isTypingTarget(target: EventTarget | null) {
 		if (!(target instanceof HTMLElement)) return false;
 		const tag = target.tagName;
@@ -243,6 +288,61 @@
 		if (title.trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half);
 		return true;
+	}
+
+	function resetDragState() {
+		draggingSlot = null;
+		dragHoverSlot = null;
+	}
+	function handleSlotDragStart(
+		event: DragEvent,
+		user_id: string,
+		hour: number,
+		half: 0 | 1,
+		hourIndex: number
+	) {
+		if (!canDragSlot(user_id, hour, half)) {
+			event.preventDefault();
+			return;
+		}
+		draggingSlot = { user_id, hour, half };
+		dragHoverSlot = { hourIndex, half };
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', `${hour}-${half}`);
+		}
+	}
+	function handleSlotDragOver(
+		event: DragEvent,
+		user_id: string,
+		half: 0 | 1,
+		hourIndex: number
+	) {
+		if (!draggingSlot || draggingSlot.user_id !== user_id) return;
+		event.preventDefault();
+		event.stopPropagation();
+		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+		if (!slotMatches(dragHoverSlot, hourIndex, half)) {
+			dragHoverSlot = { hourIndex, half };
+		}
+	}
+	function handleSlotDrop(event: DragEvent, user_id: string, hour: number, half: 0 | 1) {
+		if (!draggingSlot || draggingSlot.user_id !== user_id) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const source = draggingSlot;
+		resetDragState();
+		if (source.hour === hour && source.half === half) return;
+		pendingMove = {
+			user_id,
+			fromHour: source.hour,
+			fromHalf: source.half,
+			toHour: hour,
+			toHalf: half
+		};
+	}
+	function handleSlotDragEnd() {
+		resetDragState();
 	}
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
@@ -436,6 +536,96 @@
 		setTodo(user_id, hour, half, nextTodo);
 	}
 
+	function cancelPendingMove() {
+		if (isMoveSubmitting) return;
+		pendingMove = null;
+	}
+	async function confirmPendingMove() {
+		if (!pendingMove || isMoveSubmitting) return;
+		isMoveSubmitting = true;
+		try {
+			const success = await moveSlot(pendingMove);
+			if (success) pendingMove = null;
+		} finally {
+			isMoveSubmitting = false;
+		}
+	}
+	async function moveSlot(move: PendingMove): Promise<boolean> {
+		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
+		if (viewerUserId !== user_id) return false;
+		const day_id = dayIdByUser[user_id];
+		if (!day_id) return false;
+		if (!slotHasContent(user_id, fromHour, fromHalf)) return false;
+
+		const sourceSlot = getSlot(user_id, fromHour, fromHalf);
+		const sourceValue: SlotValue = {
+			title: sourceSlot.title ?? '',
+			todo: sourceSlot.todo
+		};
+		const destinationHadEntry = slotHasContent(user_id, toHour, toHalf);
+		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
+		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+
+		if (destinationHadEntry) {
+			const { error: deleteDestErr } = await supabase
+				.from('hours')
+				.delete()
+				.eq('day_id', day_id)
+				.eq('hour', toHour)
+				.eq('half', toHalf === 1);
+			if (deleteDestErr) {
+				console.error('slot move destination delete error', deleteDestErr);
+				return false;
+			}
+		}
+
+		const { error: updateErr } = await supabase
+			.from('hours')
+			.update({ hour: toHour, half: toHalf === 1 })
+			.eq('day_id', day_id)
+			.eq('hour', fromHour)
+			.eq('half', fromHalf === 1);
+
+		if (updateErr) {
+			console.error('slot move error', updateErr);
+			return false;
+		}
+
+		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.todo);
+		setTitle(user_id, fromHour, fromHalf, '', null);
+
+		if (destinationHabitName.length > 0) {
+			const { error: deleteHabitErr } = await supabase
+				.from('habits')
+				.delete()
+				.eq('user_id', user_id)
+				.eq('hour', toHour)
+				.eq('half', toHalf === 1);
+			if (deleteHabitErr) {
+				console.error('slot move destination habit delete error', deleteHabitErr);
+			} else {
+				setHabitTitle(user_id, toHour, toHalf, null);
+			}
+		}
+
+		if (sourceHabitName.length > 0) {
+			const { error: updateHabitErr } = await supabase
+				.from('habits')
+				.update({ hour: toHour, half: toHalf === 1 })
+				.eq('user_id', user_id)
+				.eq('hour', fromHour)
+				.eq('half', fromHalf === 1);
+			if (updateHabitErr) {
+				console.error('habit move error', updateHabitErr);
+			} else {
+				setHabitTitle(user_id, fromHour, fromHalf, null);
+				setHabitTitle(user_id, toHour, toHalf, sourceHabitName);
+			}
+		}
+
+		return true;
+	}
+
 	// ---------- Auto-prompt if current slot empty (viewer only) ----------
 	function slotKey(u: string, date: string, h: number, half: 0 | 1) {
 		return `${u}|${date}|${h}|${half}`;
@@ -509,11 +699,9 @@
 		const notifTitle = `${blockLabel} • ${hourLabel}`;
 		const body = titleTxt ? `TODO: ${titleTxt}` : undefined;
 
-		console.log('clicked');
 		new Notification(notifTitle, {
 			body,
 			tag: `slot-${localToday()}-${hour}-${half}`,
-			// 1×1 transparent PNG to suppress default site icon
 			icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=',
 			requireInteraction: false,
 			silent: false
@@ -656,28 +844,48 @@
 										class="hover:none flex h-7 w-full flex-row space-x-1"
 										class:opacity-60={viewerUserId !== person.user_id}
 									>
-										<Slot
-											title={getTitle(person.user_id, h, 0)}
-											todo={getTodo(person.user_id, h, 0)}
-											editable={viewerUserId === person.user_id}
-											onSelect={() => openEditor(person.user_id, h, 0)}
-											onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
-											habit={getHabitTitle(person.user_id, h, 0)}
-											selected={viewerUserId === person.user_id &&
-												selectedSlot?.hourIndex === hourIndex &&
-												selectedSlot?.half === 0}
-										/>
-										<Slot
-											title={getTitle(person.user_id, h, 1)}
-											todo={getTodo(person.user_id, h, 1)}
-											editable={viewerUserId === person.user_id}
-											onSelect={() => openEditor(person.user_id, h, 1)}
-											onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
-											habit={getHabitTitle(person.user_id, h, 1)}
-											selected={viewerUserId === person.user_id &&
-												selectedSlot?.hourIndex === hourIndex &&
-												selectedSlot?.half === 1}
-										/>
+										<div
+											class="flex w-full"
+											role="presentation"
+											draggable={canDragSlot(person.user_id, h, 0)}
+											ondragstart={(event) =>
+												handleSlotDragStart(event, person.user_id, h, 0, hourIndex)}
+											ondragover={(event) =>
+												handleSlotDragOver(event, person.user_id, 0, hourIndex)}
+											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 0)}
+											ondragend={handleSlotDragEnd}
+										>
+											<Slot
+												title={getTitle(person.user_id, h, 0)}
+												todo={getTodo(person.user_id, h, 0)}
+												editable={viewerUserId === person.user_id}
+												onSelect={() => openEditor(person.user_id, h, 0)}
+												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
+												habit={getHabitTitle(person.user_id, h, 0)}
+												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
+											/>
+										</div>
+										<div
+											class="flex w-full"
+											role="presentation"
+											draggable={canDragSlot(person.user_id, h, 1)}
+											ondragstart={(event) =>
+												handleSlotDragStart(event, person.user_id, h, 1, hourIndex)}
+											ondragover={(event) =>
+												handleSlotDragOver(event, person.user_id, 1, hourIndex)}
+											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 1)}
+											ondragend={handleSlotDragEnd}
+										>
+											<Slot
+												title={getTitle(person.user_id, h, 1)}
+												todo={getTodo(person.user_id, h, 1)}
+												editable={viewerUserId === person.user_id}
+												onSelect={() => openEditor(person.user_id, h, 1)}
+												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
+												habit={getHabitTitle(person.user_id, h, 1)}
+												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
+											/>
+										</div>
 									</div>
 								{/each}
 							{/if}
@@ -710,6 +918,19 @@
 	onSave={saveLog}
 	initialHour={draft.hour}
 	initialHalf={draft.half}
+/>
+
+<ConfirmMoveModal
+	open={pendingMove !== null}
+	onCancel={cancelPendingMove}
+	onConfirm={() => void confirmPendingMove()}
+	slotLabel={pendingMoveSummary?.slotLabel ?? ''}
+	fromLabel={pendingMoveSummary?.fromLabel ?? ''}
+	toLabel={pendingMoveSummary?.toLabel ?? ''}
+	destinationLabel={pendingMoveSummary?.destinationLabel ?? null}
+	hasDestinationContent={pendingMoveSummary?.hasDestinationContent ?? false}
+	isHabit={pendingMoveSummary?.isHabit ?? false}
+	loading={isMoveSubmitting}
 />
 
 <style>

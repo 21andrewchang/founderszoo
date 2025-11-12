@@ -149,24 +149,24 @@
 				{/if}
 			</div>
 
-			<div class="flex flex-row gap-1 px-4 pb-4">
+			<div class="flex flex-row gap-1 px-4 pb-2">
 				<button
 					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-900 transition"
+					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 					onclick={() => fillPreset('Read')}
 				>
 					Read
 				</button>
 				<button
 					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-900 transition"
+					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 					onclick={() => fillPreset('Meditate')}
 				>
 					Meditate
 				</button>
 				<button
 					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-xs font-medium text-stone-900 transition"
+					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 					onclick={() => fillPreset('Gym')}
 				>
 					Gym
