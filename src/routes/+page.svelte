@@ -362,8 +362,17 @@
 		const blockLabel = half === 0 ? 'Block A' : 'Block B';
 		const hourLabel = `${String(hour).padStart(2, '0')}:${half === 0 ? '00' : '30'}`;
 
-		new Notification(`${blockLabel} • ${hourLabel}`, {
+		// read the viewer's current slot title
+		const rawTitle = getTitle(viewerUserId, hour, half);
+		const titleTxt = (rawTitle ?? '').trim();
+
+		const notifTitle = `${blockLabel} • ${hourLabel}`;
+		const body = titleTxt ? `TODO: ${titleTxt}` : undefined;
+
+		new Notification(notifTitle, {
+			body,
 			tag: `slot-${localToday()}-${hour}-${half}`,
+			// 1×1 transparent PNG to suppress default site icon
 			icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=',
 			requireInteraction: false,
 			silent: false
@@ -455,7 +464,7 @@
 			{/each}
 		</div>
 
-		{#each people as person, personIndex}
+		{#each people as person}
 			<div class="flex w-full flex-col space-y-1">
 				<div class="flex items-center gap-2">
 					<span>{person.label}</span>
@@ -487,11 +496,9 @@
 								editable={viewerUserId === person.user_id}
 								onSelect={() => openEditor(person.user_id, h, 0)}
 								onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
-								selected={
-									viewerUserId === person.user_id &&
+								selected={viewerUserId === person.user_id &&
 									selectedSlot?.hourIndex === hourIndex &&
-									selectedSlot?.half === 0
-								}
+									selectedSlot?.half === 0}
 							/>
 							<Slot
 								title={getTitle(person.user_id, h, 1)}
@@ -499,11 +506,9 @@
 								editable={viewerUserId === person.user_id}
 								onSelect={() => openEditor(person.user_id, h, 1)}
 								onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
-								selected={
-									viewerUserId === person.user_id &&
+								selected={viewerUserId === person.user_id &&
 									selectedSlot?.hourIndex === hourIndex &&
-									selectedSlot?.half === 1
-								}
+									selectedSlot?.half === 1}
 							/>
 						</div>
 					{/each}
