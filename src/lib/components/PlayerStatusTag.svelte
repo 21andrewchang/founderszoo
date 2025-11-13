@@ -2,6 +2,7 @@
 	import type { PlayerStatus } from '$lib/playerPresence';
 
 	const props = $props<{ label?: string | null; status?: PlayerStatus; me?: boolean }>();
+	let streak = $state(30);
 
 	const DOT_CLASSES: Record<PlayerStatus, string> = {
 		online: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.65)]',
@@ -30,24 +31,15 @@
 </script>
 
 <div
-	class="group relative inline-flex items-center gap-1 rounded-md font-medium text-stone-700"
+	class="group relative inline-flex items-center gap-2 rounded-md font-medium text-stone-700"
 	aria-label={aria}
 >
 	<span class={`h-2 w-2 rounded-full ${dotClass}`}></span>
 	{#if label}{label}{/if}
 	<span
-		role="tooltip"
-		class="pointer-events-none top-1/2 left-full ml-1 rounded-sm
-           bg-stone-500 px-1 text-[10px] font-medium whitespace-nowrap text-white capitalize
-            transition-opacity group-hover:opacity-100"
-	>
-		{statusText}
-	</span>
-	<span
-		role="tooltip"
 		class="pointer-events-none top-1/2 left-full inline-flex
-           items-center gap-0.5 rounded-sm bg-stone-800 px-1 text-[10px] font-medium
-           whitespace-nowrap text-white capitalize transition-opacity duration-150 group-hover:opacity-100"
+           items-center gap-0.5 rounded-sm bg-stone-900 px-1 text-[10px]
+           font-medium whitespace-nowrap text-stone-50 capitalize transition-opacity duration-150 group-hover:opacity-100"
 	>
 		<svg viewBox="0 0 10 10" class="h-[8px] w-[8px] text-emerald-500" aria-hidden="true">
 			<polygon
@@ -58,6 +50,6 @@
 				stroke-linejoin="round"
 			/>
 		</svg>
-		30
+		{streak}
 	</span>
 </div>
