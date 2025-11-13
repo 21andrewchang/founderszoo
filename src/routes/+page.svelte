@@ -4,6 +4,7 @@
 	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
 	import Slot from '$lib/components/Slot.svelte';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
+	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { getContext, onDestroy, onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
@@ -32,6 +33,7 @@
 		andrew: 'offline',
 		nico: 'offline'
 	});
+	let streakByUser = $state<Record<string, PlayerStreak | null>>({});
 
 	let playerStatusUnsubscribers: (() => void)[] = [];
 	let stopLocalPlayerPresence: (() => void) | null = null;
@@ -98,6 +100,8 @@
 	const START_HOUR = 8;
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
+	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
+	const STREAK_LOOKBACK_DAYS = 60;
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
@@ -193,10 +197,14 @@
 	// prevent re-prompting within same slot
 	let lastPromptKey = $state<string | null>(null);
 
-	const localToday = () => {
+	const formatDateString = (date: Date) =>
+		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+	const dateStringNDaysAgo = (days: number) => {
 		const d = getNow();
-		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+		d.setDate(d.getDate() - days);
+		return formatDateString(d);
 	};
+	const localToday = () => formatDateString(getNow());
 
 	function ensureSlotRow(user_id: string, h: number): SlotRow {
 		slotsByUser[user_id] ??= {};
@@ -606,6 +614,36 @@
 		habitsByUser[user_id] = next;
 	}
 
+	async function loadPlayerHistoryForUser(user_id: string) {
+		const today = localToday();
+		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
+		try {
+			const { data: dayStats, error: dayErr } = await supabase
+				.from('day_block_stats')
+				.select('date, filled_blocks')
+				.eq('user_id', user_id)
+				.gte('date', lookbackStart)
+				.order('date', { ascending: true });
+			if (dayErr) throw dayErr;
+
+			const summaries: DayCompletionSummary[] = [];
+			for (const stat of dayStats ?? []) {
+				const date = (stat.date as string | null) ?? null;
+				if (!date || date === today) continue;
+				const filled = Number(stat.filled_blocks ?? 0);
+				if (Number.isNaN(filled)) continue;
+				const missingBlocks = Math.max(0, TOTAL_BLOCKS_PER_DAY - filled);
+				summaries.push({ date, missingBlocks });
+			}
+
+			const streak = calculateStreak(summaries);
+			streakByUser = { ...streakByUser, [user_id]: streak };
+		} catch (error) {
+			console.error('load player history error', { user_id, error });
+			streakByUser = { ...streakByUser, [user_id]: null };
+		}
+	}
+
 	function openEditor(user_id: string, h: number, half01: 0 | 1) {
 		if (viewerUserId !== user_id) return;
 		const hourIndex = getHourIndex(h);
@@ -916,17 +954,19 @@
 			startPlayerStatusWatchers(viewerUserId);
 			startLocalPlayerPresenceIfTracked(viewerUserId);
 
-			await Promise.all(
-				people.map(async ({ user_id }) => {
-					const create = viewerUserId === user_id;
-					const dayId = await getTodayDayIdForUser(user_id, create);
-					dayIdByUser[user_id] = dayId;
-					const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
-					if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
-					await Promise.all(tasks);
-					if (dayId) await ensureHabitHoursForDay(user_id, dayId);
-				})
-			);
+			const perUserLoads = people.map(async ({ user_id }) => {
+				const create = viewerUserId === user_id;
+				const dayId = await getTodayDayIdForUser(user_id, create);
+				dayIdByUser[user_id] = dayId;
+				const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
+				await Promise.all(tasks);
+				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
+			});
+
+			const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
+
+			await Promise.all([...perUserLoads, ...historyLoads]);
 
 			maybePromptForMissing();
 			startHalfHourNotifier();
@@ -1003,6 +1043,7 @@
 										label={playerDisplays[trackedKey]?.label ?? null}
 										status={playerStatuses[trackedKey]}
 										me={person.user_id === viewerUserId}
+										streak={streakByUser[person.user_id] ?? null}
 									/>
 								{/if}
 							</div>

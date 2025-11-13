@@ -1,8 +1,13 @@
 <script lang="ts">
 	import type { PlayerStatus } from '$lib/playerPresence';
+	import type { PlayerStreak } from '$lib/streaks';
 
-	const props = $props<{ label?: string | null; status?: PlayerStatus; me?: boolean }>();
-	let streak = $state(30);
+	const props = $props<{
+		label?: string | null;
+		status?: PlayerStatus;
+		me?: boolean;
+		streak?: PlayerStreak | null;
+	}>();
 
 	const DOT_CLASSES: Record<PlayerStatus, string> = {
 		online: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.65)]',
@@ -27,7 +32,22 @@
 	const statusText = $derived(me ? 'you' : TEXT_LABELS[effectiveStatus]);
 
 	const dotClass = $derived(me ? DOT_CLASS_ME : DOT_CLASSES[effectiveStatus]);
-	const aria = $derived(label ? `${label} is ${statusText}` : statusText);
+	const streak = $derived(props.streak ?? null);
+	const streakDisplay = $derived(streak ? `${streak.length}` : '–');
+	const streakArrowClass = $derived.by(() => {
+		const base = 'h-[8px] w-[8px]';
+		if (!streak) return `${base} text-stone-400`;
+		const color = streak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
+		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
+		return `${base} ${color} ${rotation}`;
+	});
+	const streakDescription = $derived(
+		streak
+			? `${streak.length}-day ${streak.kind === 'positive' ? 'positive' : 'negative'} streak`
+			: null
+	);
+	const baseAria = $derived(label ? `${label} is ${statusText}` : statusText);
+	const aria = $derived(streakDescription ? `${baseAria}, ${streakDescription}` : baseAria);
 </script>
 
 <div
@@ -38,10 +58,10 @@
 	{#if label}{label}{/if}
 	<span
 		class="pointer-events-none top-1/2 left-full inline-flex
-           items-center gap-0.5 rounded-sm bg-stone-900 px-1 text-[10px]
+           items-center gap-1 rounded-sm bg-stone-900 px-1 text-[10px]
            font-medium whitespace-nowrap text-stone-50 capitalize transition-opacity duration-150 group-hover:opacity-100"
 	>
-		<svg viewBox="0 0 10 10" class="h-[8px] w-[8px] text-emerald-500" aria-hidden="true">
+		<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
 			<polygon
 				points="5,1 9,9 1,9"
 				fill="currentColor"
@@ -50,6 +70,6 @@
 				stroke-linejoin="round"
 			/>
 		</svg>
-		{streak}
+		{streakDisplay}
 	</span>
 </div>
