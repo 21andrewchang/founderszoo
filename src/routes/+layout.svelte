@@ -13,8 +13,11 @@
 	type PlayerDisplay = { label: string; user_id: string | null };
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number | null> };
 
-	const TOTAL_BLOCKS_PER_DAY = 32;
+	const START_HOUR = 8;
+	const END_HOUR = 24;
+	const TOTAL_BLOCKS_PER_DAY = (END_HOUR - START_HOUR) * 2;
 	const HISTORY_LOOKBACK_DAYS = 30;
+	const CURRENT_PROGRESS_POLL_MS = 60_000;
 
 	const session: Writable<Session> = writable({ user: null, name: '', loading: true });
 	setContext('session', session);
@@ -34,6 +37,7 @@
 	let dayHistoryRows = $state<HistoryRow[]>([]);
 	let dayHistoryOpen = $state(false);
 	let dayHistoryLoading = $state(false);
+	let currentCombinedPct = $state<number | null>(null);
 	let dateMenuEl: HTMLDivElement | null = null;
 
 	const formatDateString = (date: Date) =>
@@ -103,6 +107,121 @@
 		return Math.round(product * 100);
 	}
 
+	function getCurrentBlockInfo() {
+		const now = new Date();
+		const hour = now.getHours();
+		const half = now.getMinutes() < 30 ? 0 : 1;
+		const blocksDue = calculateBlocksDue(now);
+		return { now, hour, half, blocksDue };
+	}
+
+	function calculateBlocksDue(now: Date) {
+		const hour = now.getHours();
+		const minute = now.getMinutes();
+		if (hour < START_HOUR) return 0;
+		if (hour >= END_HOUR) return TOTAL_BLOCKS_PER_DAY;
+		const hoursSinceStart = hour - START_HOUR;
+		const base = hoursSinceStart * 2;
+		const extra = minute < 30 ? 1 : 2;
+		return Math.min(TOTAL_BLOCKS_PER_DAY, base + extra);
+	}
+
+	function blockIsDue(hour: number, half: number, currentHour: number, currentHalf: number) {
+		if (hour < START_HOUR) return false;
+		if (hour > currentHour) return false;
+		if (hour < currentHour) return true;
+		return half <= currentHalf;
+	}
+
+	async function refreshCurrentCombined() {
+		const ids = Object.values(trackedDisplays)
+			.map((display) => display.user_id)
+			.filter((id): id is string => Boolean(id));
+		if (ids.length === 0) {
+			currentCombinedPct = null;
+			return;
+		}
+		const { hour: currentHour, half: currentHalf, blocksDue } = getCurrentBlockInfo();
+		if (blocksDue === 0) {
+			currentCombinedPct = null;
+			return;
+		}
+		const today = localToday();
+		try {
+			const idToKey = new Map<string, TrackedPlayerKey>();
+			for (const [key, display] of Object.entries(trackedDisplays)) {
+				if (display.user_id) idToKey.set(display.user_id, key as TrackedPlayerKey);
+			}
+
+			const { data: dayRows, error: dayErr } = await supabase
+				.from('days')
+				.select('id, user_id')
+				.in('user_id', ids)
+				.eq('date', today);
+			if (dayErr) throw dayErr;
+
+			const dayIdByUser = new Map<string, string>();
+			for (const row of dayRows ?? []) {
+				const id = (row.id as string | null) ?? null;
+				const userId = (row.user_id as string | null) ?? null;
+				if (!id || !userId) continue;
+				dayIdByUser.set(userId, id);
+			}
+			const dayIds = Array.from(dayIdByUser.values());
+			if (dayIds.length === 0) {
+				currentCombinedPct = null;
+				return;
+			}
+
+			const dayToKey = new Map<string, TrackedPlayerKey>();
+			for (const [userId, dayId] of dayIdByUser.entries()) {
+				const key = idToKey.get(userId);
+				if (key) dayToKey.set(dayId, key);
+			}
+
+			const { data: hoursRows, error: hoursErr } = await supabase
+				.from('hours')
+				.select('day_id, hour, half, title, todo')
+				.in('day_id', dayIds);
+			if (hoursErr) throw hoursErr;
+
+			const filledCounts = TRACKED_PLAYERS.reduce(
+				(acc, player) => ({ ...acc, [player.key]: 0 }),
+				{} as Record<TrackedPlayerKey, number>
+			);
+
+			for (const row of hoursRows ?? []) {
+				const dayId = (row.day_id as string | null) ?? null;
+				const hour = Number(row.hour);
+				const half = ((row.half as boolean) ? 1 : 0) as 0 | 1;
+				const title = (row.title as string | null) ?? '';
+				const todo = row.todo as boolean | null;
+				if (!dayId || Number.isNaN(hour)) continue;
+				const key = dayToKey.get(dayId);
+				if (!key) continue;
+				if (!blockIsDue(hour, half, currentHour, currentHalf)) continue;
+				const trimmed = title.trim();
+				const isComplete = todo === false ? false : trimmed.length > 0 || todo === true;
+				if (!isComplete) continue;
+				filledCounts[key] += 1;
+			}
+
+			const percentageValues = TRACKED_PLAYERS.reduce(
+				(acc, player) => {
+					const filled = filledCounts[player.key];
+					const pct = blocksDue > 0 ? Math.round((filled / blocksDue) * 100) : null;
+					return { ...acc, [player.key]: pct };
+				},
+				{} as Record<TrackedPlayerKey, number | null>
+			);
+
+			currentCombinedPct = combinedPercent(percentageValues);
+		} catch (error) {
+			console.error('current combined load error', error);
+			currentCombinedPct = null;
+		}
+	}
+
 	async function loadTrackedPlayerHistory() {
 		const ids = Object.values(trackedDisplays)
 			.map((display) => display.user_id)
@@ -166,14 +285,17 @@
 			}));
 			updateTrackedPlayersFromPeople(people);
 			await loadTrackedPlayerHistory();
+			await refreshCurrentCombined();
 		} catch (error) {
 			console.error('tracked player load error', error);
 			dayHistoryRows = [];
+			currentCombinedPct = null;
 		}
 	}
 
 	onMount(() => {
 		let mounted = true;
+		let currentProgressInterval: number | null = null;
 		const init = async () => {
 			try {
 				const { data } = await supabase.auth.getUser();
@@ -187,6 +309,9 @@
 			await refreshTrackedPlayers();
 		};
 		void init();
+		currentProgressInterval = window.setInterval(() => {
+			void refreshCurrentCombined();
+		}, CURRENT_PROGRESS_POLL_MS);
 
 		const handleDocumentClick = (event: MouseEvent) => {
 			if (!dayHistoryOpen || !dateMenuEl) return;
@@ -206,6 +331,10 @@
 			mounted = false;
 			document.removeEventListener('click', handleDocumentClick);
 			document.removeEventListener('keydown', handleKeyDown);
+			if (currentProgressInterval !== null) {
+				window.clearInterval(currentProgressInterval);
+				currentProgressInterval = null;
+			}
 		};
 	});
 
@@ -231,28 +360,35 @@
 			aria-expanded={dayHistoryOpen}
 		>
 			<span>{todayLabel}</span>
+			<span class="text-xs font-semibold text-emerald-600">
+				{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
+			</span>
 		</button>
 		{#if dayHistoryOpen}
 			<div
-				class="absolute top-full left-0 z-50 mt-2 flex bg-blue-400 text-sm text-stone-700"
+				class="absolute top-full left-0 z-50 mt-2 rounded-md border border-stone-200 bg-white/95 text-sm text-stone-700"
 				role="dialog"
 				aria-label="Previous days completion"
 			>
 				{#if dayHistoryRows.length === 0}
 					<div class="text-sm text-stone-500">No recent history yet.</div>
 				{:else}
-					{#each dayHistoryRows as row}
-						{@const jointPct = combinedPercent(row.values)}
-						<div class="flex flex-row items-center justify-between gap-10 px-2">
-							<div class="flex-1 shrink-0 text-sm font-semibold whitespace-nowrap text-stone-500">
-								{formatDisplayDate(row.date, {
-									month: 'short',
-									day: 'numeric'
-								})}
+					<div class="flex flex-col gap-2 overflow-y-auto">
+						{#each dayHistoryRows as row}
+							{@const jointPct = combinedPercent(row.values)}
+							<div
+								class="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold whitespace-nowrap text-stone-700 transition hover:bg-stone-200/50"
+							>
+								<span>
+									{formatDisplayDate(row.date, {
+										month: 'short',
+										day: 'numeric'
+									})}
+								</span>
+								<div class="text-xs font-semibold text-stone-800">{jointPct ?? '—'}%</div>
 							</div>
-							<div class="text-sm font-semibold text-stone-800">{jointPct ?? '—'}%</div>
-						</div>
-					{/each}
+						{/each}
+					</div>
 				{/if}
 			</div>
 		{/if}
