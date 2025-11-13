@@ -7,22 +7,31 @@
 		gym: { icon: '🏋️' }
 	};
 
-	// Theme tokens per habit
-	const HABIT_STYLES: Record<string, { filled: string; empty: string; border: string }> = {
+	type HabitTheme = {
+		filled: string;
+		empty: string;
+		border: string;
+		current: string;
+	};
+
+	const HABIT_STYLES: Record<string, HabitTheme> = {
 		gym: {
 			filled: 'bg-red-50 text-red-900',
 			empty: 'bg-red-50 text-red-700',
-			border: 'border-red-200'
+			border: 'border-red-200',
+			current: 'bg-red-100'
 		},
 		read: {
 			filled: 'bg-blue-50 text-blue-900',
 			empty: 'bg-blue-50 text-blue-700',
-			border: 'border-blue-200'
+			border: 'border-blue-200',
+			current: 'bg-blue-100'
 		},
 		bored: {
 			filled: 'bg-emerald-50 text-emerald-900',
 			empty: 'bg-emerald-50 text-emerald-700',
-			border: 'border-emerald-200'
+			border: 'border-emerald-200',
+			current: 'bg-emerald-100'
 		}
 	};
 
@@ -35,6 +44,7 @@
 		selected?: boolean;
 		habit?: string | null;
 		isCurrent?: boolean;
+		canEditSlot?: boolean;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -45,6 +55,7 @@
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
 	const isCurrentSlot = $derived(Boolean(props.isCurrent));
+	const canEditSlot = $derived(props.canEditSlot ?? true);
 
 	const trimmed = $derived((title ?? '').trim());
 	const isFilled = $derived(trimmed.length > 0);
@@ -55,6 +66,9 @@
 
 	// Choose theme or fallback
 	const theme = $derived(HABIT_STYLES[habitKey] ?? null);
+	const currentClass = $derived(
+		!isCurrentSlot ? '' : isHabit ? (theme?.current ?? '') : 'bg-stone-200'
+	);
 
 	// Build classes
 	const baseClasses =
@@ -71,17 +85,18 @@
 	);
 
 	const showTodo = $derived(todo !== null);
-	const canOpen = $derived(
-		editable && !isFilled && !habitPlaceholder // habits/filled don't open editor
-	);
+	const canOpen = $derived(editable && canEditSlot && !habitPlaceholder);
 
 	function handleSlotClick() {
-		onToggleTodo();
+		if (todo !== null) {
+			onToggleTodo();
+			return;
+		}
 		if (!canOpen) return;
 		onSelect();
 	}
 	function handleSlotKeydown(event: KeyboardEvent) {
-		if (!canOpen) return;
+		if (!editable) return;
 		if (event.key === 'Enter' || event.key === ' ') {
 			event.preventDefault();
 			handleSlotClick();
@@ -90,12 +105,11 @@
 </script>
 
 <button
-	class={`${baseClasses} ${habitClasses}`}
+	class={`${baseClasses} ${habitClasses} ${currentClass}`}
 	class:ring-1={selected}
 	class:ring-stone-400={selected}
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
-	class:bg-stone-200={isCurrentSlot}
 	role={canOpen ? 'button' : undefined}
 	onclick={handleSlotClick}
 	onkeydown={handleSlotKeydown}

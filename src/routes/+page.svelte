@@ -159,10 +159,20 @@
 
 	// modal + draft
 	let logOpen = $state(false);
-	let draft = $state<{ user_id: string | null; hour: number | null; half: 0 | 1 | null }>({
+	let draft = $state<{
+		user_id: string | null;
+		hour: number | null;
+		half: 0 | 1 | null;
+		title: string;
+		todo: boolean | null;
+		makeHabit: boolean;
+	}>({
 		user_id: null,
 		hour: null,
-		half: null
+		half: null,
+		title: '',
+		todo: null,
+		makeHabit: false
 	});
 	let selectedSlot = $state<SelectedSlot | null>(null);
 	let hjklSlot = $state<SelectedSlot | null>(null);
@@ -349,6 +359,15 @@
 	function slotIsCurrent(hour: number, half: 0 | 1) {
 		return currentHour === hour && currentHalf === half;
 	}
+	function slotIsPast(hour: number, half: 0 | 1) {
+		if (currentHour < 0) return false;
+		if (hour < currentHour) return true;
+		if (hour > currentHour) return false;
+		return half < currentHalf;
+	}
+	function slotAllowsEditing(hour: number, half: 0 | 1) {
+		return !slotIsPast(hour, half);
+	}
 	function isTypingTarget(target: EventTarget | null) {
 		if (!(target instanceof HTMLElement)) return false;
 		const tag = target.tagName;
@@ -379,6 +398,7 @@
 		if (!viewerUserId || !selectedSlot) return false;
 		const hour = hours[selectedSlot.hourIndex];
 		if (hour === undefined) return false;
+		if (!slotAllowsEditing(hour, selectedSlot.half)) return false;
 
 		const todoValue = getTodo(viewerUserId, hour, selectedSlot.half);
 		if (todoValue !== null) {
@@ -391,8 +411,17 @@
 
 		const title = getTitle(viewerUserId, hour, selectedSlot.half);
 		if (title.trim().length > 0) return false;
+		return true;
+	}
+
+	function openSelectedSlotEditorFromKeyboard() {
+		if (!viewerUserId || !selectedSlot) return false;
+		const hour = hours[selectedSlot.hourIndex];
+		if (hour === undefined) return false;
+		if (!slotAllowsEditing(hour, selectedSlot.half)) return false;
+		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
+		if ((habitName ?? '').trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half);
-		// setSelectedSlot(null);
 		return true;
 	}
 
@@ -536,7 +565,7 @@
 			}
 			return;
 		}
-		if (!['h', 'j', 'k', 'l', 'Enter'].includes(normalized)) return;
+		if (!['h', 'j', 'k', 'l', 'Enter', 'i'].includes(normalized)) return;
 		hoverSlot = null;
 		ensureSelectionExists();
 		if (!selectedSlot) return;
@@ -557,6 +586,10 @@
 			case 'Enter':
 				hjklSlot = selectedSlot;
 				handled = activateSelectedSlotFromKeyboard();
+				break;
+			case 'i':
+				hjklSlot = selectedSlot;
+				handled = openSelectedSlotEditorFromKeyboard();
 				break;
 		}
 		if (handled) event.preventDefault();
@@ -652,11 +685,20 @@
 
 	function openEditor(user_id: string, h: number, half01: 0 | 1) {
 		if (viewerUserId !== user_id) return;
+		if (!slotAllowsEditing(h, half01)) return;
 		const hourIndex = getHourIndex(h);
 		if (hourIndex !== -1) {
 			setSelectedSlot({ hourIndex, half: half01 });
 		}
-		draft = { user_id, hour: h, half: half01 };
+		const slot = getSlot(user_id, h, half01);
+		draft = {
+			user_id,
+			hour: h,
+			half: half01,
+			title: slot.title ?? '',
+			todo: slot.todo ?? null,
+			makeHabit: false
+		};
 		logOpen = true;
 	}
 
@@ -724,6 +766,7 @@
 		if (suppressNextClick) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
+		if (!slotAllowsEditing(hour, half)) return;
 		const slot = getSlot(user_id, hour, half);
 		if (slot.todo === null) return;
 		const nextTodo = !slot.todo;
@@ -1107,6 +1150,7 @@
 												title={getTitle(person.user_id, h, 0)}
 												todo={getTodo(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
+												canEditSlot={slotAllowsEditing(h, 0)}
 												onSelect={() => openEditor(person.user_id, h, 0)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
@@ -1134,6 +1178,7 @@
 												title={getTitle(person.user_id, h, 1)}
 												todo={getTodo(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
+												canEditSlot={slotAllowsEditing(h, 1)}
 												onSelect={() => openEditor(person.user_id, h, 1)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
@@ -1173,6 +1218,9 @@
 	onSave={saveLog}
 	initialHour={draft.hour}
 	initialHalf={draft.half}
+	initialTitle={draft.title}
+	initialTodo={draft.todo}
+	initialHabit={draft.makeHabit}
 />
 
 <ConfirmMoveModal

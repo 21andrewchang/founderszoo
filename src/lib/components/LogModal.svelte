@@ -11,7 +11,10 @@
 		onClose = () => {},
 		onSave = () => {},
 		initialHour = null,
-		initialHalf = null
+		initialHalf = null,
+		initialTitle = '',
+		initialTodo = null,
+		initialHabit = false
 	} = $props<{
 		open?: boolean;
 		onClose?: () => void;
@@ -24,6 +27,9 @@
 		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
+		initialTitle?: string | null;
+		initialTodo?: boolean | null;
+		initialHabit?: boolean;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
@@ -33,7 +39,7 @@
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
-	let makeHabit = $state(false);
+	let makeHabit = $state(initialHabit);
 	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
 	let mode = $state<ModalMode>('insert');
@@ -129,8 +135,11 @@
 		const fallback = currentSlot();
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
-		makeHabit = false;
-		mode = 'insert';
+		text = initialTitle ?? '';
+		todo = initialTodo ?? null;
+		if (makeHabit && todo === null) {
+			todo = false;
+		}
 	});
 
 	function fillPreset(s: string) {
@@ -228,16 +237,21 @@
 			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-4 py-3">
 				<div class="flex flex-row items-center gap-2">
 					<button
-						class={`inline-flex items-center justify-center rounded-lg border border-stone-200 ${todo === null ? 'bg-stone-50 text-stone-900' : 'bg-stone-900 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
+						class={`inline-flex items-center justify-center gap-2 rounded-lg ${todo === null ? 'bg-stone-50 text-stone-900' : 'bg-stone-700 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
 						onclick={() => {
 							if (todo === null) todo = false;
 							else todo = null;
 						}}
 					>
 						Todo
+						<div
+							class="flex h-4 w-4 items-center justify-center rounded-sm bg-stone-200 font-mono text-[8px]"
+						>
+							t
+						</div>
 					</button>
 					<button
-						class={`inline-flex items-center justify-center rounded-lg border border-stone-200 ${makeHabit === false ? 'bg-stone-50 text-stone-900' : 'bg-stone-900 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
+						class={`inline-flex items-center justify-center gap-2 rounded-lg ${makeHabit === false ? 'bg-stone-50 text-stone-900' : 'bg-stone-700 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
 						onclick={() => {
 							makeHabit = !makeHabit;
 							if (makeHabit) {
@@ -248,6 +262,11 @@
 						}}
 					>
 						Habit
+						<div
+							class="flex h-4 w-4 items-center justify-center rounded-sm bg-stone-200 font-mono text-[8px]"
+						>
+							h
+						</div>
 					</button>
 				</div>
 				<button
