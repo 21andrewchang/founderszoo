@@ -347,7 +347,7 @@
 
 <OnlineCount dedupe={false} />
 <div
-	class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start"
+	class="pointer-events-none fixed top-3 left-3 z-50 flex flex-col items-start"
 	bind:this={dateMenuEl}
 >
 	<div class="pointer-events-auto relative">
