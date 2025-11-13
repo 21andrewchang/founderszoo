@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
 	import { fade, fly, scale } from 'svelte/transition';
-	import { getContext, onMount } from 'svelte';
+	import { getContext, onMount, tick } from 'svelte';
 	import type { Session } from '$lib/session';
 	import type { Writable } from 'svelte/store';
 	import { goto } from '$app/navigation';
@@ -48,12 +48,13 @@
 	const HOLD_MS = 1200; // dwell after animations before navigating
 
 	function focusPasswordInput() {
-		passwordInput?.focus();
-		passwordInput?.select();
+		if (!passwordInput) return;
+		passwordInput.focus();
+		passwordInput.select();
 	}
 
 	onMount(() => {
-		focusPasswordInput();
+		// No hero selected yet; focus will be applied after selection.
 		if (!session) return;
 		const unsub = session.subscribe((value) => {
 			if (!value.loading && value.user) {
@@ -63,11 +64,14 @@
 		return () => unsub();
 	});
 
-	function selectHero(id: HeroId) {
+	async function selectHero(id: HeroId) {
 		selectedHero = id;
 		email = heroMap[id].email;
 		message = '';
 		messageType = '';
+
+		// Wait for the input to mount, then focus/select it.
+		await tick();
 		focusPasswordInput();
 	}
 
@@ -77,6 +81,14 @@
 		return selectedHero === hero.id
 			? `${hero.alignment === 'left' ? 'left-0' : 'right-0'} w-full`
 			: `${alignClass} w-0`;
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'h' || event.key === 'H') {
+			selectHero('graves'); // left
+		} else if (event.key === 'l' || event.key === 'L') {
+			selectHero('cho'); // right
+		}
 	}
 
 	async function handleSubmit(event: SubmitEvent) {
@@ -124,6 +136,8 @@
 	}
 </script>
 
+<svelte:window on:keyup={handleKeydown} />
+
 <div
 	class="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-stone-950 px-4 py-10 text-stone-50"
 >
@@ -151,30 +165,33 @@
 
 	<!-- Card -->
 	{#if !showSuccessAnimation}
-		<div
-			class="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-white/10 p-6 text-stone-50 shadow-[0_25px_60px_rgba(15,15,15,0.45)] backdrop-blur"
-		>
-			<form class="space-y-4" onsubmit={handleSubmit}>
-				<label class="block text-xs font-semibold text-stone-300">
-					<input
-						type="password"
-						required
-						minlength="6"
-						class="mt-2 w-full rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm text-white transition outline-none placeholder:text-stone-400 focus:outline-none"
-						placeholder="••••••••••••••••••••••••••••••••"
-						bind:value={password}
-						bind:this={passwordInput}
-						autocomplete="current-password"
-					/>
-				</label>
-				{#if message}
-					<p class="text-xs {messageType === 'error' ? 'text-rose-300' : 'text-emerald-300'}">
-						{message}
-					</p>
-				{/if}
-				<input type="submit" class="hidden" tabindex="-1" aria-hidden="true" />
-			</form>
-		</div>
+		{#if selectedHero}
+			<div
+				class="relative z-10 w-full max-w-md rounded-xl border border-white/10 bg-white/10 p-2 text-stone-50 shadow-[0_25px_60px_rgba(15,15,15,0.45)] backdrop-blur"
+				in:fly={{ y: 10, duration: 300, delay: 500 }}
+			>
+				<form class="space-y-4" onsubmit={handleSubmit}>
+					<label class="block text-xs font-semibold text-stone-300">
+						<input
+							type="password"
+							required
+							minlength="6"
+							class="mt-2 w-full rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm text-white transition outline-none placeholder:text-stone-400 focus:outline-none"
+							placeholder="••••••••••••••••••••••••••••••••"
+							bind:value={password}
+							bind:this={passwordInput}
+							autocomplete="current-password"
+						/>
+					</label>
+					{#if message}
+						<p class="text-xs {messageType === 'error' ? 'text-rose-300' : 'text-emerald-300'}">
+							{message}
+						</p>
+					{/if}
+					<input type="submit" class="hidden" tabindex="-1" aria-hidden="true" />
+				</form>
+			</div>
+		{/if}
 	{/if}
 </div>
 
