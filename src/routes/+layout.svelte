@@ -10,6 +10,7 @@
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 
 	type Person = { label: string; user_id: string };
+	type Goal = { title: string; due_date: string };
 	type PlayerDisplay = { label: string; user_id: string | null };
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number | null> };
 
@@ -28,6 +29,12 @@
 			name: u?.user_metadata?.name ?? '',
 			loading: false
 		});
+		viewerId = u?.id ?? null;
+		if (!viewerId) {
+			activeGoal = null;
+			newGoalTitle = '';
+			newGoalDueDate = '';
+		}
 	};
 
 	let trackedDisplays = $state<Record<TrackedPlayerKey, PlayerDisplay>>({
@@ -38,7 +45,12 @@
 	let dayHistoryOpen = $state(false);
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number | null>(null);
-	let dateMenuEl: HTMLDivElement | null = null;
+	let dateMenuEl = $state<HTMLDivElement | null>(null);
+	let activeGoal = $state<Goal | null>(null);
+	let newGoalTitle = $state('');
+	let newGoalDueDate = $state('');
+	let isCreatingGoal = $state(false);
+	let viewerId = $state<string | null>(null);
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -75,6 +87,59 @@
 		return parsed.toLocaleDateString(undefined, options);
 	};
 	const todayLabel = formatDisplayDate(localToday());
+	const msPerDay = 24 * 60 * 60 * 1000;
+
+	function startOfDay(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+	}
+
+	function daysUntilDue(dateStr: string | null) {
+		if (!dateStr) return null;
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return null;
+		const due = startOfDay(parsed);
+		const today = startOfDay(new Date());
+		return Math.round((due.getTime() - today.getTime()) / msPerDay);
+	}
+
+	function formatDaysUntilText(days: number | null) {
+		if (days === null) return null;
+		if (days > 1) return `${days} days left`;
+		if (days === 1) return '1 day left';
+		if (days === 0) return 'Due today';
+		if (days === -1) return '1 day overdue';
+		return `${Math.abs(days)} days overdue`;
+	}
+
+	async function handleCreateGoal(event?: Event) {
+		event?.preventDefault();
+		if (!viewerId) return;
+		const title = newGoalTitle.trim();
+		if (!title || !newGoalDueDate) return;
+		isCreatingGoal = true;
+		try {
+			const { data, error } = await supabase
+				.from('goals')
+				.insert({
+					user_id: viewerId,
+					title,
+					due_date: newGoalDueDate
+				})
+				.select('title, due_date')
+				.single();
+			if (error) throw error;
+			activeGoal = {
+				title: (data.title ?? title).trim(),
+				due_date: data.due_date as string
+			};
+			newGoalTitle = '';
+			newGoalDueDate = '';
+		} catch (error) {
+			console.error('goal create error', error);
+		} finally {
+			isCreatingGoal = false;
+		}
+	}
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
 		const next = { ...trackedDisplays };
@@ -292,19 +357,52 @@
 		}
 	}
 
+	async function loadActiveGoal(userId: string | null) {
+		if (!userId) {
+			activeGoal = null;
+			return;
+		}
+		try {
+			const { data, error } = await supabase
+				.from('goals')
+				.select('title, due_date')
+				.eq('user_id', userId)
+				.order('due_date', { ascending: true })
+				.limit(1)
+				.maybeSingle();
+			if (error) {
+				if (error.code === 'PGRST116') {
+					activeGoal = null;
+					return;
+				}
+				throw error;
+			}
+			activeGoal = data
+				? { title: (data.title ?? '').trim(), due_date: data.due_date as string }
+				: null;
+		} catch (error) {
+			console.error('goal load error', error);
+			activeGoal = null;
+		}
+	}
+
 	onMount(() => {
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
 		const init = async () => {
+			let authUser: User | null = null;
 			try {
 				const { data } = await supabase.auth.getUser();
 				if (!mounted) return;
-				applyUser(data.user ?? null);
+				authUser = data.user ?? null;
+				applyUser(authUser);
 			} catch {
 				if (!mounted) return;
 				applyUser(null);
+				authUser = null;
 			}
 			if (!mounted) return;
+			await loadActiveGoal(authUser?.id ?? null);
 			await refreshTrackedPlayers();
 		};
 		void init();
@@ -394,10 +492,21 @@
 			{/if}
 		</div>
 	</div>
-	<div class="pointer-events-none fixed top-3 left-1/2 z-40 -translate-x-1/2 py-1">
-		<div class="pointer-events-auto text-sm font-semibold tracking-wide text-stone-800">
-			MVP Launch
+	{#if activeGoal}
+		{@const daysRemaining = daysUntilDue(activeGoal.due_date)}
+		{@const dueLabel = formatDaysUntilText(daysRemaining)}
+		<div class="pointer-events-none fixed top-3 left-1/2 z-40 -translate-x-1/2 py-1">
+			<div
+				class="pointer-events-auto flex items-center gap-2 px-3 py-1 text-sm font-semibold tracking-wide text-stone-800 uppercase"
+			>
+				<span>{activeGoal.title || 'Goal'}</span>
+				{#if dueLabel}
+					<span class="text-xs font-semibold tracking-wide text-stone-500">
+						{dueLabel}
+					</span>
+				{/if}
+			</div>
 		</div>
-	</div>
+	{/if}
 {/if}
 {@render children()}

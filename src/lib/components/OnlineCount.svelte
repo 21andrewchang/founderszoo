@@ -72,7 +72,7 @@
 </script>
 
 <div class="group fixed top-3 right-3" aria-live="polite" aria-label="Live spectator count">
-	<div class="rounded-sm border border-red-400 px-1">
+	<div class="rounded-sm px-2 py-1">
 		<div class="flex flex-row items-center gap-1 text-sm text-red-400">
 			<svg
 				viewBox="0 0 24 24"
