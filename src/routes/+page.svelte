@@ -165,6 +165,7 @@
 		half: null
 	});
 	let selectedSlot = $state<SelectedSlot | null>(null);
+	let hjklSlot = $state<SelectedSlot | null>(null);
 	let draggingSlot = $state<DraggingSlot | null>(null);
 	let dragHoverSlot = $state<SelectedSlot | null>(null);
 	let hoverSlot = $state<SelectedSlot | null>(null);
@@ -391,7 +392,7 @@
 		const title = getTitle(viewerUserId, hour, selectedSlot.half);
 		if (title.trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half);
-		setSelectedSlot(null);
+		// setSelectedSlot(null);
 		return true;
 	}
 
@@ -524,6 +525,11 @@
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
 		if (normalized === 'Escape') {
+			if (hjklSlot) {
+				setSelectedSlot(hjklSlot);
+				event.preventDefault();
+				return;
+			}
 			if (selectedSlot) {
 				setSelectedSlot(null);
 				event.preventDefault();
@@ -531,7 +537,7 @@
 			return;
 		}
 		if (!['h', 'j', 'k', 'l', 'Enter'].includes(normalized)) return;
-		captureHoverSelection();
+		hoverSlot = null;
 		ensureSelectionExists();
 		if (!selectedSlot) return;
 		let handled = false;
@@ -549,11 +555,14 @@
 				handled = moveSelectionVertical(-1);
 				break;
 			case 'Enter':
+				hjklSlot = selectedSlot;
 				handled = activateSelectedSlotFromKeyboard();
 				break;
 		}
 		if (handled) event.preventDefault();
 	}
+	$inspect('hjkl', hjklSlot);
+	$inspect('selected', selectedSlot);
 
 	async function getTodayDayIdForUser(user_id: string, createIfMissing: boolean) {
 		const today = localToday();
@@ -980,19 +989,19 @@
 			startPlayerStatusWatchers(viewerUserId);
 			startLocalPlayerPresenceIfTracked(viewerUserId);
 
-				const perUserLoads = people.map(async ({ user_id }) => {
-					const create = viewerUserId === user_id;
-					const dayId = await getTodayDayIdForUser(user_id, create);
-					dayIdByUser[user_id] = dayId;
-					const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+			const perUserLoads = people.map(async ({ user_id }) => {
+				const create = viewerUserId === user_id;
+				const dayId = await getTodayDayIdForUser(user_id, create);
+				dayIdByUser[user_id] = dayId;
+				const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
 			});
 
-				const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
+			const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
 
-				await Promise.all([...perUserLoads, ...historyLoads]);
+			await Promise.all([...perUserLoads, ...historyLoads]);
 
 			maybePromptForMissing();
 			startHalfHourNotifier();
