@@ -337,7 +337,6 @@
 		return dragHoverSlot ?? hoverSlot ?? selectedSlot;
 	}
 	function slotIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
-		if (isDragging) return false;
 		const active = highlightedSlotForUser(user_id);
 		return slotMatches(active, hourIndex, half);
 	}
