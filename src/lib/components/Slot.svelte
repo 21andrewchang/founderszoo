@@ -95,7 +95,7 @@
 	class:ring-stone-400={selected}
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
-	class:current-slot={isCurrentSlot}
+	class:bg-stone-200={isCurrentSlot}
 	role={canOpen ? 'button' : undefined}
 	onclick={handleSlotClick}
 	onkeydown={handleSlotKeydown}
