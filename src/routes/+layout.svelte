@@ -345,52 +345,59 @@
 </svelte:head>
 
 <OnlineCount dedupe={false} />
-<div
-	class="pointer-events-none fixed top-3 left-3 z-50 flex flex-col items-start"
-	bind:this={dateMenuEl}
->
-	<div class="pointer-events-auto relative">
-		<button
-			type="button"
-			class="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-stone-700 transition hover:bg-stone-200/50"
-			onclick={() => {
-				dayHistoryOpen = !dayHistoryOpen;
-			}}
-			aria-expanded={dayHistoryOpen}
-		>
-			<span>{todayLabel}</span>
-			<span class="text-xs font-semibold text-emerald-600">
-				{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
-			</span>
-		</button>
-		{#if dayHistoryOpen}
-			<div
-				class="absolute top-full left-0 z-50 mt-2 rounded-md border border-stone-200 bg-white/95 text-sm text-stone-700"
-				role="dialog"
-				aria-label="Previous days completion"
+{#if $session.user}
+	<div
+		class="pointer-events-none fixed top-3 left-3 z-50 flex flex-col items-start"
+		bind:this={dateMenuEl}
+	>
+		<div class="pointer-events-auto relative">
+			<button
+				type="button"
+				class="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-stone-700 transition hover:bg-stone-200/50"
+				onclick={() => {
+					dayHistoryOpen = !dayHistoryOpen;
+				}}
+				aria-expanded={dayHistoryOpen}
 			>
-				{#if dayHistoryRows.length === 0}
-					<div class="text-sm text-stone-500">No recent history yet.</div>
-				{:else}
-					<div class="flex flex-col gap-2 overflow-y-auto">
-						{#each dayHistoryRows as row}
-							{@const jointPct = combinedPercent(row.values)}
-							<div
-								class="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold whitespace-nowrap text-stone-700 transition hover:bg-stone-200/50"
-							>
-								<span>
-									{formatDisplayDate(row.date, {
-										month: 'short',
-										day: 'numeric'
-									})}
-								</span>
-								<div class="text-xs font-semibold text-stone-800">{jointPct ?? '—'}%</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/if}
+				<span>{todayLabel}</span>
+				<span class="text-xs font-semibold text-emerald-600">
+					{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
+				</span>
+			</button>
+			{#if dayHistoryOpen}
+				<div
+					class="absolute top-full left-0 z-50 mt-2 rounded-md border border-stone-200 bg-white/95 text-sm text-stone-700"
+					role="dialog"
+					aria-label="Previous days completion"
+				>
+					{#if dayHistoryRows.length === 0}
+						<div class="text-sm text-stone-500">No recent history yet.</div>
+					{:else}
+						<div class="flex flex-col gap-2 overflow-y-auto">
+							{#each dayHistoryRows as row}
+								{@const jointPct = combinedPercent(row.values)}
+								<div
+									class="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold whitespace-nowrap text-stone-700 transition hover:bg-stone-200/50"
+								>
+									<span>
+										{formatDisplayDate(row.date, {
+											month: 'short',
+											day: 'numeric'
+										})}
+									</span>
+									<div class="text-xs font-semibold text-stone-800">{jointPct ?? '—'}%</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
 	</div>
-</div>
+	<div class="pointer-events-none fixed top-3 left-1/2 z-40 -translate-x-1/2 py-1">
+		<div class="pointer-events-auto text-sm font-semibold tracking-wide text-stone-800">
+			MVP Launch
+		</div>
+	</div>
+{/if}
 {@render children()}
