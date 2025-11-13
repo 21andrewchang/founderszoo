@@ -166,6 +166,7 @@
 	let selectedSlot = $state<SelectedSlot | null>(null);
 	let draggingSlot = $state<DraggingSlot | null>(null);
 	let dragHoverSlot = $state<SelectedSlot | null>(null);
+	let hoverSlot = $state<SelectedSlot | null>(null);
 	let pendingMove = $state<PendingMove | null>(null);
 	let isMoveSubmitting = $state(false);
 	let dragImageEl: HTMLElement | null = null;
@@ -330,11 +331,16 @@
 	function slotMatches(selection: SelectedSlot | null, hourIndex: number, half: 0 | 1) {
 		return selection?.hourIndex === hourIndex && selection?.half === half;
 	}
+	function highlightedSlotForUser(user_id: string): SelectedSlot | null {
+		if (viewerUserId !== user_id) return null;
+		return dragHoverSlot ?? hoverSlot ?? selectedSlot;
+	}
 	function slotIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
-		if (viewerUserId !== user_id) return false;
-		return (
-			slotMatches(selectedSlot, hourIndex, half) || slotMatches(dragHoverSlot, hourIndex, half)
-		);
+		const active = highlightedSlotForUser(user_id);
+		return slotMatches(active, hourIndex, half);
+	}
+	function slotIsCurrent(hour: number, half: 0 | 1) {
+		return currentHour === hour && currentHalf === half;
 	}
 	function isTypingTarget(target: EventTarget | null) {
 		if (!(target instanceof HTMLElement)) return false;
@@ -466,6 +472,22 @@
 	function handleSlotDragEnd() {
 		resetDragState();
 	}
+	function captureHoverSelection() {
+		if (!viewerUserId || !hoverSlot) return false;
+		setSelectedSlot(hoverSlot);
+		hoverSlot = null;
+		return true;
+	}
+	function handleSlotPointerEnter(user_id: string, hourIndex: number, half: 0 | 1) {
+		if (!viewerUserId || viewerUserId !== user_id) return;
+		hoverSlot = { hourIndex, half };
+	}
+	function handleSlotPointerLeave(user_id: string, hourIndex: number, half: 0 | 1) {
+		if (!viewerUserId || viewerUserId !== user_id) return;
+		if (hoverSlot && hoverSlot.hourIndex === hourIndex && hoverSlot.half === half) {
+			hoverSlot = null;
+		}
+	}
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (!viewerUserId || logOpen) return;
@@ -481,6 +503,7 @@
 			return;
 		}
 		if (!['h', 'j', 'k', 'l', 'Enter'].includes(normalized)) return;
+		captureHoverSelection();
 		ensureSelectionExists();
 		if (!selectedSlot) return;
 		let handled = false;
@@ -856,7 +879,10 @@
 			console.info('viewer not authenticated, continuing in read-only mode', authErr);
 			viewerUserId = null;
 		}
-		if (!viewerUserId) selectedSlot = null;
+		if (!viewerUserId) {
+			selectedSlot = null;
+			hoverSlot = null;
+		}
 
 		try {
 			const { data: rows, error: uerr } = await supabase
@@ -888,7 +914,6 @@
 
 			maybePromptForMissing();
 			startHalfHourNotifier();
-			ensureSelectionExists();
 		} catch (e) {
 			console.error('init failed', e);
 		} finally {
@@ -984,6 +1009,10 @@
 											class="flex w-full min-w-0 bg-transparent"
 											role="presentation"
 											draggable={canDragSlot(person.user_id, h, 0)}
+											onpointerenter={() =>
+												handleSlotPointerEnter(person.user_id, hourIndex, 0)}
+											onpointerleave={() =>
+												handleSlotPointerLeave(person.user_id, hourIndex, 0)}
 											ondragstart={(event) =>
 												handleSlotDragStart(event, person.user_id, h, 0, hourIndex)}
 											ondragover={(event) =>
@@ -999,12 +1028,17 @@
 												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
+												isCurrent={slotIsCurrent(h, 0)}
 											/>
 										</div>
 										<div
 											class="flex w-full min-w-0 bg-transparent"
 											role="presentation"
 											draggable={canDragSlot(person.user_id, h, 1)}
+											onpointerenter={() =>
+												handleSlotPointerEnter(person.user_id, hourIndex, 1)}
+											onpointerleave={() =>
+												handleSlotPointerLeave(person.user_id, hourIndex, 1)}
 											ondragstart={(event) =>
 												handleSlotDragStart(event, person.user_id, h, 1, hourIndex)}
 											ondragover={(event) =>
@@ -1020,6 +1054,7 @@
 												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
+												isCurrent={slotIsCurrent(h, 1)}
 											/>
 										</div>
 									</div>

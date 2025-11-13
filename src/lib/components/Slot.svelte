@@ -11,17 +11,17 @@
 	const HABIT_STYLES: Record<string, { filled: string; empty: string; border: string }> = {
 		gym: {
 			filled: 'bg-red-50 text-red-900',
-			empty: 'bg-red-50 text-red-700 hover:bg-red-100',
+			empty: 'bg-red-50 text-red-700',
 			border: 'border-red-200'
 		},
 		read: {
 			filled: 'bg-blue-50 text-blue-900',
-			empty: 'bg-blue-50 text-blue-700 hover:bg-blue-100',
+			empty: 'bg-blue-50 text-blue-700',
 			border: 'border-blue-200'
 		},
 		bored: {
 			filled: 'bg-emerald-50 text-emerald-900',
-			empty: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+			empty: 'bg-emerald-50 text-emerald-700',
 			border: 'border-emerald-200'
 		}
 	};
@@ -34,6 +34,7 @@
 		onToggleTodo?: () => void;
 		selected?: boolean;
 		habit?: string | null;
+		isCurrent?: boolean;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -43,6 +44,7 @@
 	const onToggleTodo = $derived(props.onToggleTodo ?? (() => {}));
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
+	const isCurrentSlot = $derived(Boolean(props.isCurrent));
 
 	const trimmed = $derived((title ?? '').trim());
 	const isFilled = $derived(trimmed.length > 0);
@@ -56,19 +58,18 @@
 
 	// Build classes
 	const baseClasses =
-		'flex w-full min-w-0 flex-row items-center rounded-sm  p-2 transition overflow-hidden focus:outline-0';
+		'flex w-full min-w-0 flex-row items-center rounded-sm p-2 transition overflow-hidden focus:outline-0';
+	const focusRingClasses =
+		'focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2 focus-visible:ring-offset-stone-50';
 	const canHover = $derived(editable);
 	const habitClasses = $derived(
 		isHabit
 			? `border-dotted ${canHover ? 'hover:border-solid' : ''} border ${theme?.border ?? 'border-stone-300'} ${
 					isFilled
 						? (theme?.filled ?? 'bg-stone-50 text-stone-900')
-						: (theme?.empty ?? 'bg-stone-50 text-stone-700') +
-							(canHover ? ' hover:bg-stone-100' : '')
+						: (theme?.empty ?? 'bg-stone-50 text-stone-700')
 				}`
-			: `${isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'} ${
-					canHover ? 'hover:bg-stone-200' : ''
-				}`
+			: `${isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'}`
 	);
 
 	const showTodo = $derived(todo !== null);
@@ -91,11 +92,12 @@
 </script>
 
 <button
-	class={`${baseClasses} ${habitClasses}`}
+	class={`${baseClasses} ${focusRingClasses} ${habitClasses}`}
 	class:ring-1={selected}
 	class:ring-stone-400={selected}
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
+	class:current-slot={isCurrentSlot}
 	role={canOpen ? 'button' : undefined}
 	onclick={handleSlotClick}
 	onkeydown={handleSlotKeydown}
@@ -133,8 +135,15 @@
 			{:else}
 				<span
 					class="pointer-events-none absolute inset-0 rounded-full border border-[1px] border-stone-400 transition duration-200 ease-out"
-				/>
+				></span>
 			{/if}
 		</div>
 	{/if}
 </button>
+
+<style>
+	button.current-slot {
+		background-image: linear-gradient(rgba(15, 23, 42, 0.12), rgba(15, 23, 42, 0.12));
+		background-blend-mode: multiply;
+	}
+</style>
