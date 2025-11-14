@@ -1374,12 +1374,7 @@
 			<div class="flex flex-col space-y-1">
 				<div class="text-stone-50">T</div>
 				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center">
-						<div
-							class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
-							in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 800 }}
-						></div>
-					</div>
+					<div class="relative flex h-7 w-7 items-center justify-center"></div>
 				{/each}
 			</div>
 		{:else}
@@ -1390,7 +1385,7 @@
 						{#if showTimes}
 							<div
 								class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
-								in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 800 }}
+								in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 200 }}
 							>
 								{hh(h)}
 							</div>
@@ -1398,7 +1393,7 @@
 						{#if isCurrent(h)}
 							<div
 								class="absolute h-7 w-7 rounded-md bg-stone-700"
-								in:scale={{ start: 0.7, duration: 200, delay: 1500 }}
+								in:scale|global={{ start: 0.6, duration: 100, delay: 1000 }}
 							></div>
 						{/if}
 					</div>

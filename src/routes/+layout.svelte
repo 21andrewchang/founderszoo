@@ -412,7 +412,6 @@
 		}
 	}
 
-	// pathname + presence lifted to layout
 	let pathname = $state('/');
 	let presenceCounts = $state<PresenceSnapshot>({ tabs: 0, unique: 0, connected: false });
 
@@ -440,7 +439,6 @@
 
 		const store = usePresence(resolvedRoom, viewerId);
 		const unsubscribe = store.subscribe((value) => {
-			console.log('adskfj');
 			presenceCounts = value;
 		});
 
@@ -546,7 +544,7 @@
 		</nav>
 	</div>
 {:else if authSet && $session.user && currentCombinedPct && presenceCounts.connected}
-	<div in:fly={{ y: 2, duration: 400, delay: 100 }}>
+	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
 		<OnlineCount dedupe={true} counts={presenceCounts} />
 		<div
 			class="pointer-events-none fixed top-5 left-4 z-50 flex flex-col items-start"

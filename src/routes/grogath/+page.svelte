@@ -4,7 +4,7 @@
 	import { getContext, onMount, tick } from 'svelte';
 	import type { Session } from '$lib/session';
 	import type { Writable } from 'svelte/store';
-	import { goto } from '$app/navigation';
+	import { invalidateAll, invalidate, goto } from '$app/navigation';
 
 	type HeroId = 'graves' | 'cho';
 	type Hero = {
@@ -132,7 +132,7 @@
 		// Beam/title animation lasts ~2000ms; fade overlaps 900ms. Add a short dwell.
 		const total = 2000 + 900 + HOLD_MS;
 		await new Promise((r) => setTimeout(r, total));
-		void goto('/');
+		goto('/');
 	}
 </script>
 
