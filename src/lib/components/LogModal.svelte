@@ -304,10 +304,11 @@
 
 			<div class="flex items-center justify-end gap-2 border-t border-stone-100 p-4 py-3">
 				<button
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={handleSubmit}
 				>
-					{saving ? 'Saving…' : `Save ⌘+Enter`}
+					{saving ? 'Saving…' : `Save `}
+					<span class="text-stone-400">⌘ Enter</span>
 				</button>
 			</div>
 		</div>

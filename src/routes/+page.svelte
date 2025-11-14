@@ -7,10 +7,10 @@
 	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
-import { supabase } from '$lib/supabaseClient';
-import type { Writable } from 'svelte/store';
-import type { Session } from '$lib/session';
-import { formatLocalTimestamp } from '$lib/time';
+	import { supabase } from '$lib/supabaseClient';
+	import type { Writable } from 'svelte/store';
+	import type { Session } from '$lib/session';
+	import { formatLocalTimestamp } from '$lib/time';
 
 	type Person = { label: string; user_id: string };
 
@@ -162,8 +162,29 @@ import { formatLocalTimestamp } from '$lib/time';
 	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
 	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
 
-	// modal + draft
 	let logOpen = $state(false);
+	type TodoCarryoverPrompt = {
+		user_id: string;
+		prevHour: number;
+		prevHalf: 0 | 1;
+		currHour: number;
+		currHalf: 0 | 1;
+		title: string;
+	};
+
+	let todoCarryPrompt = $state<TodoCarryoverPrompt | null>(null);
+	let isTodoCarrySubmitting = $state(false);
+	function previousSlot(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
+		if (half === 1) {
+			// B → previous is same hour, A
+			return { hour, half: 0 };
+		}
+		// A → previous is previous hour, B
+		const prevHour = hour - 1;
+		if (prevHour < START_HOUR) return null;
+		return { hour: prevHour, half: 1 };
+	}
+
 	let draft = $state<{
 		user_id: string | null;
 		hour: number | null;
@@ -1015,20 +1036,150 @@ import { formatLocalTimestamp } from '$lib/time';
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen) return;
+		if (!viewerUserId || logOpen || todoCarryPrompt) return;
+
 		const date = localToday();
 		const h = currentHour;
 		const half = currentHalf;
+
 		if (h < START_HOUR || h >= END_HOUR) return;
+
+		// If the current slot already has *anything*, don't prompt
+		if (slotHasContent(viewerUserId, h, half)) return;
 
 		const key = slotKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
 
+		// 1) Check if previous slot was an *unfinished* TODO
+		const prev = previousSlot(h, half);
+		if (prev) {
+			const { hour: prevHour, half: prevHalf } = prev;
+			const prevTodo = getTodo(viewerUserId, prevHour, prevHalf);
+			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
+
+			// Only prompt if previous slot is a TODO that is still unfinished (todo === false)
+			if (prevTodo === false && prevTitle.length > 0) {
+				todoCarryPrompt = {
+					user_id: viewerUserId,
+					prevHour,
+					prevHalf,
+					currHour: h,
+					currHalf: half,
+					title: prevTitle
+				};
+				lastPromptKey = key; // avoid re-prompting for this slot
+				return;
+			}
+		}
+
+		// 2) Normal behavior: if current slot is empty, open the editor
 		const t = getTitle(viewerUserId, h, half);
 		if (!t || t.trim() === '') {
 			openEditor(viewerUserId, h, half);
 			lastPromptKey = key;
 		}
+	}
+
+	async function markPreviousTodoCompletedAndOpenCurrent() {
+		if (!todoCarryPrompt) return;
+		if (isTodoCarrySubmitting) return;
+		isTodoCarrySubmitting = true;
+
+		const { user_id, prevHour, prevHalf, currHour, currHalf } = todoCarryPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+
+			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+
+			// Mark previous as completed (todo = true)
+			const { error } = await supabase.from('hours').upsert(
+				{
+					day_id,
+					hour: prevHour,
+					half: prevHalf === 1,
+					title: prevSlot.title ?? '',
+					todo: true
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+
+			if (error) {
+				console.error('mark previous todo completed error', error);
+				return;
+			}
+
+			setTodo(user_id, prevHour, prevHalf, true);
+
+			// Close prompt and open editor for the current slot
+			todoCarryPrompt = null;
+			openEditor(user_id, currHour, currHalf);
+		} finally {
+			isTodoCarrySubmitting = false;
+		}
+	}
+
+	async function continuePreviousTodoIntoCurrent() {
+		if (!todoCarryPrompt) return;
+		if (isTodoCarrySubmitting) return;
+		isTodoCarrySubmitting = true;
+
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = todoCarryPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+
+			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+
+			// 1) Turn previous into a normal slot (todo = null, keep title)
+			{
+				const { error } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: prevHour,
+						half: prevHalf === 1,
+						title: prevSlot.title ?? '',
+						todo: null
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (error) {
+					console.error('clear previous todo error', error);
+					return;
+				}
+				setTodo(user_id, prevHour, prevHalf, null);
+			}
+
+			// 2) Copy into current slot as a new TODO
+			{
+				const { error } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: currHour,
+						half: currHalf === 1,
+						title,
+						todo: false
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (error) {
+					console.error('create continued todo in current slot error', error);
+					return;
+				}
+				setTitle(user_id, currHour, currHalf, title, false);
+			}
+
+			todoCarryPrompt = null;
+			// You can choose whether to auto-open the editor here.
+			// Spec says just copy it, so no openEditor() call.
+		} finally {
+			isTodoCarrySubmitting = false;
+		}
+	}
+
+	function cancelTodoCarryPrompt() {
+		if (isTodoCarrySubmitting) return;
+		todoCarryPrompt = null;
 	}
 
 	function updateCurrentTime() {
@@ -1348,17 +1499,58 @@ import { formatLocalTimestamp } from '$lib/time';
 	{/if}
 </div>
 
-	<LogModal
-		open={logOpen}
-		onClose={() => (logOpen = false)}
-		onSave={saveLog}
-		initialHour={draft.hour}
-		initialHalf={draft.half}
-		initialTitle={draft.title}
-		initialTodo={draft.todo}
-		habitStreaks={habitStreaksForUser(viewerUserId)}
-	/>
+<LogModal
+	open={logOpen}
+	onClose={() => (logOpen = false)}
+	onSave={saveLog}
+	initialHour={draft.hour}
+	initialHalf={draft.half}
+	initialTitle={draft.title}
+	initialTodo={draft.todo}
+	habitStreaks={habitStreaksForUser(viewerUserId)}
+/>
 
+{#if todoCarryPrompt}
+	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
+				Previous block TODO
+			</div>
+			<div class="mt-1 text-sm font-medium text-stone-900">Did you complete this?</div>
+			<div class="mt-2 truncate text-sm text-stone-700">
+				{todoCarryPrompt?.title}
+			</div>
+
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100"
+					onclick={continuePreviousTodoIntoCurrent}
+					disabled={isTodoCarrySubmitting}
+				>
+					Continue this block
+				</button>
+				<button
+					type="button"
+					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
+					onclick={markPreviousTodoCompletedAndOpenCurrent}
+					disabled={isTodoCarrySubmitting}
+				>
+					Mark done
+				</button>
+			</div>
+
+			<button
+				type="button"
+				class="mt-2 text-xs text-stone-400 hover:text-stone-600"
+				onclick={cancelTodoCarryPrompt}
+				disabled={isTodoCarrySubmitting}
+			>
+				Cancel
+			</button>
+		</div>
+	</div>
+{/if}
 <ConfirmMoveModal
 	open={pendingMove !== null}
 	onCancel={cancelPendingMove}
