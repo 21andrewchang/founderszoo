@@ -464,14 +464,14 @@
 		<div class="pointer-events-auto relative">
 			<button
 				type="button"
-				class="flex w-26 items-center justify-center gap-2 rounded-sm text-xs text-stone-700 transition hover:bg-stone-200/50"
+				class="flex w-23 items-center justify-center gap-2 rounded-sm px-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
 				onclick={() => {
 					dayHistoryOpen = !dayHistoryOpen;
 				}}
 				aria-expanded={dayHistoryOpen}
 			>
 				<span>{todayLabel}</span>
-				<div class="w-10 text-end text-xs font-semibold text-stone-800">
+				<div class="w-9 text-end text-xs font-semibold text-stone-800">
 					{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
 				</div>
 			</button>
@@ -488,7 +488,7 @@
 							{#each dayHistoryRows as row}
 								{@const jointPct = combinedPercent(row.values)}
 								<div
-									class="flex w-26 items-center justify-center gap-2 rounded-sm text-xs text-stone-700 transition hover:bg-stone-200/50"
+									class="flex w-23 items-center justify-center gap-2 rounded-sm text-xs text-stone-700 transition hover:bg-stone-200/50"
 								>
 									<span>
 										{formatDisplayDate(row.date, {
@@ -496,7 +496,7 @@
 											day: 'numeric'
 										})}
 									</span>
-									<div class="w-10 text-end text-xs font-semibold text-stone-800">
+									<div class="w-9 text-end text-xs font-semibold text-stone-800">
 										{jointPct ?? '—'}%
 									</div>
 								</div>
