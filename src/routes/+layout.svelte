@@ -46,7 +46,7 @@
 
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
-	const store = useGlobalPresence(viewerId);
+	let store = $derived(useGlobalPresence(viewerId));
 
 	const applyUser = (u: User | null) => {
 		session.set({
@@ -421,7 +421,6 @@
 			presenceCounts = { tabs: 0, unique: 0, connected: false };
 			return;
 		}
-		const store = useGlobalPresence(viewerId);
 		const unsubscribe = store.subscribe((v) => {
 			presenceCounts = v;
 		});
