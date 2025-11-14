@@ -7,7 +7,8 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import type { Session } from '$lib/session';
 	import type { User } from '@supabase/supabase-js';
-	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
+import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
+import { formatLocalTimestamp } from '$lib/time';
 
 	type Person = { label: string; user_id: string };
 	type Goal = { title: string; due_date: string };
@@ -123,7 +124,8 @@
 				.insert({
 					user_id: viewerId,
 					title,
-					due_date: newGoalDueDate
+					due_date: newGoalDueDate,
+					created_at: formatLocalTimestamp(new Date())
 				})
 				.select('title, due_date')
 				.single();

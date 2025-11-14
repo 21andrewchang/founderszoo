@@ -1,38 +1,11 @@
 <script lang="ts">
+	import type { PlayerStreak } from '$lib/streaks';
 	type HabitConfig = { icon: string };
 
 	const HABITS: Record<string, HabitConfig> = {
 		read: { icon: '📖' },
 		bored: { icon: '😵‍💫' },
 		gym: { icon: '🏋️' }
-	};
-
-	type HabitTheme = {
-		filled: string;
-		empty: string;
-		border: string;
-		current: string;
-	};
-
-	const HABIT_STYLES: Record<string, HabitTheme> = {
-		gym: {
-			filled: 'bg-red-50 text-red-900',
-			empty: 'bg-red-50 text-red-700',
-			border: 'border-red-200',
-			current: 'bg-red-100'
-		},
-		read: {
-			filled: 'bg-blue-50 text-blue-900',
-			empty: 'bg-blue-50 text-blue-700',
-			border: 'border-blue-200',
-			current: 'bg-blue-100'
-		},
-		bored: {
-			filled: 'bg-emerald-50 text-emerald-900',
-			empty: 'bg-emerald-50 text-emerald-700',
-			border: 'border-emerald-200',
-			current: 'bg-emerald-100'
-		}
 	};
 
 	const props = $props<{
@@ -44,6 +17,7 @@
 		selected?: boolean;
 		habit?: string | null;
 		isCurrent?: boolean;
+		habitStreak?: PlayerStreak | null;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -54,6 +28,17 @@
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
 	const isCurrentSlot = $derived(Boolean(props.isCurrent));
+	const habitStreak = $derived(props.habitStreak ?? null);
+	const habitStreakLabel = $derived(() => {
+		if (!habitStreak || habitStreak.length <= 0) return null;
+		return `${habitStreak.kind === 'positive' ? '' : '-'}${habitStreak.length}`;
+	});
+	const habitStreakClasses = $derived(() => {
+		if (!habitStreak) return 'border-stone-300 text-stone-500';
+		return habitStreak.kind === 'positive'
+			? 'border-emerald-400 text-emerald-700'
+			: 'border-rose-400 text-rose-700';
+	});
 
 	const trimmed = $derived((title ?? '').trim());
 	const isFilled = $derived(trimmed.length > 0);
@@ -62,27 +47,24 @@
 	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
 
-	// Choose theme or fallback
-	const theme = $derived(HABIT_STYLES[habitKey] ?? null);
-	const currentClass = $derived(
-		!isCurrentSlot ? '' : isHabit ? (theme?.current ?? '') : 'bg-stone-200'
-	);
+	const currentClass = $derived(isCurrentSlot ? 'bg-stone-200' : '');
 
-	// Build classes
 	const baseClasses =
 		'flex w-full min-w-0 flex-row items-center rounded-sm p-2 transition overflow-hidden focus:outline-0';
 	const canHover = $derived(editable);
+
 	const habitClasses = $derived(
 		isHabit
-			? `border-dotted ${canHover ? 'hover:border-solid' : ''} border ${theme?.border ?? 'border-stone-300'} ${
-					isFilled
-						? (theme?.filled ?? 'bg-stone-50 text-stone-900')
-						: (theme?.empty ?? 'bg-stone-50 text-stone-700')
+			? `border border-stone-400 text-stone-900 ${todo ? '' : 'border-dashed'} ${
+					canHover ? 'hover:border-stone-600' : ''
 				}`
-			: `${isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'}`
+			: `${
+					isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'
+				}`
 	);
 
 	const showTodo = $derived(todo !== null);
+	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleSlotClick() {
@@ -93,6 +75,7 @@
 		if (!canOpen) return;
 		onSelect();
 	}
+
 	function handleSlotKeydown(event: KeyboardEvent) {
 		if (!editable) return;
 		if (event.key === 'Enter' || event.key === ' ') {
@@ -100,6 +83,13 @@
 			handleSlotClick();
 		}
 	}
+	const streakArrowClass = $derived.by(() => {
+		const base = 'h-[8px] w-[8px] transition-transform';
+		if (!habitStreak) return `${base} text-stone-400`;
+		const color = habitStreak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
+		const rotation = habitStreak.kind === 'positive' ? '' : 'rotate-180';
+		return `${base} ${color} ${rotation}`;
+	});
 </script>
 
 <button
@@ -123,6 +113,22 @@
 			<span class="opacity-70">{habitPlaceholder}</span>
 		{:else}
 			&nbsp;
+		{/if}
+		{#if showHabitStreak}
+			<span
+				class={`ml-1 inline-flex shrink-0 items-center rounded-sm border px-1 text-[10px] font-semibold tracking-wider uppercase ${habitStreakClasses}`}
+			>
+				<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
+					<polygon
+						points="5,1 9,9 1,9"
+						fill="currentColor"
+						stroke="currentColor"
+						stroke-width="1"
+						stroke-linejoin="round"
+					/>
+				</svg>
+				{habitStreak.length}
+			</span>
 		{/if}
 	</span>
 

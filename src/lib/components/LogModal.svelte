@@ -229,12 +229,19 @@
 				{#each PRESETS as p}
 					<button
 						type="button"
-						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 						onclick={() => fillPreset(p.value)}
 					>
-						<span class="relative flex h-3 w-3 items-center justify-center">
-							<!-- dot -->
-							<span class={`h-1.5 w-1.5 rounded-full ${p.colorClass}`} />
+						<span class="relative flex h-1.5 w-1.5 items-center justify-center">
+							<svg viewBox="0 0 10 10" aria-hidden="true">
+								<polygon
+									points="5,1 9,9 1,9"
+									fill="currentColor"
+									stroke="currentColor"
+									stroke-width="1"
+									stroke-linejoin="round"
+								/>
+							</svg>
 							<!-- flying key label in normal mode -->
 							{#if mode === 'normal'}
 								<span

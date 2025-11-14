@@ -10,6 +10,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
 	import type { Session } from '$lib/session';
+	import { formatLocalTimestamp } from '$lib/time';
 
 	type Person = { label: string; user_id: string };
 
@@ -98,6 +99,9 @@
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2; // 16 hours * 2 halves = 32 slots
 	const STREAK_LOOKBACK_DAYS = 60;
+	const DAY_MS = 86_400_000;
+	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored'] as const;
+	type HabitKey = (typeof HABIT_STREAK_KEYS)[number];
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
@@ -156,6 +160,7 @@
 	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
+	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
 
 	// modal + draft
 	let logOpen = $state(false);
@@ -268,6 +273,118 @@
 		const row = habitsByUser[user_id]?.[h];
 		if (!row) return null;
 		return half01 === 0 ? row.first : row.second;
+	}
+	type HabitDayStatus = { date: string; completed: boolean };
+	function normalizeHabitName(value: string | null | undefined): HabitKey | null {
+		const key = (value ?? '').trim().toLowerCase();
+		return HABIT_STREAK_KEYS.includes(key as HabitKey) ? (key as HabitKey) : null;
+	}
+	function emptyHabitStreakRecord(): Record<HabitKey, PlayerStreak | null> {
+		return HABIT_STREAK_KEYS.reduce(
+			(acc, key) => {
+				acc[key] = null;
+				return acc;
+			},
+			{} as Record<HabitKey, PlayerStreak | null>
+		);
+	}
+	function parseHabitDate(dateStr: string): number | null {
+		const parts = dateStr.split('-');
+		if (parts.length !== 3) return null;
+		const [yearStr, monthStr, dayStr] = parts;
+		const year = Number(yearStr);
+		const month = Number(monthStr);
+		const day = Number(dayStr);
+		if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) return null;
+		const date = new Date();
+		date.setFullYear(year, month - 1, day);
+		date.setHours(0, 0, 0, 0);
+		return date.getTime();
+	}
+	function calculateHabitStreak(records: HabitDayStatus[]): PlayerStreak | null {
+		if (records.length === 0) return null;
+
+		// Build date -> completed map and track bounds
+		const byDate = new Map<string, boolean>();
+		let earliestMs: number | null = null;
+		let latestMs: number | null = null;
+
+		for (const record of records) {
+			const date = record.date;
+			if (!date) continue;
+			byDate.set(date, record.completed);
+
+			const ms = parseHabitDate(date);
+			if (ms === null) continue;
+			earliestMs = earliestMs === null ? ms : Math.min(earliestMs, ms);
+			latestMs = latestMs === null ? ms : Math.max(latestMs, ms);
+		}
+
+		if (byDate.size === 0 || earliestMs === null || latestMs === null) return null;
+
+		const today = localToday();
+		const todayMs = parseHabitDate(today);
+
+		// Decide which day the streak is anchored on
+		let anchorDateStr: string | null = null;
+		let anchorMs: number | null = null;
+		let targetCompleted: boolean | null = null;
+
+		const todayCompleted = byDate.get(today);
+
+		if (todayCompleted === true && todayMs !== null) {
+			// Today is done → include it
+			anchorDateStr = today;
+			anchorMs = todayMs;
+			targetCompleted = true;
+		} else {
+			// Today not done → ignore it, anchor on latest day < today
+			let cursorMs = latestMs;
+			while (true) {
+				const cursorDate = formatDateString(new Date(cursorMs));
+
+				// Only consider strictly before today
+				if (cursorDate < today && byDate.has(cursorDate)) {
+					anchorDateStr = cursorDate;
+					anchorMs = cursorMs;
+					targetCompleted = byDate.get(cursorDate)!;
+					break;
+				}
+
+				cursorMs -= DAY_MS;
+				if (cursorMs < earliestMs) break;
+			}
+			if (anchorDateStr === null || anchorMs === null || targetCompleted === null) {
+				return null;
+			}
+		}
+
+		// Walk backwards from the anchor while values match
+		let streakLength = 0;
+		let cursorMs2 = anchorMs;
+
+		while (true) {
+			const cursorDate = formatDateString(new Date(cursorMs2));
+			const value = byDate.get(cursorDate);
+			if (value === undefined || value !== targetCompleted) break;
+
+			streakLength += 1;
+			cursorMs2 -= DAY_MS;
+			if (cursorMs2 < earliestMs) break;
+		}
+
+		return {
+			kind: targetCompleted ? 'positive' : 'negative',
+			length: streakLength,
+			missesOnLatest: targetCompleted ? 0 : 1
+		};
+	}
+	function habitStreakForSlot(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
+		const habitName = getHabitTitle(user_id, h, half01);
+		const key = normalizeHabitName(habitName);
+		if (!key) return null;
+		const record = habitStreaksByUser[user_id];
+		return record?.[key] ?? null;
 	}
 	function getHourIndex(value: number) {
 		return hours.findIndex((hour) => hour === value);
@@ -547,14 +664,15 @@
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
 		if (normalized === 'Escape') {
-			if (hjklSlot) {
-				setSelectedSlot(hjklSlot);
-				event.preventDefault();
-				return;
-			}
 			if (selectedSlot) {
 				setSelectedSlot(null);
 				event.preventDefault();
+			}
+			if (hjklSlot) {
+				setSelectedSlot(hjklSlot);
+				hjklSlot = null;
+				event.preventDefault();
+				return;
 			}
 			return;
 		}
@@ -599,9 +717,10 @@
 		if (findErr) throw findErr;
 		if (found?.id) return found.id as string;
 		if (!createIfMissing) return null;
+		const createdAt = formatLocalTimestamp(getNow());
 		const { data: created, error: insErr } = await supabase
 			.from('days')
-			.insert({ user_id, date: today })
+			.insert({ user_id, date: today, created_at: createdAt })
 			.select('id')
 			.single();
 		if (insErr) throw insErr;
@@ -644,6 +763,47 @@
 			else next[h].second = name;
 		}
 		habitsByUser[user_id] = next;
+	}
+	async function loadHabitStreaksForUser(user_id: string) {
+		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
+		try {
+			const { data, error } = await supabase
+				.from('habit_day_status')
+				.select('habit_name, day, completed')
+				.eq('user_id', user_id)
+				.gte('day', lookbackStart);
+			if (error) throw error;
+			const grouped = HABIT_STREAK_KEYS.reduce(
+				(acc, key) => {
+					acc[key] = [] as HabitDayStatus[];
+					return acc;
+				},
+				{} as Record<HabitKey, HabitDayStatus[]>
+			);
+			for (const row of data ?? []) {
+				const key = normalizeHabitName(row.habit_name as string | null);
+				if (!key) continue;
+				const day = row.day as string | null;
+				if (!day) continue;
+				const completed = Boolean(row.completed);
+				grouped[key].push({
+					date: day,
+					completed
+				});
+			}
+			const streakRecord = HABIT_STREAK_KEYS.reduce(
+				(acc, key) => {
+					const summaries = grouped[key];
+					acc[key] = summaries.length === 0 ? null : calculateHabitStreak(summaries);
+					return acc;
+				},
+				{} as Record<HabitKey, PlayerStreak | null>
+			);
+			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: streakRecord };
+		} catch (error) {
+			console.error('load habit streak error', { user_id, error });
+			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: emptyHabitStreakRecord() };
+		}
 	}
 
 	async function loadPlayerHistoryForUser(user_id: string) {
@@ -731,6 +891,8 @@
 		if (suppressNextClick) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
+		const habitName = getHabitTitle(user_id, hour, half);
+		const isHabitSlot = normalizeHabitName(habitName) !== null;
 		const slot = getSlot(user_id, hour, half);
 		if (slot.todo === null) return;
 		const nextTodo = !slot.todo;
@@ -749,6 +911,9 @@
 			return;
 		}
 		setTodo(user_id, hour, half, nextTodo);
+		if (isHabitSlot) {
+			void loadHabitStreaksForUser(user_id);
+		}
 	}
 
 	function cancelPendingMove() {
@@ -998,7 +1163,10 @@
 				const create = viewerUserId === user_id;
 				const dayId = await getTodayDayIdForUser(user_id, create);
 				dayIdByUser[user_id] = dayId;
-				const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+				const tasks: Promise<void>[] = [
+					loadHabitsForUser(user_id),
+					loadHabitStreaksForUser(user_id)
+				];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
@@ -1110,13 +1278,14 @@
 											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 0)}
 											ondragend={handleSlotDragEnd}
 										>
-								<Slot
-									title={getTitle(person.user_id, h, 0)}
-									todo={getTodo(person.user_id, h, 0)}
-									editable={viewerUserId === person.user_id}
-									onSelect={() => openEditor(person.user_id, h, 0)}
+											<Slot
+												title={getTitle(person.user_id, h, 0)}
+												todo={getTodo(person.user_id, h, 0)}
+												editable={viewerUserId === person.user_id}
+												onSelect={() => openEditor(person.user_id, h, 0)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
+												habitStreak={habitStreakForSlot(person.user_id, h, 0)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
 												isCurrent={slotIsCurrent(h, 0)}
 											/>
@@ -1137,13 +1306,14 @@
 											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 1)}
 											ondragend={handleSlotDragEnd}
 										>
-								<Slot
-									title={getTitle(person.user_id, h, 1)}
-									todo={getTodo(person.user_id, h, 1)}
-									editable={viewerUserId === person.user_id}
+											<Slot
+												title={getTitle(person.user_id, h, 1)}
+												todo={getTodo(person.user_id, h, 1)}
+												editable={viewerUserId === person.user_id}
 												onSelect={() => openEditor(person.user_id, h, 1)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
+												habitStreak={habitStreakForSlot(person.user_id, h, 1)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
 												isCurrent={slotIsCurrent(h, 1)}
 											/>
