@@ -971,21 +971,28 @@
 		if (!day_id) return false;
 		if (!slotHasContent(user_id, fromHour, fromHalf)) return false;
 
-		const sourceSlot = getSlot(user_id, fromHour, fromHalf);
-		const sourceValue: SlotValue = {
-			title: sourceSlot.title ?? '',
-			todo: sourceSlot.todo
-		};
-		const destinationHadEntry = slotHasContent(user_id, toHour, toHalf);
-		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
-		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+	const sourceSlot = getSlot(user_id, fromHour, fromHalf);
+	const sourceValue: SlotValue = {
+		title: sourceSlot.title ?? '',
+		todo: sourceSlot.todo
+	};
+	const destinationHadEntry = slotHasContent(user_id, toHour, toHalf);
+	const destinationSlotValue = destinationHadEntry ? getSlot(user_id, toHour, toHalf) : null;
+	const destinationValue: SlotValue | null = destinationSlotValue
+		? { title: destinationSlotValue.title ?? '', todo: destinationSlotValue.todo }
+		: null;
+	const destinationHasHoursContent =
+		destinationValue !== null &&
+		((destinationValue.title ?? '').trim().length > 0 || destinationValue.todo !== null);
+	const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
+	const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
 
-		if (destinationHadEntry) {
-			const { error: deleteDestErr } = await supabase
-				.from('hours')
-				.delete()
-				.eq('day_id', day_id)
-				.eq('hour', toHour)
+	if (destinationHasHoursContent) {
+		const { error: deleteDestErr } = await supabase
+			.from('hours')
+			.delete()
+			.eq('day_id', day_id)
+			.eq('hour', toHour)
 				.eq('half', toHalf === 1);
 			if (deleteDestErr) {
 				console.error('slot move destination delete error', deleteDestErr);
@@ -1000,45 +1007,81 @@
 			.eq('hour', fromHour)
 			.eq('half', fromHalf === 1);
 
-		if (updateErr) {
-			console.error('slot move error', updateErr);
-			return false;
-		}
+	if (updateErr) {
+		console.error('slot move error', updateErr);
+		return false;
+	}
 
-		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.todo);
+	setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.todo);
+	if (destinationHasHoursContent && destinationValue) {
+		const { error: swapInsertErr } = await supabase
+			.from('hours')
+			.upsert(
+				{
+					day_id,
+					hour: fromHour,
+					half: fromHalf === 1,
+					title: destinationValue.title ?? '',
+					todo: destinationValue.todo
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+		if (swapInsertErr) {
+			console.error('slot swap insert error', swapInsertErr);
+		}
+		setTitle(user_id, fromHour, fromHalf, destinationValue.title ?? '', destinationValue.todo);
+	} else {
 		setTitle(user_id, fromHour, fromHalf, '', null);
+	}
 
-		if (destinationHabitName.length > 0) {
-			const { error: deleteHabitErr } = await supabase
-				.from('habits')
-				.delete()
-				.eq('user_id', user_id)
-				.eq('hour', toHour)
-				.eq('half', toHalf === 1);
-			if (deleteHabitErr) {
-				console.error('slot move destination habit delete error', deleteHabitErr);
-			} else {
-				setHabitTitle(user_id, toHour, toHalf, null);
-			}
+	if (destinationHabitName.length > 0) {
+		const { error: deleteHabitErr } = await supabase
+			.from('habits')
+			.delete()
+			.eq('user_id', user_id)
+			.eq('hour', toHour)
+			.eq('half', toHalf === 1);
+		if (deleteHabitErr) {
+			console.error('slot move destination habit delete error', deleteHabitErr);
 		}
+	}
 
-		if (sourceHabitName.length > 0) {
-			const { error: updateHabitErr } = await supabase
+	if (sourceHabitName.length > 0) {
+		const { error: updateHabitErr } = await supabase
 				.from('habits')
 				.update({ hour: toHour, half: toHalf === 1 })
 				.eq('user_id', user_id)
-				.eq('hour', fromHour)
-				.eq('half', fromHalf === 1);
-			if (updateHabitErr) {
-				console.error('habit move error', updateHabitErr);
-			} else {
-				setHabitTitle(user_id, fromHour, fromHalf, null);
-				setHabitTitle(user_id, toHour, toHalf, sourceHabitName);
-			}
+			.eq('hour', fromHour)
+			.eq('half', fromHalf === 1);
+		if (updateHabitErr) {
+			console.error('habit move error', updateHabitErr);
 		}
-
-		return true;
 	}
+
+	if (destinationHabitName.length > 0) {
+		const { error: insertHabitErr } = await supabase
+			.from('habits')
+			.upsert(
+				{
+					user_id,
+					name: destinationHabitName,
+					hour: fromHour,
+					half: fromHalf === 1
+				},
+				{ onConflict: 'user_id,hour,half' }
+			);
+		if (insertHabitErr) {
+			console.error('habit swap insert error', insertHabitErr);
+		}
+	}
+
+	const nextDestinationHabit = sourceHabitName.length > 0 ? sourceHabitName : null;
+	const nextSourceHabit = destinationHabitName.length > 0 ? destinationHabitName : null;
+	setHabitTitle(user_id, toHour, toHalf, nextDestinationHabit);
+	setHabitTitle(user_id, fromHour, fromHalf, nextSourceHabit);
+
+	return true;
+}
 
 	function slotKey(u: string, date: string, h: number, half: 0 | 1) {
 		return `${u}|${date}|${h}|${half}`;
