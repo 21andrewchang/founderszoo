@@ -10,7 +10,8 @@
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
 	import type { Session } from '$lib/session';
-    import OnlineCount from '$lib/components/OnlineCount.svelte';
+	import { formatLocalTimestamp } from '$lib/time';
+
 	type Person = { label: string; user_id: string };
 
 	let people = $state<Person[]>([]);
@@ -98,6 +99,9 @@
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2; // 16 hours * 2 halves = 32 slots
 	const STREAK_LOOKBACK_DAYS = 60;
+	const DAY_MS = 86_400_000;
+	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored'] as const;
+	type HabitKey = (typeof HABIT_STREAK_KEYS)[number];
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
@@ -156,15 +160,46 @@
 	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
+	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
 
-	// modal + draft
 	let logOpen = $state(false);
-	let draft = $state<{ user_id: string | null; hour: number | null; half: 0 | 1 | null }>({
+	type TodoCarryoverPrompt = {
+		user_id: string;
+		prevHour: number;
+		prevHalf: 0 | 1;
+		currHour: number;
+		currHalf: 0 | 1;
+		title: string;
+	};
+
+	let todoCarryPrompt = $state<TodoCarryoverPrompt | null>(null);
+	let isTodoCarrySubmitting = $state(false);
+	function previousSlot(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
+		if (half === 1) {
+			// B → previous is same hour, A
+			return { hour, half: 0 };
+		}
+		// A → previous is previous hour, B
+		const prevHour = hour - 1;
+		if (prevHour < START_HOUR) return null;
+		return { hour: prevHour, half: 1 };
+	}
+
+	let draft = $state<{
+		user_id: string | null;
+		hour: number | null;
+		half: 0 | 1 | null;
+		title: string;
+		todo: boolean | null;
+	}>({
 		user_id: null,
 		hour: null,
-		half: null
+		half: null,
+		title: '',
+		todo: null
 	});
 	let selectedSlot = $state<SelectedSlot | null>(null);
+	let hjklSlot = $state<SelectedSlot | null>(null);
 	let draggingSlot = $state<DraggingSlot | null>(null);
 	let dragHoverSlot = $state<SelectedSlot | null>(null);
 	let hoverSlot = $state<SelectedSlot | null>(null);
@@ -224,22 +259,27 @@
 			if (todo !== undefined) row.second.todo = todo;
 		}
 	}
+
 	function setTodo(user_id: string, h: number, half01: 0 | 1, value: boolean | null) {
 		const row = ensureSlotRow(user_id, h);
 		if (half01 === 0) row.first.todo = value;
 		else row.second.todo = value;
 	}
+
 	function getSlot(user_id: string, h: number, half01: 0 | 1): SlotValue {
 		const row = slotsByUser[user_id]?.[h];
 		if (!row) return createEmptySlot();
 		return half01 === 0 ? row.first : row.second;
 	}
+
 	function getTitle(user_id: string, h: number, half01: 0 | 1) {
 		return getSlot(user_id, h, half01).title ?? '';
 	}
+
 	function getTodo(user_id: string, h: number, half01: 0 | 1) {
 		return getSlot(user_id, h, half01).todo ?? null;
 	}
+
 	function ensureHabitRow(user_id: string, h: number): HabitSlotRow {
 		habitsByUser[user_id] ??= {};
 		habitsByUser[user_id][h] ??= { first: null, second: null };
@@ -254,6 +294,122 @@
 		const row = habitsByUser[user_id]?.[h];
 		if (!row) return null;
 		return half01 === 0 ? row.first : row.second;
+	}
+	type HabitDayStatus = { date: string; completed: boolean };
+	function normalizeHabitName(value: string | null | undefined): HabitKey | null {
+		const key = (value ?? '').trim().toLowerCase();
+		return HABIT_STREAK_KEYS.includes(key as HabitKey) ? (key as HabitKey) : null;
+	}
+	function emptyHabitStreakRecord(): Record<HabitKey, PlayerStreak | null> {
+		return HABIT_STREAK_KEYS.reduce(
+			(acc, key) => {
+				acc[key] = null;
+				return acc;
+			},
+			{} as Record<HabitKey, PlayerStreak | null>
+		);
+	}
+	function habitStreaksForUser(user_id: string | null): Record<HabitKey, PlayerStreak | null> {
+		if (!user_id) return emptyHabitStreakRecord();
+		return habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
+	}
+	function parseHabitDate(dateStr: string): number | null {
+		const parts = dateStr.split('-');
+		if (parts.length !== 3) return null;
+		const [yearStr, monthStr, dayStr] = parts;
+		const year = Number(yearStr);
+		const month = Number(monthStr);
+		const day = Number(dayStr);
+		if (Number.isNaN(year) || Number.isNaN(month) || Number.isNaN(day)) return null;
+		const date = new Date();
+		date.setFullYear(year, month - 1, day);
+		date.setHours(0, 0, 0, 0);
+		return date.getTime();
+	}
+	function calculateHabitStreak(records: HabitDayStatus[]): PlayerStreak | null {
+		if (records.length === 0) return null;
+
+		// Build date -> completed map and track bounds
+		const byDate = new Map<string, boolean>();
+		let earliestMs: number | null = null;
+		let latestMs: number | null = null;
+
+		for (const record of records) {
+			const date = record.date;
+			if (!date) continue;
+			byDate.set(date, record.completed);
+
+			const ms = parseHabitDate(date);
+			if (ms === null) continue;
+			earliestMs = earliestMs === null ? ms : Math.min(earliestMs, ms);
+			latestMs = latestMs === null ? ms : Math.max(latestMs, ms);
+		}
+
+		if (byDate.size === 0 || earliestMs === null || latestMs === null) return null;
+
+		const today = localToday();
+		const todayMs = parseHabitDate(today);
+
+		// Decide which day the streak is anchored on
+		let anchorDateStr: string | null = null;
+		let anchorMs: number | null = null;
+		let targetCompleted: boolean | null = null;
+
+		const todayCompleted = byDate.get(today);
+
+		if (todayCompleted === true && todayMs !== null) {
+			// Today is done → include it
+			anchorDateStr = today;
+			anchorMs = todayMs;
+			targetCompleted = true;
+		} else {
+			// Today not done → ignore it, anchor on latest day < today
+			let cursorMs = latestMs;
+			while (true) {
+				const cursorDate = formatDateString(new Date(cursorMs));
+
+				// Only consider strictly before today
+				if (cursorDate < today && byDate.has(cursorDate)) {
+					anchorDateStr = cursorDate;
+					anchorMs = cursorMs;
+					targetCompleted = byDate.get(cursorDate)!;
+					break;
+				}
+
+				cursorMs -= DAY_MS;
+				if (cursorMs < earliestMs) break;
+			}
+			if (anchorDateStr === null || anchorMs === null || targetCompleted === null) {
+				return null;
+			}
+		}
+
+		// Walk backwards from the anchor while values match
+		let streakLength = 0;
+		let cursorMs2 = anchorMs;
+
+		while (true) {
+			const cursorDate = formatDateString(new Date(cursorMs2));
+			const value = byDate.get(cursorDate);
+			if (value === undefined || value !== targetCompleted) break;
+
+			streakLength += 1;
+			cursorMs2 -= DAY_MS;
+			if (cursorMs2 < earliestMs) break;
+		}
+
+		return {
+			kind: targetCompleted ? 'positive' : 'negative',
+			length: streakLength,
+			missesOnLatest: targetCompleted ? 0 : 1
+		};
+	}
+	function habitStreakForSlot(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
+		const habitName = getHabitTitle(user_id, h, half01);
+		const key = normalizeHabitName(habitName);
+		if (!key) return null;
+		const record = habitStreaksByUser[user_id];
+		return record?.[key] ?? null;
 	}
 	function getHourIndex(value: number) {
 		return hours.findIndex((hour) => hour === value);
@@ -367,6 +523,7 @@
 		setSelectedSlot({ hourIndex: selectedSlot.hourIndex, half: 1 });
 		return true;
 	}
+
 	function moveSelectionVertical(delta: 1 | -1) {
 		if (!viewerUserId || !selectedSlot) return false;
 		const nextIndex = selectedSlot.hourIndex + delta;
@@ -374,11 +531,11 @@
 		setSelectedSlot({ hourIndex: nextIndex, half: selectedSlot.half });
 		return true;
 	}
+
 	function activateSelectedSlotFromKeyboard() {
 		if (!viewerUserId || !selectedSlot) return false;
 		const hour = hours[selectedSlot.hourIndex];
 		if (hour === undefined) return false;
-
 		const todoValue = getTodo(viewerUserId, hour, selectedSlot.half);
 		if (todoValue !== null) {
 			toggleTodo(viewerUserId, hour, selectedSlot.half);
@@ -390,8 +547,16 @@
 
 		const title = getTitle(viewerUserId, hour, selectedSlot.half);
 		if (title.trim().length > 0) return false;
+		return true;
+	}
+
+	function openSelectedSlotEditorFromKeyboard() {
+		if (!viewerUserId || !selectedSlot) return false;
+		const hour = hours[selectedSlot.hourIndex];
+		if (hour === undefined) return false;
+		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
+		if ((habitName ?? '').trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half);
-		setSelectedSlot(null);
 		return true;
 	}
 
@@ -528,10 +693,16 @@
 				setSelectedSlot(null);
 				event.preventDefault();
 			}
+			if (hjklSlot) {
+				setSelectedSlot(hjklSlot);
+				hjklSlot = null;
+				event.preventDefault();
+				return;
+			}
 			return;
 		}
-		if (!['h', 'j', 'k', 'l', 'Enter'].includes(normalized)) return;
-		captureHoverSelection();
+		if (!['h', 'j', 'k', 'l', 'Enter', 'i'].includes(normalized)) return;
+		hoverSlot = null;
 		ensureSelectionExists();
 		if (!selectedSlot) return;
 		let handled = false;
@@ -549,7 +720,12 @@
 				handled = moveSelectionVertical(-1);
 				break;
 			case 'Enter':
+				hjklSlot = selectedSlot;
 				handled = activateSelectedSlotFromKeyboard();
+				break;
+			case 'i':
+				hjklSlot = selectedSlot;
+				handled = openSelectedSlotEditorFromKeyboard();
 				break;
 		}
 		if (handled) event.preventDefault();
@@ -566,9 +742,10 @@
 		if (findErr) throw findErr;
 		if (found?.id) return found.id as string;
 		if (!createIfMissing) return null;
+		const createdAt = formatLocalTimestamp(getNow());
 		const { data: created, error: insErr } = await supabase
 			.from('days')
-			.insert({ user_id, date: today })
+			.insert({ user_id, date: today, created_at: createdAt })
 			.select('id')
 			.single();
 		if (insErr) throw insErr;
@@ -612,6 +789,47 @@
 		}
 		habitsByUser[user_id] = next;
 	}
+	async function loadHabitStreaksForUser(user_id: string) {
+		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
+		try {
+			const { data, error } = await supabase
+				.from('habit_day_status')
+				.select('habit_name, day, completed')
+				.eq('user_id', user_id)
+				.gte('day', lookbackStart);
+			if (error) throw error;
+			const grouped = HABIT_STREAK_KEYS.reduce(
+				(acc, key) => {
+					acc[key] = [] as HabitDayStatus[];
+					return acc;
+				},
+				{} as Record<HabitKey, HabitDayStatus[]>
+			);
+			for (const row of data ?? []) {
+				const key = normalizeHabitName(row.habit_name as string | null);
+				if (!key) continue;
+				const day = row.day as string | null;
+				if (!day) continue;
+				const completed = Boolean(row.completed);
+				grouped[key].push({
+					date: day,
+					completed
+				});
+			}
+			const streakRecord = HABIT_STREAK_KEYS.reduce(
+				(acc, key) => {
+					const summaries = grouped[key];
+					acc[key] = summaries.length === 0 ? null : calculateHabitStreak(summaries);
+					return acc;
+				},
+				{} as Record<HabitKey, PlayerStreak | null>
+			);
+			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: streakRecord };
+		} catch (error) {
+			console.error('load habit streak error', { user_id, error });
+			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: emptyHabitStreakRecord() };
+		}
+	}
 
 	async function loadPlayerHistoryForUser(user_id: string) {
 		const today = localToday();
@@ -649,17 +867,18 @@
 		if (hourIndex !== -1) {
 			setSelectedSlot({ hourIndex, half: half01 });
 		}
-		draft = { user_id, hour: h, half: half01 };
+		const slot = getSlot(user_id, h, half01);
+		draft = {
+			user_id,
+			hour: h,
+			half: half01,
+			title: slot.title ?? '',
+			todo: slot.todo ?? null
+		};
 		logOpen = true;
 	}
 
-	async function saveLog(
-		text: string,
-		todo: boolean | null,
-		hour: number,
-		half: 0 | 1,
-		habit: boolean
-	) {
+	async function saveLog(text: string, todo: boolean | null, hour: number, half: 0 | 1) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
 		const day_id = dayIdByUser[user_id];
@@ -671,7 +890,6 @@
 			half: boolean;
 			title: string;
 			todo: boolean | null;
-			habit?: boolean;
 		} = {
 			day_id,
 			hour,
@@ -690,25 +908,6 @@
 
 		setTitle(user_id, hour, half, text, todo);
 
-		if (habit && viewerUserId === user_id) {
-			const { error: habitErr } = await supabase.from('habits').upsert(
-				{
-					user_id,
-					name: text,
-					hour: hour,
-					half: half === 1
-				},
-				{ onConflict: 'user_id,hour,half' }
-			);
-			if (habitErr) {
-				console.error('habit save error', habitErr);
-			} else {
-				setHabitTitle(user_id, hour, half, text);
-			}
-
-			await insertHabitHours(user_id, day_id, [{ hour: hour, half: half, name: text }]);
-		}
-
 		logOpen = false;
 	}
 
@@ -717,6 +916,8 @@
 		if (suppressNextClick) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
+		const habitName = getHabitTitle(user_id, hour, half);
+		const isHabitSlot = normalizeHabitName(habitName) !== null;
 		const slot = getSlot(user_id, hour, half);
 		if (slot.todo === null) return;
 		const nextTodo = !slot.todo;
@@ -735,6 +936,9 @@
 			return;
 		}
 		setTodo(user_id, hour, half, nextTodo);
+		if (isHabitSlot) {
+			void loadHabitStreaksForUser(user_id);
+		}
 	}
 
 	function cancelPendingMove() {
@@ -832,20 +1036,150 @@
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen) return;
+		if (!viewerUserId || logOpen || todoCarryPrompt) return;
+
 		const date = localToday();
 		const h = currentHour;
 		const half = currentHalf;
+
 		if (h < START_HOUR || h >= END_HOUR) return;
+
+		// If the current slot already has *anything*, don't prompt
+		if (slotHasContent(viewerUserId, h, half)) return;
 
 		const key = slotKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
 
+		// 1) Check if previous slot was an *unfinished* TODO
+		const prev = previousSlot(h, half);
+		if (prev) {
+			const { hour: prevHour, half: prevHalf } = prev;
+			const prevTodo = getTodo(viewerUserId, prevHour, prevHalf);
+			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
+
+			// Only prompt if previous slot is a TODO that is still unfinished (todo === false)
+			if (prevTodo === false && prevTitle.length > 0) {
+				todoCarryPrompt = {
+					user_id: viewerUserId,
+					prevHour,
+					prevHalf,
+					currHour: h,
+					currHalf: half,
+					title: prevTitle
+				};
+				lastPromptKey = key; // avoid re-prompting for this slot
+				return;
+			}
+		}
+
+		// 2) Normal behavior: if current slot is empty, open the editor
 		const t = getTitle(viewerUserId, h, half);
 		if (!t || t.trim() === '') {
 			openEditor(viewerUserId, h, half);
 			lastPromptKey = key;
 		}
+	}
+
+	async function markPreviousTodoCompletedAndOpenCurrent() {
+		if (!todoCarryPrompt) return;
+		if (isTodoCarrySubmitting) return;
+		isTodoCarrySubmitting = true;
+
+		const { user_id, prevHour, prevHalf, currHour, currHalf } = todoCarryPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+
+			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+
+			// Mark previous as completed (todo = true)
+			const { error } = await supabase.from('hours').upsert(
+				{
+					day_id,
+					hour: prevHour,
+					half: prevHalf === 1,
+					title: prevSlot.title ?? '',
+					todo: true
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+
+			if (error) {
+				console.error('mark previous todo completed error', error);
+				return;
+			}
+
+			setTodo(user_id, prevHour, prevHalf, true);
+
+			// Close prompt and open editor for the current slot
+			todoCarryPrompt = null;
+			openEditor(user_id, currHour, currHalf);
+		} finally {
+			isTodoCarrySubmitting = false;
+		}
+	}
+
+	async function continuePreviousTodoIntoCurrent() {
+		if (!todoCarryPrompt) return;
+		if (isTodoCarrySubmitting) return;
+		isTodoCarrySubmitting = true;
+
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = todoCarryPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+
+			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+
+			// 1) Turn previous into a normal slot (todo = null, keep title)
+			{
+				const { error } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: prevHour,
+						half: prevHalf === 1,
+						title: prevSlot.title ?? '',
+						todo: null
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (error) {
+					console.error('clear previous todo error', error);
+					return;
+				}
+				setTodo(user_id, prevHour, prevHalf, null);
+			}
+
+			// 2) Copy into current slot as a new TODO
+			{
+				const { error } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: currHour,
+						half: currHalf === 1,
+						title,
+						todo: false
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (error) {
+					console.error('create continued todo in current slot error', error);
+					return;
+				}
+				setTitle(user_id, currHour, currHalf, title, false);
+			}
+
+			todoCarryPrompt = null;
+			// You can choose whether to auto-open the editor here.
+			// Spec says just copy it, so no openEditor() call.
+		} finally {
+			isTodoCarrySubmitting = false;
+		}
+	}
+
+	function cancelTodoCarryPrompt() {
+		if (isTodoCarrySubmitting) return;
+		todoCarryPrompt = null;
 	}
 
 	function updateCurrentTime() {
@@ -980,19 +1314,22 @@
 			startPlayerStatusWatchers(viewerUserId);
 			startLocalPlayerPresenceIfTracked(viewerUserId);
 
-				const perUserLoads = people.map(async ({ user_id }) => {
-					const create = viewerUserId === user_id;
-					const dayId = await getTodayDayIdForUser(user_id, create);
-					dayIdByUser[user_id] = dayId;
-					const tasks: Promise<void>[] = [loadHabitsForUser(user_id)];
+			const perUserLoads = people.map(async ({ user_id }) => {
+				const create = viewerUserId === user_id;
+				const dayId = await getTodayDayIdForUser(user_id, create);
+				dayIdByUser[user_id] = dayId;
+				const tasks: Promise<void>[] = [
+					loadHabitsForUser(user_id),
+					loadHabitStreaksForUser(user_id)
+				];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
 			});
 
-				const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
+			const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
 
-				await Promise.all([...perUserLoads, ...historyLoads]);
+			await Promise.all([...perUserLoads, ...historyLoads]);
 
 			maybePromptForMissing();
 			startHalfHourNotifier();
@@ -1021,8 +1358,7 @@
 	});
 </script>
 
-<OnlineCount dedupe={false} />
-<div class="flex h-dvh w-full flex-col justify-center overflow-clip bg-stone-50 p-10">
+<div class="flex h-dvh w-full flex-col justify-center overflow-clip bg-stone-50 p-10 pt-20">
 	<div class="flex flex-row space-x-4">
 		<div class="flex flex-col space-y-1">
 			<div class="text-stone-50">T</div>
@@ -1104,6 +1440,7 @@
 												onSelect={() => openEditor(person.user_id, h, 0)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
+												habitStreak={habitStreakForSlot(person.user_id, h, 0)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
 												isCurrent={slotIsCurrent(h, 0)}
 											/>
@@ -1131,6 +1468,7 @@
 												onSelect={() => openEditor(person.user_id, h, 1)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
+												habitStreak={habitStreakForSlot(person.user_id, h, 1)}
 												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
 												isCurrent={slotIsCurrent(h, 1)}
 											/>
@@ -1167,8 +1505,52 @@
 	onSave={saveLog}
 	initialHour={draft.hour}
 	initialHalf={draft.half}
+	initialTitle={draft.title}
+	initialTodo={draft.todo}
+	habitStreaks={habitStreaksForUser(viewerUserId)}
 />
 
+{#if todoCarryPrompt}
+	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
+				Previous block TODO
+			</div>
+			<div class="mt-1 text-sm font-medium text-stone-900">Did you complete this?</div>
+			<div class="mt-2 truncate text-sm text-stone-700">
+				{todoCarryPrompt?.title}
+			</div>
+
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100"
+					onclick={continuePreviousTodoIntoCurrent}
+					disabled={isTodoCarrySubmitting}
+				>
+					Continue this block
+				</button>
+				<button
+					type="button"
+					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
+					onclick={markPreviousTodoCompletedAndOpenCurrent}
+					disabled={isTodoCarrySubmitting}
+				>
+					Mark done
+				</button>
+			</div>
+
+			<button
+				type="button"
+				class="mt-2 text-xs text-stone-400 hover:text-stone-600"
+				onclick={cancelTodoCarryPrompt}
+				disabled={isTodoCarrySubmitting}
+			>
+				Cancel
+			</button>
+		</div>
+	</div>
+{/if}
 <ConfirmMoveModal
 	open={pendingMove !== null}
 	onCancel={cancelPendingMove}

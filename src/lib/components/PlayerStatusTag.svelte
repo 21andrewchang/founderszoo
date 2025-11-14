@@ -58,12 +58,12 @@
 	{#if label}{label}{/if}
 	<span
 		class="pointer-events-none top-1/2 left-full inline-flex
-           items-center gap-1 rounded-sm bg-stone-900 px-1 text-[10px]
+           items-center gap-1 rounded-sm bg-stone-700 px-1 text-[10px]
            font-medium whitespace-nowrap text-stone-50 capitalize transition-opacity duration-150 group-hover:opacity-100"
 	>
 		<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
 			<polygon
-				points="5,1 9,9 1,9"
+				points="5,2 9,9 1,9"
 				fill="currentColor"
 				stroke="currentColor"
 				stroke-width="1"

@@ -71,24 +71,22 @@
 	const label = $derived(dedupe ? 'unique viewers' : 'tabs online');
 </script>
 
-<div class="group fixed top-3 right-3" aria-live="polite" aria-label="Live spectator count">
-	<div class="rounded-sm border border-red-400 px-1">
-		<div class="flex flex-row items-center gap-1 text-sm text-red-400">
-			<svg
-				viewBox="0 0 24 24"
-				fill="currentColor"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				shape-rendering="geometricPrecision"
-				class="h-3 w-3 transition-colors duration-200"
-			>
-				<path d="M20 21.5v-2.5a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2.5h16" />
-				<circle cx="12" cy="7" r="4" />
-			</svg>
-			{#if counts.connected}{total}{:else}--{/if}
-		</div>
+<div class="group fixed top-4 right-6" aria-live="polite" aria-label="Live spectator count">
+	<div class="flex flex-row items-center gap-1 text-sm text-red-400">
+		<svg
+			viewBox="0 0 24 24"
+			fill="currentColor"
+			stroke="currentColor"
+			stroke-width="2"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			shape-rendering="geometricPrecision"
+			class="h-3 w-3 transition-colors duration-200"
+		>
+			<path d="M20 21.5v-2.5a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2.5h16" />
+			<circle cx="12" cy="7" r="4" />
+		</svg>
+		{#if counts.connected}{total}{:else}--{/if}
 	</div>
 
 	<div

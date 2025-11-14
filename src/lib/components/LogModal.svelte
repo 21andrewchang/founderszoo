@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { fade, fly, scale } from 'svelte/transition';
+	import type { PlayerStreak } from '$lib/streaks';
 
 	const START = 8;
-	const END = 23; // inclusive
+	const END = 23;
 	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
@@ -11,29 +12,59 @@
 		onClose = () => {},
 		onSave = () => {},
 		initialHour = null,
-		initialHalf = null
+		initialHalf = null,
+		initialTitle = '',
+		initialTodo = null,
+		habitStreaks = null
 	} = $props<{
 		open?: boolean;
 		onClose?: () => void;
-		onSave?: (
-			text: string,
-			todo: boolean | null,
-			hour: number,
-			half: 0 | 1,
-			habit: boolean
-		) => void;
+		onSave?: (text: string, todo: boolean | null, hour: number, half: 0 | 1) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
+		initialTitle?: string | null;
+		initialTodo?: boolean | null;
+		habitStreaks?: Record<string, PlayerStreak | null> | null;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
+
+	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
+	type HabitKey = (typeof HABIT_KEYS)[number];
+	type HabitPreset = {
+		label: string;
+		value: string;
+		colorClass: string;
+		key: string;
+		habitKey: HabitKey;
+	};
+
+	const PRESETS: HabitPreset[] = [
+		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read' },
+		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored' },
+		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym' }
+	];
+
+	const streakArrowClassFor = (key: HabitKey) => {
+		const streak = habitStreaks?.[key] ?? null;
+		const base = 'h-2 w-2 transition-transform';
+		if (!streak) return `${base} text-stone-400`;
+		const color = streak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
+		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
+		return `${base} ${color} ${rotation}`;
+	};
+
+	const streakLabelFor = (key: HabitKey) => {
+		const streak = habitStreaks?.[key] ?? null;
+		if (!streak || streak.length <= 0) return null;
+		return streak.kind === 'positive' ? `${streak.length}` : `-${streak.length}`;
+	};
 
 	let text = $state('');
 	let todo = $state<boolean | null>(null);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
-	let makeHabit = $state(false);
 	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
 	let mode = $state<ModalMode>('insert');
@@ -41,13 +72,16 @@
 	function focusInputSoon() {
 		queueMicrotask(() => inputEl?.focus());
 	}
+
 	function focusModalSoon() {
 		queueMicrotask(() => modalEl?.focus());
 	}
+
 	function enterInsertMode() {
 		mode = 'insert';
 		focusInputSoon();
 	}
+
 	function enterNormalMode() {
 		mode = 'normal';
 		inputEl?.blur();
@@ -57,8 +91,10 @@
 	function handleBackdropClick(e: MouseEvent) {
 		if (e.target === e.currentTarget) onClose();
 	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
 		if (key === 'Escape') {
 			if (mode === 'insert') {
 				enterNormalMode();
@@ -68,27 +104,34 @@
 			e.preventDefault();
 			return;
 		}
+
 		if (mode === 'normal' && key === 'i') {
 			enterInsertMode();
 			e.preventDefault();
 			return;
 		}
-		if (mode === 'normal' && (key === 't' || key === 'h')) {
+
+		if (mode === 'normal' && key === 't') {
 			e.preventDefault();
-			if (key === 't') {
-				todo = todo === null ? false : null;
-				if (todo === null) makeHabit = false;
-			} else if (key === 'h') {
-				makeHabit = !makeHabit;
-				if (makeHabit) {
-					todo = false;
-				} else {
-					todo = null;
-				}
-			}
+			todo = todo === null ? false : null;
 			return;
 		}
+
+		// normal-mode numeric habit shortcuts
+		if (mode === 'normal') {
+			const preset = PRESETS.find((p) => p.key === key);
+			if (preset) {
+				e.preventDefault();
+				fillPreset(preset.value);
+				enterInsertMode();
+				return;
+			}
+		}
+
 		if (key === 'Enter' && e.metaKey) {
+			e.preventDefault();
+			void handleSubmit();
+		} else if (key === 'Enter' && mode === 'normal') {
 			e.preventDefault();
 			void handleSubmit();
 		}
@@ -107,15 +150,15 @@
 
 		saving = true;
 		try {
-			await Promise.resolve(onSave(value, todo, hour, half, makeHabit));
+			await Promise.resolve(onSave(value, todo, hour, half));
 			text = '';
 			todo = null;
-			makeHabit = false;
 			onClose();
 		} finally {
 			saving = false;
 		}
 	}
+
 	$effect(() => {
 		if (open) {
 			enterInsertMode();
@@ -129,8 +172,8 @@
 		const fallback = currentSlot();
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
-		makeHabit = false;
-		mode = 'insert';
+		text = initialTitle ?? '';
+		todo = initialTodo ?? null;
 	});
 
 	function fillPreset(s: string) {
@@ -143,7 +186,7 @@
 	<div
 		bind:this={modalEl}
 		in:fade={{ duration: 150 }}
-		class="fixed inset-0 z-[130] flex items-center justify-center bg-stone-900/30 backdrop-blur-sm"
+		class="fixed inset-0 z-[130] flex items-center justify-center bg-stone-900/30 backdrop-blur-sm focus:ring-0 focus:outline-0"
 		role="dialog"
 		aria-modal="true"
 		aria-label="New log"
@@ -153,7 +196,7 @@
 	>
 		<div
 			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-xl rounded-xl border border-stone-200 bg-white/95 text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+			class="w-full max-w-md rounded-xl border border-stone-200 bg-white/95 text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
 			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
 				<select
@@ -183,6 +226,7 @@
 					</span>
 				</button>
 			</div>
+
 			<div class="flex w-full flex-row items-center">
 				<input
 					bind:this={inputEl}
@@ -194,7 +238,10 @@
 					autocomplete="off"
 				/>
 				{#if todo === false}
-					<div class="relative mr-5 grid h-3 w-3 rounded-full p-3">
+					<div
+						class="relative mr-5 grid h-3 w-3 rounded-full p-3"
+						transition:fly={{ y: 2, duration: 200 }}
+					>
 						<span
 							class="pointer-events-none absolute inset-0 rounded-full border border-[1px] border-stone-400 transition duration-200 ease-out"
 						/>
@@ -203,58 +250,65 @@
 			</div>
 
 			<div class="flex flex-row gap-1 px-4 pb-2">
+				{#each PRESETS as p}
+					<button
+						type="button"
+						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						onclick={() => fillPreset(p.value)}
+					>
+						<span class="relative flex h-2 w-2 items-center justify-center">
+							<svg viewBox="0 0 10 10" class={streakArrowClassFor(p.habitKey)} aria-hidden="true">
+								<polygon
+									points="5,2 9,9 1,9"
+									fill="currentColor"
+									stroke="currentColor"
+									stroke-width="1"
+									stroke-linejoin="round"
+								/>
+							</svg>
+							<!-- flying key label in normal mode -->
+							{#if mode === 'normal'}
+								<span
+									class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+									in:fly={{ y: 6, duration: 200 }}
+								>
+									{p.key}
+								</span>
+							{/if}
+						</span>
+
+						<span>{p.label}</span>
+					</button>
+				{/each}
 				<button
-					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					onclick={() => fillPreset('Read')}
+					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					onclick={() => {
+						if (todo === null) todo = false;
+						else todo = null;
+					}}
 				>
-					Read
-				</button>
-				<button
-					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					onclick={() => fillPreset('Bored')}
-				>
-					Bored
-				</button>
-				<button
-					type="button"
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					onclick={() => fillPreset('Gym')}
-				>
-					Gym
+					<span class="relative flex h-3 w-3 items-center justify-center">
+						<span class={`h-2 w-2 rounded-full border border-stone-400`} />
+						{#if mode === 'normal'}
+							<span
+								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								in:fly={{ y: 6, duration: 200 }}
+							>
+								t
+							</span>
+						{/if}
+					</span>
+					Todo
 				</button>
 			</div>
-			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-4 py-3">
-				<div class="flex flex-row items-center gap-2">
-					<button
-						class={`inline-flex items-center justify-center rounded-lg border border-stone-200 ${todo === null ? 'bg-stone-50 text-stone-900' : 'bg-stone-900 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
-						onclick={() => {
-							if (todo === null) todo = false;
-							else todo = null;
-						}}
-					>
-						Todo
-					</button>
-					<button
-						class={`inline-flex items-center justify-center rounded-lg border border-stone-200 ${makeHabit === false ? 'bg-stone-50 text-stone-900' : 'bg-stone-900 text-stone-50'} px-2 py-1 text-xs font-medium  transition  focus-visible:outline-none`}
-						onclick={() => {
-							makeHabit = !makeHabit;
-							if (makeHabit) {
-								todo = false;
-							} else {
-								todo = null;
-							}
-						}}
-					>
-						Habit
-					</button>
-				</div>
+
+			<div class="flex items-center justify-end gap-2 border-t border-stone-100 p-4 py-3">
 				<button
-					class="inline-flex items-center justify-center rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={handleSubmit}
 				>
-					{saving ? 'Saving…' : `Save ⌘+Enter`}
+					{saving ? 'Saving…' : `Save `}
+					<span class="text-stone-400">⌘ Enter</span>
 				</button>
 			</div>
 		</div>
