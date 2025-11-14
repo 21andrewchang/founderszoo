@@ -1,43 +1,34 @@
 <script lang="ts">
     import { fade } from 'svelte/transition';
 
-    type SectionId = 'portfolio' | 'library' | 'glossary';
+    type SectionId = 'portfolio' | 'library' | 'anthology';
 
     const navItems: { id: SectionId; label: string }[] = [
         { id: 'portfolio', label: 'Portfolio' },
         { id: 'library', label: 'Library' },
-        { id: 'glossary', label: 'Glossary' }
+        { id: 'anthology', label: 'Anthology' }
     ]
 
     let currentSection: SectionId = 'portfolio';
     let hoveredNav: SectionId | null = null;
 
-	type PortfolioSection = {
+	type PortfolioItem = {
         title: string;
-        paragraphs: string[];
+        description: string;
     };
 
-    const portfolioSections: PortfolioSection[] = [
+    const portfolioItems: PortfolioItem[] = [
         {
             title: 'vector',
-            paragraphs: [
-                'An extracurricular for high school students to build real projects.',
-                'Students use Vector to land internships and get into college.'
-            ]
+            description: 'An extracurricular for high school students to build real projects. Students use Vector to land internships and get into college.'
         },
         {
             title: 'founders zoo',
-            paragraphs: [
-                'You can watch every move we make as we build our startup.',
-                'Peek into our minds and ith 30-minute granularity.'
-            ]
+            description: 'A high-granularity peek into our minds. Watch every move we make as we build our startup.'
         },
         {
             title: 'vimgod',
-            paragraphs: [
-                'A vim motions game. Just you against the editor.',
-                'gg your way to the top.'
-            ]
+            description: 'A vim motions game, just you against the editor.'
         }
     ];
 
@@ -77,53 +68,73 @@
         // },
     ];
 
-    type GlossaryItem = {
-        term: string;
-        definition: string;
+    type AnthologyItem = {
+        title: string;
+        author: string;
+        description: string;
     };
 
-    const glossary: GlossaryItem[] = [
+    const anthologyItems: AnthologyItem[] = [
         {
-            term: 'coruscate',
-            definition: 'to flash or sparkle'
+            title: 'focus',
+            author: 'a',
+            description: 'The double-edged sword of man.'
         },
         {
-            term: 'euphonious',
-            definition: 'pleasing to the ear'
-        },
-        {
-            term: 'expatiate',
-            definition: 'to speak or write at length'
-        },
-        {
-            term: 'perfervid',
-            definition: 'utterly and extremely impassioned'
-        },
-        {
-            term: 'quaternion',
-            definition: 'a number that represents a rotation in 3D space'
-        },
-        {
-            term: 'quotidian',
-            definition: 'the everyday'
-        },
-        {
-            term: 'sanguine',
-            definition: 'optimistic, especially facing adversity'
-        },
-        {
-            term: 'sapience',
-            definition: 'wisdom, or the ability to make good decisions'
-        },
-        {
-            term: 'sesquipedalian',
-            definition: 'verbose, but in a pretentious way'
+            title: 'optics',
+            author: 'n',
+            description: 'Scuplt your image. Every choice is deliberate.'
+            // Shape how you let others perceive you.
         },
     ];
 
+    // type GlossaryItem = {
+    //     term: string;
+    //     definition: string;
+    // };
+
+    // const glossary: GlossaryItem[] = [
+    //     {
+    //         term: 'coruscate',
+    //         definition: 'to flash or sparkle'
+    //     },
+    //     {
+    //         term: 'euphonious',
+    //         definition: 'pleasing to the ear'
+    //     },
+    //     {
+    //         term: 'expatiate',
+    //         definition: 'to speak or write at length'
+    //     },
+    //     {
+    //         term: 'perfervid',
+    //         definition: 'utterly and extremely impassioned'
+    //     },
+    //     {
+    //         term: 'quaternion',
+    //         definition: 'a number that represents a rotation in 3D space'
+    //     },
+    //     {
+    //         term: 'quotidian',
+    //         definition: 'the everyday'
+    //     },
+    //     {
+    //         term: 'sanguine',
+    //         definition: 'optimistic, especially facing adversity'
+    //     },
+    //     {
+    //         term: 'sapience',
+    //         definition: 'wisdom, or the ability to make good decisions'
+    //     },
+    //     {
+    //         term: 'sesquipedalian',
+    //         definition: 'verbose, but in a pretentious way'
+    //     },
+    // ];
+
     let portfolioEl: HTMLElement | null = null;
     let libraryEl: HTMLElement | null = null;
-    let glossaryEl: HTMLElement | null = null;
+    let anthologyEl: HTMLElement | null = null;
 
     let scrollContainer: HTMLDivElement | null = null;
 
@@ -146,7 +157,7 @@
         } else if (progress < 0.9) {
             currentSection = 'library';
         } else {
-            currentSection = 'glossary';
+            currentSection = 'anthology';
         }
     }
 
@@ -154,7 +165,7 @@
         const map: Record<SectionId, HTMLElement | null> = {
             portfolio: portfolioEl,
             library: libraryEl,
-            glossary: glossaryEl
+            anthology: anthologyEl
         };
 
         const target = map[id];
@@ -185,7 +196,7 @@
                     Collection
                 </h1>
                 <p class="text-stone-600 text-md">
-                    Our works, readings, and lexicon.
+                    Our works, readings, and convictions.
                 </p>
             </section>
 
@@ -198,20 +209,17 @@
                     Portfolio
                 </h1>
 
-                <div class="space-y-2">
-                    {#each portfolioSections as section}
+                <div class="space-y-4">
+                    {#each portfolioItems as item}
                         <div class="flex flex-col">
                             <h2
                                 class="text-stone-700 text-lg tracking-wide mb-1 italic"
                             >
-                                {section.title}
+                                {item.title}
                             </h2>
-
-                            {#each section.paragraphs as paragraph}
-                                <p class="text-stone-600 text-md mb-2">
-                                    {paragraph}
-                                </p>
-                            {/each}
+                            <p class="text-stone-600 text-md">
+                                {item.description}
+                            </p>
                         </div>
                     {/each}
                 </div>
@@ -240,7 +248,30 @@
                 </div>
             </section>
 
-            <section id="glossary" bind:this={glossaryEl} class="pb-[25vh]">
+            <section id="anthology" bind:this={anthologyEl} class="pb-[25vh]">
+                <h1
+                    class="text-stone-500 text-3xl tracking-wide mb-6"
+                >
+                    Anthology
+                </h1>
+
+                <div class="space-y-4">
+                    {#each anthologyItems as item}
+                        <div class="flex flex-col">
+                            <h2
+                                class="text-stone-700 text-lg tracking-wide mb-1 italic"
+                            >
+                                {item.title}.{item.author}
+                            </h2>
+                            <p class="text-stone-600 text-md">
+                                {item.description}
+                            </p>
+                        </div>
+                    {/each}
+                </div>
+            </section>
+
+            <!-- <section id="glossary" bind:this={glossaryEl} class="pb-[25vh]">
                 <h1
                     class="text-stone-500 text-3xl tracking-wide mb-6"
                 >
@@ -262,7 +293,7 @@
                         </div>
                     {/each}
                 </div>
-            </section>
+            </section> -->
             
             <div class="fixed right-6 top-1/4 flex flex-col items-center">
                 {#each navItems as item}
