@@ -131,6 +131,9 @@
 		if (key === 'Enter' && e.metaKey) {
 			e.preventDefault();
 			void handleSubmit();
+		} else if (key === 'Enter' && mode === 'normal') {
+			e.preventDefault();
+			void handleSubmit();
 		}
 	}
 
