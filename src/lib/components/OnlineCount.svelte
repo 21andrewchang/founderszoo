@@ -12,10 +12,13 @@
 </script>
 
 {#if counts.connected}
-	<div class="fixed top-5 right-6" aria-live="polite" aria-label="Live spectator count">
+	<div
+		class="group fixed top-5 right-6 z-[999]"
+		aria-live="polite"
+		aria-label="Live spectator count"
+	>
 		<div class="relative inline-flex">
-			<!-- make THIS the hover target -->
-			<div class="group flex flex-row items-center gap-1 text-sm text-red-400">
+			<div class="flex flex-row items-center gap-1 text-sm text-red-400">
 				<svg
 					viewBox="0 0 24 24"
 					fill="currentColor"
@@ -31,14 +34,12 @@
 				</svg>
 				{#if counts.connected}{total}{:else}--{/if}
 			</div>
-
-			<!-- tooltip is a sibling, shown on hover of the row above -->
-			<div
-				role="tooltip"
-				class="pointer-events-none absolute top-full right-0 mt-1 origin-top-right rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-			>
-				Live spectator count
-			</div>
+		</div>
+		<div
+			role="tooltip"
+			class="pointer-events-none absolute top-full right-0 mt-1 origin-top-right rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+		>
+			Live spectator count
 		</div>
 	</div>
 {/if}
