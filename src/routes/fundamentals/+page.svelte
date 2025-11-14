@@ -28,14 +28,14 @@
 			paragraphs: [
 				'Boredom is unsettling. It forces you to be alone with your thoughts, emotions, desires. Allowing yourself to be bored will train you to face discomfort and alter your brain to seek fulfillment from unfamiliar sources. You will learn to appreciate the things you previously deemed mundane.'
 			]
-		},
-        {
-			id: 'dopamine',
-			title: 'dopamine',
-			paragraphs: [
-				'Dopamine spikes when you anticipate a reward, and these spikes create a baseline level of enjoyment. If this baseline is high from social media, gambling, or other addictive or reward-seeking behaviors, everything else seems dull. Your brain becomes fried.'
-			]
 		}
+        // {
+		// 	id: 'dopamine',
+		// 	title: 'dopamine',
+		// 	paragraphs: [
+		// 		'Dopamine spikes when you anticipate a reward, and these spikes create a baseline level of enjoyment. If this baseline is high from social media, gambling, or other addictive or reward-seeking behaviors, everything else seems dull. Your brain becomes fried.'
+		// 	]
+		// }
 	];
 </script>
 

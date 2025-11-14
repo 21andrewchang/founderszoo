@@ -19,6 +19,7 @@
 		"@sveltejs/adapter-vercel": "^6.0.0",
 		"@sveltejs/kit": "^2.47.1",
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",
+		"@tailwindcss/postcss": "^4.1.17",
 		"@tailwindcss/typography": "^0.5.19",
 		"@tailwindcss/vite": "^4.1.14",
 		"@types/node": "^22",
@@ -38,6 +39,7 @@
 	},
 	"dependencies": {
 		"@supabase/ssr": "^0.7.0",
-		"supabase": "^2.58.5"
+		"supabase": "^2.58.5",
+		"tailwind-scrollbar-hide": "^4.0.0"
 	}
 }
