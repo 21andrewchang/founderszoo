@@ -86,6 +86,11 @@
             description: 'Scuplt your image. Every choice is deliberate.'
             // Shape how you let others perceive you.
         },
+        {
+            title: 'concision',
+            author: 'a',
+            description: 'Less is more.'
+        },
     ];
 
     // type GlossaryItem = {
