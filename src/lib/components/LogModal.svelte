@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { fade, fly, scale } from 'svelte/transition';
+	import type { PlayerStreak } from '$lib/streaks';
 
 	const START = 8;
 	const END = 23;
@@ -13,7 +14,8 @@
 		initialHour = null,
 		initialHalf = null,
 		initialTitle = '',
-		initialTodo = null
+		initialTodo = null,
+		habitStreaks = null
 	} = $props<{
 		open?: boolean;
 		onClose?: () => void;
@@ -22,22 +24,41 @@
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
 		initialTodo?: boolean | null;
+		habitStreaks?: Record<string, PlayerStreak | null> | null;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
 
+	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
+	type HabitKey = (typeof HABIT_KEYS)[number];
 	type HabitPreset = {
 		label: string;
 		value: string;
 		colorClass: string;
 		key: string;
+		habitKey: HabitKey;
 	};
 
 	const PRESETS: HabitPreset[] = [
-		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1' },
-		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2' },
-		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3' }
+		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read' },
+		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored' },
+		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym' }
 	];
+
+	const streakArrowClassFor = (key: HabitKey) => {
+		const streak = habitStreaks?.[key] ?? null;
+		const base = 'h-2 w-2 transition-transform';
+		if (!streak) return `${base} text-stone-400`;
+		const color = streak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
+		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
+		return `${base} ${color} ${rotation}`;
+	};
+
+	const streakLabelFor = (key: HabitKey) => {
+		const streak = habitStreaks?.[key] ?? null;
+		if (!streak || streak.length <= 0) return null;
+		return streak.kind === 'positive' ? `${streak.length}` : `-${streak.length}`;
+	};
 
 	let text = $state('');
 	let todo = $state<boolean | null>(null);
@@ -229,13 +250,13 @@
 				{#each PRESETS as p}
 					<button
 						type="button"
-						class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 						onclick={() => fillPreset(p.value)}
 					>
-						<span class="relative flex h-1.5 w-1.5 items-center justify-center">
-							<svg viewBox="0 0 10 10" aria-hidden="true">
+						<span class="relative flex h-2 w-2 items-center justify-center">
+							<svg viewBox="0 0 10 10" class={streakArrowClassFor(p.habitKey)} aria-hidden="true">
 								<polygon
-									points="5,1 9,9 1,9"
+									points="5,2 9,9 1,9"
 									fill="currentColor"
 									stroke="currentColor"
 									stroke-width="1"

@@ -51,13 +51,10 @@
 
 	const baseClasses =
 		'flex w-full min-w-0 flex-row items-center rounded-sm p-2 transition overflow-hidden focus:outline-0';
-	const canHover = $derived(editable);
 
 	const habitClasses = $derived(
 		isHabit
-			? `border border-stone-400 text-stone-900 ${todo ? '' : 'border-dashed'} ${
-					canHover ? 'hover:border-stone-600' : ''
-				}`
+			? `border border-stone-700 text-stone-900 ${todo ? '' : 'border-dashed'}`
 			: `${
 					isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'
 				}`
@@ -84,7 +81,7 @@
 		}
 	}
 	const streakArrowClass = $derived.by(() => {
-		const base = 'h-[8px] w-[8px] transition-transform';
+		const base = 'h-2 w-2 transition-transform';
 		if (!habitStreak) return `${base} text-stone-400`;
 		const color = habitStreak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
 		const rotation = habitStreak.kind === 'positive' ? '' : 'rotate-180';
@@ -102,25 +99,25 @@
 	onclick={handleSlotClick}
 	onkeydown={handleSlotKeydown}
 >
-	{#if habitPreset}
-		<span class="text-xs leading-none">{habitPreset.icon}</span>
-	{/if}
+	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
+		<div class="flex flex-row items-center gap-0.5">
+			{#if habitPreset}
+				<span class="text-xs leading-none">{habitPreset.icon}</span>
+			{/if}
 
-	<span class="ml-1 min-w-0 flex-1 truncate text-left text-xs">
-		{#if isFilled}
-			{trimmed}
-		{:else if habitPlaceholder}
-			<span class="opacity-70">{habitPlaceholder}</span>
-		{:else}
-			&nbsp;
-		{/if}
+			{#if isFilled}
+				{trimmed}
+			{:else}
+				&nbsp;
+			{/if}
+		</div>
 		{#if showHabitStreak}
 			<span
-				class={`ml-1 inline-flex shrink-0 items-center rounded-sm border px-1 text-[10px] font-semibold tracking-wider uppercase ${habitStreakClasses}`}
+				class={`inline-flex shrink-0 items-center gap-0.5 rounded-sm  text-[10px] font-semibold tracking-wider uppercase ${habitStreakClasses}`}
 			>
 				<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
 					<polygon
-						points="5,1 9,9 1,9"
+						points="5,2 9,9 1,9"
 						fill="currentColor"
 						stroke="currentColor"
 						stroke-width="1"
@@ -132,7 +129,7 @@
 		{/if}
 	</span>
 
-	{#if showTodo}
+	{#if showTodo && !isHabit}
 		<div
 			class="relative ml-3 grid h-3 w-3 place-items-center rounded-full focus:outline-none {todo
 				? 'bg-stone-700'

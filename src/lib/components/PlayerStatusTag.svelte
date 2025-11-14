@@ -63,7 +63,7 @@
 	>
 		<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
 			<polygon
-				points="5,1 9,9 1,9"
+				points="5,2 9,9 1,9"
 				fill="currentColor"
 				stroke="currentColor"
 				stroke-width="1"

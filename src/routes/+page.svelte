@@ -7,10 +7,10 @@
 	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
-	import { supabase } from '$lib/supabaseClient';
-	import type { Writable } from 'svelte/store';
-	import type { Session } from '$lib/session';
-	import { formatLocalTimestamp } from '$lib/time';
+import { supabase } from '$lib/supabaseClient';
+import type { Writable } from 'svelte/store';
+import type { Session } from '$lib/session';
+import { formatLocalTimestamp } from '$lib/time';
 
 	type Person = { label: string; user_id: string };
 
@@ -287,6 +287,10 @@
 			},
 			{} as Record<HabitKey, PlayerStreak | null>
 		);
+	}
+	function habitStreaksForUser(user_id: string | null): Record<HabitKey, PlayerStreak | null> {
+		if (!user_id) return emptyHabitStreakRecord();
+		return habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
 	}
 	function parseHabitDate(dateStr: string): number | null {
 		const parts = dateStr.split('-');
@@ -1344,15 +1348,16 @@
 	{/if}
 </div>
 
-<LogModal
-	open={logOpen}
-	onClose={() => (logOpen = false)}
-	onSave={saveLog}
-	initialHour={draft.hour}
-	initialHalf={draft.half}
-	initialTitle={draft.title}
-	initialTodo={draft.todo}
-/>
+	<LogModal
+		open={logOpen}
+		onClose={() => (logOpen = false)}
+		onSave={saveLog}
+		initialHour={draft.hour}
+		initialHalf={draft.half}
+		initialTitle={draft.title}
+		initialTodo={draft.todo}
+		habitStreaks={habitStreaksForUser(viewerUserId)}
+	/>
 
 <ConfirmMoveModal
 	open={pendingMove !== null}
