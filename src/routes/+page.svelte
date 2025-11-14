@@ -551,13 +551,13 @@
 		return true;
 	}
 
-	function openSelectedSlotEditorFromKeyboard() {
+	function openSelectedSlotEditorFromKeyboard(normal: boolean) {
 		if (!viewerUserId || !selectedSlot) return false;
 		const hour = hours[selectedSlot.hourIndex];
 		if (hour === undefined) return false;
 		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
 		if ((habitName ?? '').trim().length > 0) return false;
-		openEditor(viewerUserId, hour, selectedSlot.half);
+		openEditor(viewerUserId, hour, selectedSlot.half, normal);
 		return true;
 	}
 
@@ -690,19 +690,19 @@
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
 		if (normalized === 'Escape') {
-			if (selectedSlot) {
-				setSelectedSlot(null);
-				event.preventDefault();
-			}
 			if (hjklSlot) {
 				setSelectedSlot(hjklSlot);
 				hjklSlot = null;
 				event.preventDefault();
 				return;
 			}
+			if (selectedSlot) {
+				setSelectedSlot(null);
+				event.preventDefault();
+			}
 			return;
 		}
-		if (!['h', 'j', 'k', 'l', 'Enter', 'i'].includes(normalized)) return;
+		if (!['h', 'j', 'k', 'l', 'Enter', 'i', 'n'].includes(normalized)) return;
 		hoverSlot = null;
 		ensureSelectionExists();
 		if (!selectedSlot) return;
@@ -726,7 +726,11 @@
 				break;
 			case 'i':
 				hjklSlot = selectedSlot;
-				handled = openSelectedSlotEditorFromKeyboard();
+				handled = openSelectedSlotEditorFromKeyboard(false);
+				break;
+			case 'n':
+				hjklSlot = selectedSlot;
+				handled = openSelectedSlotEditorFromKeyboard(true);
 				break;
 		}
 		if (handled) event.preventDefault();
@@ -862,7 +866,8 @@
 		}
 	}
 
-	function openEditor(user_id: string, h: number, half01: 0 | 1) {
+	let editorMode = $state(false);
+	function openEditor(user_id: string, h: number, half01: 0 | 1, normal?: boolean) {
 		if (viewerUserId !== user_id) return;
 		const hourIndex = getHourIndex(h);
 		if (hourIndex !== -1) {
@@ -876,6 +881,7 @@
 			title: slot.title ?? '',
 			todo: slot.todo ?? null
 		};
+		editorMode = normal ?? editorMode;
 		logOpen = true;
 	}
 
@@ -1076,7 +1082,7 @@
 		// 2) Normal behavior: if current slot is empty, open the editor
 		const t = getTitle(viewerUserId, h, half);
 		if (!t || t.trim() === '') {
-			openEditor(viewerUserId, h, half);
+			openEditor(viewerUserId, h, half, false);
 			lastPromptKey = key;
 		}
 	}
@@ -1114,7 +1120,7 @@
 
 			// Close prompt and open editor for the current slot
 			todoCarryPrompt = null;
-			openEditor(user_id, currHour, currHalf);
+			openEditor(user_id, currHour, currHalf, false);
 		} finally {
 			isTodoCarrySubmitting = false;
 		}
@@ -1439,7 +1445,7 @@
 												title={getTitle(person.user_id, h, 0)}
 												todo={getTodo(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
-												onSelect={() => openEditor(person.user_id, h, 0)}
+												onSelect={() => openEditor(person.user_id, h, 0, false)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
 												habitStreak={habitStreakForSlot(person.user_id, h, 0)}
@@ -1467,7 +1473,7 @@
 												title={getTitle(person.user_id, h, 1)}
 												todo={getTodo(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
-												onSelect={() => openEditor(person.user_id, h, 1)}
+												onSelect={() => openEditor(person.user_id, h, 1, false)}
 												onToggleTodo={() => toggleTodo(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
 												habitStreak={habitStreakForSlot(person.user_id, h, 1)}
@@ -1502,6 +1508,7 @@
 </div>
 
 <LogModal
+	normal={editorMode}
 	open={logOpen}
 	onClose={() => (logOpen = false)}
 	onSave={saveLog}

@@ -8,6 +8,7 @@
 	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	let {
+		normal,
 		open = false,
 		onClose = () => {},
 		onSave = () => {},
@@ -17,6 +18,7 @@
 		initialTodo = null,
 		habitStreaks = null
 	} = $props<{
+		normal?: boolean;
 		open?: boolean;
 		onClose?: () => void;
 		onSave?: (text: string, todo: boolean | null, hour: number, half: 0 | 1) => void;
@@ -67,7 +69,7 @@
 	let modalEl: HTMLDivElement | null = $state(null);
 	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
-	let mode = $state<ModalMode>('insert');
+	let mode = $state<ModalMode>(normal ? 'normal' : 'insert');
 
 	function focusInputSoon() {
 		queueMicrotask(() => inputEl?.focus());
@@ -160,8 +162,10 @@
 	}
 
 	$effect(() => {
-		if (open) {
+		if (open && !normal) {
 			enterInsertMode();
+		} else if (open && normal) {
+			enterNormalMode();
 		} else {
 			mode = 'insert';
 		}
