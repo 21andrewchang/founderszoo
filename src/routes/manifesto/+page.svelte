@@ -52,16 +52,22 @@
                 {sections[0].title}
             </h1>
             <p 
-                class="line text-stone-600 text-md" 
+                class="line text-stone-600 text-md mb-2" 
                 style={`animation-delay: ${1 * lineDelay}s;`}
             >
                 {sections[0].paragraphs[0]}
+            </p>
+            <p 
+                class="line text-stone-600 text-md" 
+                style={`animation-delay: ${2 * lineDelay}s;`}
+            >
+                {sections[0].paragraphs[1]}
             </p>
         </section>
 
         <div 
             class="line w-full flex items-center justify-center gap-4 mb-4"
-            style={`animation-delay: ${2 * lineDelay}s;`}
+            style={`animation-delay: ${3 * lineDelay}s;`}
         >
             <span class="h-px w-1/5 rounded-full bg-stone-200"></span>
 
@@ -78,13 +84,13 @@
         <section class="mb-4">
             <h1 
                 class="line text-stone-700 text-lg tracking-wide mb-1 italic"
-                style={`animation-delay: ${3 * lineDelay}s;`}
+                style={`animation-delay: ${4 * lineDelay}s;`}
             >
                 {sections[1].title}
             </h1>
             <p 
                 class="line text-stone-600 text-md" 
-                style={`animation-delay: ${4 * lineDelay}s;`}
+                style={`animation-delay: ${5 * lineDelay}s;`}
             >
                 {sections[1].paragraphs[0]}
             </p>
