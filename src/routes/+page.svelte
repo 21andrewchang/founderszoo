@@ -265,6 +265,9 @@
 			isHabit: habit.length > 0
 		};
 	});
+	const modalOverlayActive = $derived.by(
+		() => Boolean(logOpen || habitCheckPrompt || todoCarryPrompt || pendingMove || pendingDelete)
+	);
 
 	// prevent re-prompting within same slot
 	let lastPromptKey = $state<string | null>(null);
@@ -1821,6 +1824,10 @@
 	{/if}
 </div>
 
+{#if modalOverlayActive}
+	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
+{/if}
+
 <LogModal
 	normal={editorMode}
 	open={logOpen}
@@ -1834,7 +1841,7 @@
 />
 
 {#if habitCheckPrompt}
-	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+	<div class="fixed inset-0 z-60 flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
 				Habit check
@@ -1866,7 +1873,7 @@
 {/if}
 
 {#if todoCarryPrompt}
-	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+	<div class="fixed inset-0 z-60 flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
 				Previous block TODO
