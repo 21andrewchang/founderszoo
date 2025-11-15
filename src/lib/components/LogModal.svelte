@@ -39,12 +39,13 @@
 		colorClass: string;
 		key: string;
 		habitKey: HabitKey;
+		emoji: string;
 	};
 
 	const PRESETS: HabitPreset[] = [
-		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read' },
-		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored' },
-		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym' }
+		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read', emoji: '📖' },
+		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored', emoji: '😵‍💫' },
+		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym', emoji: '🏋️' }
 	];
 
 	const streakArrowClassFor = (key: HabitKey) => {
@@ -255,15 +256,7 @@
 						onclick={() => fillPreset(p.value)}
 					>
 						<span class="relative flex h-2 w-2 items-center justify-center">
-							<svg viewBox="0 0 10 10" class={streakArrowClassFor(p.habitKey)} aria-hidden="true">
-								<polygon
-									points="5,2 9,9 1,9"
-									fill="currentColor"
-									stroke="currentColor"
-									stroke-width="1"
-									stroke-linejoin="round"
-								/>
-							</svg>
+							<div class="text-[8px]">{p.emoji}</div>
 							<!-- flying key label in normal mode -->
 							{#if mode === 'normal'}
 								<span
