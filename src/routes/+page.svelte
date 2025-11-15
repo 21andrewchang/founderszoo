@@ -508,7 +508,17 @@
 			}
 			const useCurrent = slotCompleted || (slotElapsed && hasTodayEntry[key]);
 			const source = useCurrent ? record : fallbackRecord;
-			acc[key] = source?.[key] ?? null;
+			let value = source?.[key] ?? null;
+			if (slotCompleted && !slotElapsed) {
+				const base = fallbackRecord?.[key] ?? null;
+				const baseLen = base && base.kind === 'positive' ? base.length : 0;
+				value = {
+					kind: 'positive',
+					length: Math.max(1, baseLen + 1),
+					missesOnLatest: 0
+				};
+			}
+			acc[key] = value;
 			return acc;
 		}, {} as Record<HabitKey, PlayerStreak | null>);
 	}
