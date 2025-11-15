@@ -168,6 +168,9 @@
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
 	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
+	let habitStreaksByUserExcludingToday = $state<
+		Record<string, Record<HabitKey, PlayerStreak | null>>
+	>({});
 
 	let logOpen = $state(false);
 	type TodoCarryoverPrompt = {
@@ -181,6 +184,17 @@
 
 	let todoCarryPrompt = $state<TodoCarryoverPrompt | null>(null);
 	let isTodoCarrySubmitting = $state(false);
+	type HabitPrompt = {
+		user_id: string;
+		habitHour: number;
+		habitHalf: 0 | 1;
+		currHour: number;
+		currHalf: 0 | 1;
+		habitName: string;
+		habitKey: HabitKey | null;
+	};
+	let habitCheckPrompt = $state<HabitPrompt | null>(null);
+	let isHabitPromptSubmitting = $state(false);
 	function previousSlot(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
 		if (half === 1) {
 			// B → previous is same hour, A
@@ -225,6 +239,7 @@
 		const destinationTodo = getTodo(user_id, toHour, toHalf);
 		const destinationHasContent =
 			destinationTitle.length > 0 || destinationHabit.length > 0 || destinationTodo !== null;
+		const mode: 'swap' | 'move' = destinationHasContent ? 'swap' : 'move';
 		return {
 			slotLabel: sourceTitle || sourceHabit || 'this slot',
 			fromLabel: formatSlotLabel(fromHour, fromHalf),
@@ -232,7 +247,7 @@
 			destinationLabel: destinationTitle || destinationHabit || null,
 			hasDestinationContent: destinationHasContent,
 			isHabit: sourceHabit.length > 0,
-			mode: destinationHasContent ? 'swap' : 'move'
+			mode
 		};
 	});
 	const pendingDeleteSummary = $derived.by(() => {
@@ -338,6 +353,12 @@
 		if (!user_id) return emptyHabitStreakRecord();
 		return habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
 	}
+	function habitStreaksExcludingTodayForUser(
+		user_id: string | null
+	): Record<HabitKey, PlayerStreak | null> {
+		if (!user_id) return emptyHabitStreakRecord();
+		return habitStreaksByUserExcludingToday[user_id] ?? emptyHabitStreakRecord();
+	}
 	function parseHabitDate(dateStr: string): number | null {
 		const parts = dateStr.split('-');
 		if (parts.length !== 3) return null;
@@ -382,11 +403,11 @@
 
 		const todayCompleted = byDate.get(today);
 
-		if (todayCompleted === true && todayMs !== null) {
-			// Today is done → include it
+		if (todayCompleted !== undefined && todayMs !== null) {
+			// Today has an explicit entry (completed or missed) → include it
 			anchorDateStr = today;
 			anchorMs = todayMs;
-			targetCompleted = true;
+			targetCompleted = todayCompleted;
 		} else {
 			// Today not done → ignore it, anchor on latest day < today
 			let cursorMs = latestMs;
@@ -434,7 +455,10 @@
 		const key = normalizeHabitName(habitName);
 		if (!key) return null;
 		const record = habitStreaksByUser[user_id];
-		return record?.[key] ?? null;
+		const fallbackRecord = habitStreaksByUserExcludingToday[user_id];
+		const useCurrent = slotHasElapsed(h, half01);
+		const source = useCurrent ? record : fallbackRecord ?? record;
+		return source?.[key] ?? null;
 	}
 	function getHourIndex(value: number) {
 		return hours.findIndex((hour) => hour === value);
@@ -866,6 +890,7 @@
 					completed
 				});
 			}
+			const today = localToday();
 			const streakRecord = HABIT_STREAK_KEYS.reduce(
 				(acc, key) => {
 					const summaries = grouped[key];
@@ -874,10 +899,57 @@
 				},
 				{} as Record<HabitKey, PlayerStreak | null>
 			);
+			const streakRecordExcludingToday = HABIT_STREAK_KEYS.reduce(
+				(acc, key) => {
+					const summaries = grouped[key];
+					const filtered = summaries.filter((record) => record.date !== today);
+					acc[key] = filtered.length === 0 ? null : calculateHabitStreak(filtered);
+					return acc;
+				},
+				{} as Record<HabitKey, PlayerStreak | null>
+			);
 			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: streakRecord };
+			habitStreaksByUserExcludingToday = {
+				...habitStreaksByUserExcludingToday,
+				[user_id]: streakRecordExcludingToday
+			};
 		} catch (error) {
 			console.error('load habit streak error', { user_id, error });
-			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: emptyHabitStreakRecord() };
+			const empty = emptyHabitStreakRecord();
+			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: empty };
+			habitStreaksByUserExcludingToday = { ...habitStreaksByUserExcludingToday, [user_id]: empty };
+		}
+	}
+	function slotHasElapsed(hour: number, half: 0 | 1) {
+		if (currentHour < 0) return false;
+		if (currentHour > hour) return true;
+		if (currentHour === hour && currentHalf > half) return true;
+		return false;
+	}
+
+	async function upsertHabitDayStatus(
+		user_id: string,
+		habitKey: HabitKey | null,
+		completed: boolean,
+		hour: number,
+		half: 0 | 1
+	) {
+		if (!habitKey) return;
+		if (!completed && !slotHasElapsed(hour, half)) return;
+		const day = localToday();
+		const { error } = await supabase
+			.from('habit_day_status')
+			.upsert(
+				{
+					user_id,
+					habit_name: habitKey,
+					day,
+					completed
+				},
+				{ onConflict: 'user_id,habit_name,day' }
+			);
+		if (error) {
+			console.error('habit day status upsert error', error);
 		}
 	}
 
@@ -969,7 +1041,8 @@
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
 		const habitName = getHabitTitle(user_id, hour, half);
-		const isHabitSlot = normalizeHabitName(habitName) !== null;
+		const habitKey = normalizeHabitName(habitName);
+		const isHabitSlot = habitKey !== null;
 		const slot = getSlot(user_id, hour, half);
 		if (slot.todo === null) return;
 		const nextTodo = !slot.todo;
@@ -989,6 +1062,7 @@
 		}
 		setTodo(user_id, hour, half, nextTodo);
 		if (isHabitSlot) {
+			await upsertHabitDayStatus(user_id, habitKey, nextTodo, hour, half);
 			void loadHabitStreaksForUser(user_id);
 		}
 	}
@@ -1176,7 +1250,7 @@
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen || todoCarryPrompt) return;
+		if (!viewerUserId || logOpen || todoCarryPrompt || habitCheckPrompt) return;
 
 		const date = localToday();
 		const h = currentHour;
@@ -1196,6 +1270,22 @@
 			const { hour: prevHour, half: prevHalf } = prev;
 			const prevTodo = getTodo(viewerUserId, prevHour, prevHalf);
 			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
+			const prevHabitName = (getHabitTitle(viewerUserId, prevHour, prevHalf) ?? '').trim();
+			const prevHabitKey = normalizeHabitName(prevHabitName);
+
+			if (prevHabitKey && prevTodo === false) {
+				habitCheckPrompt = {
+					user_id: viewerUserId,
+					habitHour: prevHour,
+					habitHalf: prevHalf,
+					currHour: h,
+					currHalf: half,
+					habitName: prevHabitName || prevTitle,
+					habitKey: prevHabitKey
+				};
+				lastPromptKey = key;
+				return;
+			}
 
 			// Only prompt if previous slot is a TODO that is still unfinished (todo === false)
 			if (prevTodo === false && prevTitle.length > 0) {
@@ -1320,6 +1410,39 @@
 	function cancelTodoCarryPrompt() {
 		if (isTodoCarrySubmitting) return;
 		todoCarryPrompt = null;
+	}
+
+	async function resolveHabitPrompt(completed: boolean) {
+		if (!habitCheckPrompt || isHabitPromptSubmitting) return;
+		isHabitPromptSubmitting = true;
+
+		const { user_id, habitHour, habitHalf, currHour, currHalf, habitKey } = habitCheckPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+			const slot = getSlot(user_id, habitHour, habitHalf);
+			const { error } = await supabase.from('hours').upsert(
+				{
+					day_id,
+					hour: habitHour,
+					half: habitHalf === 1,
+					title: slot.title ?? '',
+					todo: completed
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+			if (error) {
+				console.error('habit prompt update error', error);
+				return;
+			}
+			setTodo(user_id, habitHour, habitHalf, completed);
+			await upsertHabitDayStatus(user_id, habitKey, completed, habitHour, habitHalf);
+			habitCheckPrompt = null;
+			openEditor(user_id, currHour, currHalf, false);
+			void loadHabitStreaksForUser(user_id);
+		} finally {
+			isHabitPromptSubmitting = false;
+		}
 	}
 
 	function updateCurrentTime() {
@@ -1669,6 +1792,38 @@
 	initialTodo={draft.todo}
 	habitStreaks={habitStreaksForUser(viewerUserId)}
 />
+
+{#if habitCheckPrompt}
+	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
+				Habit check
+			</div>
+			<div class="mt-1 text-sm font-medium text-stone-900">
+				Did you complete {habitCheckPrompt.habitName}?
+			</div>
+
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-60"
+					onclick={() => void resolveHabitPrompt(false)}
+					disabled={isHabitPromptSubmitting}
+				>
+					No
+				</button>
+				<button
+					type="button"
+					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
+					onclick={() => void resolveHabitPrompt(true)}
+					disabled={isHabitPromptSubmitting}
+				>
+					Yes
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 {#if todoCarryPrompt}
 	<div class="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
