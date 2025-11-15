@@ -44,23 +44,51 @@
 
 <div class="z-0 w-1/3 mx-auto flex flex-col items-center justify-center h-dvh text-justify selection:bg-stone-600 selection:text-stone-100" style="font-family: 'Cormorant Garamond', serif">
     <div class="flex flex-col">
-        {#each lines as line, idx}
-            {#if line.kind === 'title'}
-                <h1 
-                    class="line text-stone-700 text-lg tracking-wide mb-1 italic"
-                    style={`animation-delay: ${idx * lineDelay}s;`}
-                >
-                    {line.text}
-                </h1>
-            {:else}
-                <p
-                    class="line text-stone-600 text-md mb-2"
-                    style={`animation-delay: ${idx * lineDelay}s;`}
-                >
-                    {line.text}
-                </p>
-            {/if}
-        {/each}
+        <section class="mb-4">
+            <h1 
+                class="line text-stone-700 text-lg tracking-wide mb-1 italic"
+                style={`animation-delay: ${0 * lineDelay}s;`}
+            >
+                {sections[0].title}
+            </h1>
+            <p 
+                class="line text-stone-600 text-md" 
+                style={`animation-delay: ${1 * lineDelay}s;`}
+            >
+                {sections[0].paragraphs[0]}
+            </p>
+        </section>
+
+        <div 
+            class="line w-full flex items-center justify-center gap-4 mb-4"
+            style={`animation-delay: ${2 * lineDelay}s;`}
+        >
+            <span class="h-px w-1/5 rounded-full bg-stone-200"></span>
+
+            <img
+                src="/mastery.svg"
+                alt="mastery"
+                class="h-4 w-4 object-contain select-none pointer-events-none"
+            />
+
+            
+            <span class="h-px w-1/5 rounded-full bg-stone-200"></span>
+        </div>
+        
+        <section class="mb-4">
+            <h1 
+                class="line text-stone-700 text-lg tracking-wide mb-1 italic"
+                style={`animation-delay: ${3 * lineDelay}s;`}
+            >
+                {sections[1].title}
+            </h1>
+            <p 
+                class="line text-stone-600 text-md" 
+                style={`animation-delay: ${4 * lineDelay}s;`}
+            >
+                {sections[1].paragraphs[0]}
+            </p>
+        </section>
     </div>
 </div>
 

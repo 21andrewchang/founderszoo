@@ -43,7 +43,7 @@
         },
         {
 			title: 'dopamine',
-			description: 'Dopamine spikes when you anticipate a reward, and these spikes create a baseline level of enjoyment. If this baseline is high from social media, gambling, or other addictive or reward-seeking behaviors, everything else seems dull. Your brain becomes fried.'
+			description: 'Dopamine spikes when you anticipate a reward, and these spikes create a baseline level of enjoyment. If this baseline is high from social media, gambling, or other addictive behaviors, everything else seems dull. Your brain becomes fried.'
 		}
     ];
 

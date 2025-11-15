@@ -1770,7 +1770,7 @@
 	});
 </script>
 
-<div class="flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20">
+<div class="flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none">
 	<div class="flex flex-row space-x-4">
 		{#if isLoading}
 			<div class="flex flex-col space-y-1">
