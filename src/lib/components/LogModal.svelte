@@ -56,12 +56,6 @@
 		return `${base} ${color} ${rotation}`;
 	};
 
-	const streakLabelFor = (key: HabitKey) => {
-		const streak = habitStreaks?.[key] ?? null;
-		if (!streak || streak.length <= 0) return null;
-		return streak.kind === 'positive' ? `${streak.length}` : `-${streak.length}`;
-	};
-
 	let text = $state('');
 	let todo = $state<boolean | null>(null);
 	let saving = $state(false);

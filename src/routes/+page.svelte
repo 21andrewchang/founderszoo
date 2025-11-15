@@ -265,6 +265,17 @@
 			isHabit: habit.length > 0
 		};
 	});
+
+	const logModalHabitStreaks = $derived.by(() => {
+		if (!viewerUserId) return emptyHabitStreakRecord();
+		const h = draft.hour;
+		const half = draft.half;
+		if (h == null || half == null) {
+			return habitStreaksForUser(viewerUserId);
+		}
+		return habitStreakRecordForSlot(viewerUserId, h, half);
+	});
+
 	const modalOverlayActive = $derived.by(
 		() => Boolean(logOpen || habitCheckPrompt || todoCarryPrompt || pendingMove || pendingDelete)
 	);
@@ -366,17 +377,6 @@
 		if (!user_id) return emptyHabitStreakRecord();
 		return habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
 	}
-	function habitStreaksExcludingTodayForUser(
-		user_id: string | null
-	): Record<HabitKey, PlayerStreak | null> {
-		if (!user_id) return emptyHabitStreakRecord();
-		return habitStreaksByUserExcludingToday[user_id] ?? emptyHabitStreakRecord();
-	}
-	function updateHabitTodayEntryFlag(user_id: string, habitKey: HabitKey, value: boolean) {
-		const record = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
-		const nextRecord = { ...record, [habitKey]: value };
-		habitHasTodayEntryByUser = { ...habitHasTodayEntryByUser, [user_id]: nextRecord };
-	}
 	function parseHabitDate(dateStr: string): number | null {
 		const parts = dateStr.split('-');
 		if (parts.length !== 3) return null;
@@ -468,13 +468,27 @@
 			missesOnLatest: targetCompleted ? 0 : 1
 		};
 	}
+
+	function habitStreakRecordForSlot(user_id: string, h: number, half01: 0 | 1): Record<HabitKey, PlayerStreak | null> {
+		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
+		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
+		const hasTodayEntry = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
+		const slotElapsed = slotHasElapsed(h, half01);
+		return HABIT_STREAK_KEYS.reduce((acc, key) => {
+			const useCurrent = slotElapsed && hasTodayEntry[key];
+			const source = useCurrent ? record : fallbackRecord;
+			acc[key] = source?.[key] ?? null;
+			return acc;
+		}, {} as Record<HabitKey, PlayerStreak | null>);
+	}
+
 	function habitStreakForSlot(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
 		const habitName = getHabitTitle(user_id, h, half01);
 		const key = normalizeHabitName(habitName);
 		if (!key) return null;
+		const view = habitStreakRecordForSlot(user_id, h, half01);
 		const record = habitStreaksByUser[user_id];
 		const fallbackRecord = habitStreaksByUserExcludingToday[user_id];
-		const hasTodayEntry = habitHasTodayEntryByUser[user_id]?.[key] ?? false;
 		const promptActive =
 			habitCheckPrompt &&
 			habitCheckPrompt.user_id === user_id &&
@@ -485,10 +499,9 @@
 			const fallback = fallbackRecord ?? record;
 			return fallback?.[key] ?? null;
 		}
-		const useCurrent = slotHasElapsed(h, half01) && hasTodayEntry;
-		const source = useCurrent ? record : fallbackRecord ?? record;
-		return source?.[key] ?? null;
+		return view[key] ?? null;
 	}
+
 	function getHourIndex(value: number) {
 		return hours.findIndex((hour) => hour === value);
 	}
@@ -968,33 +981,6 @@
 		return false;
 	}
 
-	async function upsertHabitDayStatus(
-		user_id: string,
-		habitKey: HabitKey | null,
-		completed: boolean,
-		hour: number,
-		half: 0 | 1
-	) {
-		if (!habitKey) return;
-		if (!completed && !slotHasElapsed(hour, half)) return;
-		const day = localToday();
-		const { error } = await supabase
-			.from('habit_day_status')
-			.upsert(
-				{
-					user_id,
-					habit_name: habitKey,
-					day,
-					completed
-				},
-				{ onConflict: 'user_id,habit_name,day' }
-			);
-		if (error) {
-			console.error('habit day status upsert error', error);
-			return;
-		}
-		updateHabitTodayEntryFlag(user_id, habitKey, true);
-	}
 
 	async function loadPlayerHistoryForUser(user_id: string) {
 		const today = localToday();
@@ -1105,7 +1091,6 @@
 		}
 		setTodo(user_id, hour, half, nextTodo);
 		if (isHabitSlot) {
-			await upsertHabitDayStatus(user_id, habitKey, nextTodo, hour, half);
 			void loadHabitStreaksForUser(user_id);
 		}
 	}
@@ -1479,13 +1464,12 @@
 				return;
 			}
 			setTodo(user_id, habitHour, habitHalf, completed);
-			await upsertHabitDayStatus(user_id, habitKey, completed, habitHour, habitHalf);
 			habitCheckPrompt = null;
-			openEditor(user_id, currHour, currHalf, false);
 			void loadHabitStreaksForUser(user_id);
 		} finally {
 			isHabitPromptSubmitting = false;
 		}
+		openEditor(user_id, currHour, currHalf, false);
 	}
 
 	function updateCurrentTime() {
@@ -1837,7 +1821,7 @@
 	initialHalf={draft.half}
 	initialTitle={draft.title}
 	initialTodo={draft.todo}
-	habitStreaks={habitStreaksForUser(viewerUserId)}
+	habitStreaks={logModalHabitStreaks}
 />
 
 {#if habitCheckPrompt}

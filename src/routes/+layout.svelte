@@ -484,9 +484,6 @@
 	});
 
 	let { children } = $props();
-	$inspect('auth set', authSet);
-	$inspect('session user', $session.user);
-	$inspect('presence', presenceCounts);
 </script>
 
 <svelte:head>
