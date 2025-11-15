@@ -94,108 +94,159 @@
             behavior: 'smooth'
         });
     }
+
+    const lineDelay = 0.08;
+
+    const nMicro = microSections.length;
+    const nMacro = macroSections.length;
+
+    const baseMicroItems = 4;
+    const baseMacroTitle = baseMicroItems + 2 * nMicro;
+
+
 </script>
 
-<div in:fade={{ duration: 200, delay: 200 }}>
-    <div class="h-dvh w-full flex justify-center overflow-y-auto scrollbar-hide" style="font-family: 'Cormorant Garamond', serif" bind:this={scrollContainer} onscroll={handleScroll}>
-        <div class="w-1/3 text-justify pt-[25vh] selection:bg-stone-600 selection:text-stone-100">
-            <section class="mb-4">
-                <h1
-                    class="text-stone-500 text-4xl tracking-wide mb-3"
-                >
-                    Fundamentals
-                </h1>
-                <p class="text-stone-600 text-md">
-                    Build the fundamentals first. You can't win a game without first learning how to farm gold. The same is true for building a company and life in general.
-                </p>
-            </section>
+<div class="z-0 h-dvh w-full flex justify-center overflow-y-auto scrollbar-hide" style="font-family: 'Cormorant Garamond', serif" bind:this={scrollContainer} onscroll={handleScroll}>
+    <div class="w-1/3 text-justify pt-[25vh] selection:bg-stone-600 selection:text-stone-100">
+        <section class="mb-4">
+            <h1
+                class="line text-stone-500 text-4xl tracking-wide mb-3"
+                style={`animation-delay: ${0 * lineDelay}s;`}
+            >
+                Fundamentals
+            </h1>
+            <p 
+                class="line text-stone-600 text-md" 
+                style={`animation-delay: ${1 * lineDelay}s;`}
+            >
+                Build the fundamentals first. You can't win a game without first learning how to farm gold. The same is true for building a company and life in general.
+            </p>
+        </section>
 
-            <div class="h-[1px] w-full rounded-full bg-stone-200 mb-16"></div>
+        <div 
+            class="line h-[1px] w-full rounded-full bg-stone-200 mb-16"
+            style={`animation-delay: ${2 * lineDelay}s;`}
+        ></div>
 
-            <section id="micro" bind:this={microEl} class="mb-16">
-                <h1
-                    class="text-stone-500 text-3xl tracking-wide mb-6"
-                >
-                    Micro
-                </h1>
+        <section id="micro" bind:this={microEl} class="mb-16">
+            <h1
+                class="line text-stone-500 text-3xl tracking-wide mb-6"
+                style={`animation-delay: ${3 * lineDelay}s;`}
+            >
+                Micro
+            </h1>
 
-                <div class="space-y-4">
-                    {#each microSections as section}
-                        <div class="flex flex-col">
-                            <h2
-                                class="text-stone-700 text-lg tracking-wide mb-1 italic"
-                            >
-                                {section.title}
-                            </h2>
-                            <p class="text-stone-600 text-md">
-                                {section.description}
-                            </p>
-                        </div>
-                    {/each}
-                </div>
-            </section>
-
-            <section id="macro" bind:this={macroEl} class="pb-[25vh]">
-                <h1
-                    class="text-stone-500 text-3xl tracking-wide mb-6"
-                >
-                    Macro
-                </h1>
-
-                <div class="space-y-4">
-                    {#each macroSections as section}
-                        <div class="flex flex-col">
-                            <h2
-                                class="text-stone-700 text-lg tracking-wide mb-1 italic"
-                            >
-                                {section.title}
-                            </h2>
-                            <p class="text-stone-600 text-md">
-                                {section.description}
-                            </p>
-                        </div>
-                    {/each}
-                </div>
-            </section>
-
-            <div class="fixed right-6 top-1/4 flex flex-col items-center">
-                {#each navItems as item}
-                    <button
-                        type="button"
-                        onclick={() => scrollToSection(item.id)}
-                        onmouseenter={() => hoveredNav = item.id}
-                        onmouseleave={() => hoveredNav = null}
-                        class="group flex flex-col items-center"
-                    >
-                        <div class="relative h-4 w-28 overflow-hidden flex items-center justify-end">
-                            <span
-                                class={`absolute right-0 h-px w-4 rounded-full bg-stone-400 origin-right transition-transform transition-colors duration-150
-                                    ${
-                                        hoveredNav === item.id
-                                            ? 'scale-x-0'
-                                            : 'scale-x-100'
-                                    }
-                                    ${
-                                        currentSection === item.id
-                                            ? 'bg-stone-800'
-                                            : 'bg-stone-400'
-                                    }
-                                }`}
-                            ></span>
-
-                            <span 
-                                class={`absolute right-0 text-[14px] tracking-wide italic whitespace-nowrap transition-all duration-200 ${
-                                    hoveredNav === item.id 
-                                        ? 'translate-x-0 opacity-100 text-stone-800' 
-                                        : 'translate-x-4 opacity-0 text-stone-400' 
-                                }`}
-                            >
-                                {item.label}
-                            </span>
-                        </div>
-                    </button>
+            <div class="space-y-4">
+                {#each microSections as section, idx}
+                    {@const titleIdx = baseMicroItems + 2 * idx}
+                    {@const descriptionIdx = baseMicroItems + 2 * idx + 1}
+                    <div class="flex flex-col">
+                        <h2
+                            class="line text-stone-700 text-lg tracking-wide mb-1 italic"
+                            style={`animation-delay: ${titleIdx * lineDelay}s;`}
+                        >
+                            {section.title}
+                        </h2>
+                        <p 
+                            class="line text-stone-600 text-md" 
+                            style={`animation-delay: ${descriptionIdx * lineDelay}s;`}
+                        >
+                            {section.description}
+                        </p>
+                    </div>
                 {/each}
             </div>
+        </section>
+
+        <section id="macro" bind:this={macroEl} class="pb-[25vh]">
+            <h1
+                class="line text-stone-500 text-3xl tracking-wide mb-6"
+                style={`animation-delay: ${baseMacroTitle * lineDelay}s;`}
+            >
+                Macro
+            </h1>
+
+            <div class="space-y-4">
+                {#each macroSections as section, idx}
+                    {@const titleIdx = baseMacroTitle + 2 * idx}
+                    {@const descriptionIdx = baseMacroTitle + 2 * idx + 1}
+                    <div class="flex flex-col">
+                        <h2
+                            class="line text-stone-700 text-lg tracking-wide mb-1 italic"
+                            style={`animation-delay: ${titleIdx * lineDelay}s;`}
+                        >
+                            {section.title}
+                        </h2>
+                        <p 
+                            class="line text-stone-600 text-md" 
+                            style={`animation-delay: ${descriptionIdx * lineDelay}s;`}
+                        >
+                            {section.description}
+                        </p>
+                    </div>
+                {/each}
+            </div>
+        </section>
+
+        <div class="fixed right-6 top-1/4 flex flex-col items-center">
+            {#each navItems as item}
+                <button
+                    type="button"
+                    onclick={() => scrollToSection(item.id)}
+                    onmouseenter={() => hoveredNav = item.id}
+                    onmouseleave={() => hoveredNav = null}
+                    class="group flex flex-col items-center"
+                >
+                    <div class="relative h-4 w-28 overflow-hidden flex items-center justify-end">
+                        <span
+                            class={`absolute right-0 h-px w-3 rounded-full bg-stone-400 origin-right transition-transform transition-colors duration-150
+                                ${
+                                    hoveredNav === item.id
+                                        ? 'scale-x-0'
+                                        : 'scale-x-100'
+                                }
+                                ${
+                                    currentSection === item.id
+                                        ? 'bg-stone-800'
+                                        : 'bg-stone-400'
+                                }
+                            }`}
+                        ></span>
+
+                        <span 
+                            class={`absolute right-0 text-[14px] tracking-wide italic whitespace-nowrap transition-all duration-200 ${
+                                hoveredNav === item.id 
+                                    ? 'translate-x-0 opacity-100 text-stone-800' 
+                                    : 'translate-x-4 opacity-0 text-stone-400' 
+                            }`}
+                        >
+                            {item.label}
+                        </span>
+                    </div>
+                </button>
+            {/each}
         </div>
     </div>
 </div>
+
+<style>
+    .line {
+        opacity: 0;
+        transform: translateY(0.5rem);
+        animation-name: fadeUp;
+        animation-duration: 0.600s;
+        animation-timing-function: cubic-bezier(0.235, 0.51, 0.355, 1);
+        animation-fill-mode: forwards;
+    }
+
+    @keyframes fadeUp {
+        from {
+            opacity: 0;
+            transform: translateY(0.5rem);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+</style>
