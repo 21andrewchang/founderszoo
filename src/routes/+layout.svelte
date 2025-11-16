@@ -16,7 +16,7 @@
 	type Person = { label: string; user_id: string };
 	type Goal = { title: string; due_date: string };
 	type PlayerDisplay = { label: string; user_id: string | null };
-	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number | null> };
+	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
 	const TRACKED_ROOMS = ['/', '/manifesto', '/collection', '/fundamentals'];
 	const links = [
@@ -183,18 +183,18 @@
 		trackedDisplays = next;
 	}
 
-	function emptyHistoryRecord(): Record<TrackedPlayerKey, number | null> {
+	function emptyHistoryRecord(): Record<TrackedPlayerKey, number> {
 		return TRACKED_PLAYERS.reduce(
 			(acc, player) => ({ ...acc, [player.key]: null }),
-			{} as Record<TrackedPlayerKey, number | null>
+			{} as Record<TrackedPlayerKey, number>
 		);
 	}
 
-	function combinedPercent(values: Record<TrackedPlayerKey, number | null>): number | null {
+	function combinedPercent(values: Record<TrackedPlayerKey, number>): number {
 		const percents = TRACKED_PLAYERS.map((player) => values[player.key]).filter(
 			(pct): pct is number => typeof pct === 'number'
 		);
-		if (percents.length !== TRACKED_PLAYERS.length) return null;
+		if (percents.length !== TRACKED_PLAYERS.length) return 0;
 		const product = percents.reduce((acc, pct) => acc * (pct / 100), 1);
 		return Math.max(1, Math.round(product * 100));
 	}
@@ -304,7 +304,7 @@
 					const pct = blocksDue > 0 ? Math.round((filled / blocksDue) * 100) : null;
 					return { ...acc, [player.key]: pct };
 				},
-				{} as Record<TrackedPlayerKey, number | null>
+				{} as Record<TrackedPlayerKey, number>
 			);
 
 			currentCombinedPct = combinedPercent(percentageValues);
@@ -339,7 +339,7 @@
 				.order('date', { ascending: false });
 			if (error) throw error;
 
-			const rows = new Map<string, Record<TrackedPlayerKey, number | null>>();
+			const rows = new Map<string, Record<TrackedPlayerKey, number>>();
 			for (const row of data ?? []) {
 				const date = (row.date as string | null) ?? null;
 				const userId = (row.user_id as string | null) ?? null;
