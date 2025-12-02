@@ -1048,22 +1048,61 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	) {
 		const payloadRow = (payload.new ?? payload.old) as HourRowPayload | null;
 		const payloadDayId = payloadRow?.day_id ?? null;
-		if (!payloadDayId || payloadDayId !== day_id) return;
+		if (payloadDayId && payloadDayId !== day_id) return;
+		const reloadSnapshot = () => {
+			if (!day_id) return;
+			void (async () => {
+				try {
+					await loadHoursForDay(user_id, day_id);
+				} catch (error) {
+					console.error('realtime hours reload error', { user_id, day_id, error });
+				}
+			})();
+		};
 		const event = payload.eventType;
 		if (event === 'DELETE') {
 			const oldRow = payload.old;
-			if (!oldRow) return;
+			if (!oldRow) {
+				reloadSnapshot();
+				return;
+			}
 			const hour = Number(oldRow.hour);
-			if (Number.isNaN(hour)) return;
+			if (Number.isNaN(hour) || oldRow.half == null) {
+				reloadSnapshot();
+				return;
+			}
 			const half = oldRow.half ? 1 : 0;
 			applyRealtimeSlotValue(user_id, hour, half, null);
 			return;
 		}
 		const row = payload.new;
-		if (!row) return;
+		if (!row) {
+			reloadSnapshot();
+			return;
+		}
 		const hour = Number(row.hour);
-		if (Number.isNaN(hour)) return;
+		if (Number.isNaN(hour) || row.half == null) {
+			reloadSnapshot();
+			return;
+		}
 		const half = row.half ? 1 : 0;
+		const oldRow = payload.old as HourRowPayload | null | undefined;
+		if (!oldRow) {
+			reloadSnapshot();
+			return;
+		}
+		const oldHour = Number(oldRow.hour);
+		const oldHalfValue = oldRow.half;
+		if (Number.isNaN(oldHour) || oldHalfValue == null) {
+			reloadSnapshot();
+			return;
+		}
+		const oldHalf = oldHalfValue ? 1 : 0;
+		if (oldHour !== hour || oldHalf !== half) {
+			reloadSnapshot();
+			return;
+		}
+
 		const slotValue: SlotValue = {
 			title: row.title ?? '',
 			todo: (row.todo as boolean | null) ?? null
