@@ -1086,6 +1086,23 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			return;
 		}
 		const half = row.half ? 1 : 0;
+		const oldRow = payload.old as HourRowPayload | null | undefined;
+		if (!oldRow) {
+			reloadSnapshot();
+			return;
+		}
+		const oldHour = Number(oldRow.hour);
+		const oldHalfValue = oldRow.half;
+		if (Number.isNaN(oldHour) || oldHalfValue == null) {
+			reloadSnapshot();
+			return;
+		}
+		const oldHalf = oldHalfValue ? 1 : 0;
+		if (oldHour !== hour || oldHalf !== half) {
+			reloadSnapshot();
+			return;
+		}
+
 		const slotValue: SlotValue = {
 			title: row.title ?? '',
 			todo: (row.todo as boolean | null) ?? null
