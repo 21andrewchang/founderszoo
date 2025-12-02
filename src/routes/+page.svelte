@@ -1043,8 +1043,12 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	}
 	function handleHoursRealtimeChange(
 		user_id: string,
+		day_id: string,
 		payload: RealtimePostgresChangesPayload<HourRowPayload>
 	) {
+		const payloadRow = (payload.new ?? payload.old) as HourRowPayload | null;
+		const payloadDayId = payloadRow?.day_id ?? null;
+		if (!payloadDayId || payloadDayId !== day_id) return;
 		const event = payload.eventType;
 		if (event === 'DELETE') {
 			const oldRow = payload.old;
@@ -1083,10 +1087,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const channel = supabase.channel(`hours:${user_id}:${day_id}`);
 		channel.on(
 			'postgres_changes',
-			{ event: '*', schema: 'public', table: 'hours', filter: `day_id=eq.${day_id}` },
+			{ event: '*', schema: 'public', table: 'hours' },
 			(payload) =>
 				handleHoursRealtimeChange(
 					user_id,
+					day_id,
 					payload as RealtimePostgresChangesPayload<HourRowPayload>
 				)
 		);
@@ -1121,7 +1126,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		payload: RealtimePostgresChangesPayload<SelectedSlotRowPayload>
 	) {
 		const row = (payload.new ?? payload.old) as SelectedSlotRowPayload | null;
-		if (!row) return;
+		if (!row || row.id !== user_id) return;
 		applyRemoteSelectionFromDb(user_id, row.selected_slot_hour, row.selected_slot_half);
 	}
 	function ensureSelectedSlotRealtime(user_id: string) {
@@ -1130,7 +1135,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const channel = supabase.channel(`selected-slot:${user_id}`);
 		channel.on(
 			'postgres_changes',
-			{ event: '*', schema: 'public', table: 'users', filter: `id=eq.${user_id}` },
+			{ event: '*', schema: 'public', table: 'users' },
 			(payload) =>
 				handleSelectedSlotRealtime(
 					user_id,
