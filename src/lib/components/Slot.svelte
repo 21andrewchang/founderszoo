@@ -33,7 +33,6 @@
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
 	const isCurrentSlot = $derived(Boolean(props.isCurrent));
 	const habitStreak = $derived(props.habitStreak ?? null);
-	$inspect(habitStreak);
 	const habitStreakLabel = $derived(() => {
 		if (habitStreak == null || !habitStreak || habitStreak.length <= 0) return null;
 		return `${habitStreak.kind === 'positive' ? '' : '-'}${habitStreak.length}`;
@@ -46,7 +45,6 @@
 	});
 
 	const trimmed = $derived((title ?? '').trim());
-	$inspect(trimmed);
 	const isFilled = $derived(trimmed.length > 0);
 
 	const habitKey = $derived(habitPlaceholder.toLowerCase());

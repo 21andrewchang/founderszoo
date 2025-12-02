@@ -99,7 +99,7 @@
 	const START_HOUR = 8;
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
-	const TOTAL_BLOCKS_PER_DAY = hours.length * 2; // 16 hours * 2 halves = 32 slots
+	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
 	const STREAK_LOOKBACK_DAYS = 60;
 	const DAY_MS = 86_400_000;
 	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored', 'wake'] as const;
