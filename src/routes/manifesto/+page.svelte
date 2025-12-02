@@ -21,7 +21,7 @@
 		{
 			title: 'one-trick',
 			paragraphs: [
-				'Mastery comes from hyperfixation on one thing and one thing only. Pick a niche and get so obsessed with it that you become the best.'
+				'Mastery comes from hyperfixation on one thing and one thing only. Become so obsessed that success is inevitable.'
 			]
 		},
 	];
