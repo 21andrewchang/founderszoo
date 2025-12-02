@@ -8,10 +8,11 @@
 	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
-	import { supabase } from '$lib/supabaseClient';
-	import type { Writable } from 'svelte/store';
-	import type { Session } from '$lib/session';
-	import { formatLocalTimestamp } from '$lib/time';
+import { supabase } from '$lib/supabaseClient';
+import type { Writable } from 'svelte/store';
+import type { Session } from '$lib/session';
+import { formatLocalTimestamp } from '$lib/time';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
 	type Person = { label: string; user_id: string };
 
@@ -170,6 +171,22 @@
 		value: SlotValue;
 		habitTitle: string | null;
 	};
+	type HourRowPayload = {
+		day_id: string;
+		hour: number;
+		half: boolean;
+		title: string | null;
+		todo: boolean | null;
+	};
+	type HoursRealtimeState = {
+		channel: RealtimeChannel;
+		day_id: string;
+	};
+	type SelectedSlotRowPayload = {
+		id: string;
+		selected_slot_hour: number | null;
+		selected_slot_half: boolean | number | null;
+	};
 
 	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
 	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
@@ -203,6 +220,10 @@
 	};
 	let habitCheckPrompt = $state<HabitPrompt | null>(null);
 	let isHabitPromptSubmitting = $state(false);
+	const hoursRealtimeByUser: Record<string, HoursRealtimeState | null> = {};
+	let remoteSelectedSlots = $state<Record<string, SelectedSlot | null>>({});
+	const selectedSlotRealtimeByUser: Record<string, RealtimeChannel | null> = {};
+	let lastBroadcastedSelectionKey: string | null = null;
 	function previousSlot(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
 		if (half === 1) {
 			// B → previous is same hour, A
@@ -602,14 +623,21 @@
 		await insertHabitHours(user_id, day_id, pending);
 	}
 	function setSelectedSlot(next: SelectedSlot | null) {
-		if (!viewerUserId || next === null) {
+		if (!viewerUserId) {
 			selectedSlot = null;
 			return;
 		}
-		selectedSlot = {
+		if (next === null) {
+			selectedSlot = null;
+			void broadcastSelectedSlot(null);
+			return;
+		}
+		const clamped: SelectedSlot = {
 			hourIndex: clampHourIndex(next.hourIndex),
 			half: next.half === 1 ? 1 : 0
 		};
+		selectedSlot = clamped;
+		void broadcastSelectedSlot(clamped);
 	}
 	function ensureSelectionExists() {
 		if (!viewerUserId || selectedSlot) return;
@@ -624,8 +652,10 @@
 		return selection?.hourIndex === hourIndex && selection?.half === half;
 	}
 	function highlightedSlotForUser(user_id: string): SelectedSlot | null {
-		if (viewerUserId !== user_id) return null;
-		return dragHoverSlot ?? hoverSlot ?? selectedSlot;
+		if (viewerUserId === user_id) {
+			return dragHoverSlot ?? hoverSlot ?? selectedSlot;
+		}
+		return remoteSelectedSlots[user_id] ?? null;
 	}
 	function slotIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
 		const active = highlightedSlotForUser(user_id);
@@ -998,6 +1028,148 @@
 			else next[h].second = slotValue;
 		}
 		slotsByUser[user_id] = next;
+	}
+	function applyRealtimeSlotValue(
+		user_id: string,
+		hour: number,
+		half01: 0 | 1,
+		value: SlotValue | null
+	) {
+		if (value === null) {
+			setTitle(user_id, hour, half01, '', null);
+			return;
+		}
+		setTitle(user_id, hour, half01, value.title ?? '', value.todo ?? null);
+	}
+	function handleHoursRealtimeChange(
+		user_id: string,
+		payload: RealtimePostgresChangesPayload<HourRowPayload>
+	) {
+		const event = payload.eventType;
+		if (event === 'DELETE') {
+			const oldRow = payload.old;
+			if (!oldRow) return;
+			const hour = Number(oldRow.hour);
+			if (Number.isNaN(hour)) return;
+			const half = oldRow.half ? 1 : 0;
+			applyRealtimeSlotValue(user_id, hour, half, null);
+			return;
+		}
+		const row = payload.new;
+		if (!row) return;
+		const hour = Number(row.hour);
+		if (Number.isNaN(hour)) return;
+		const half = row.half ? 1 : 0;
+		const slotValue: SlotValue = {
+			title: row.title ?? '',
+			todo: (row.todo as boolean | null) ?? null
+		};
+		applyRealtimeSlotValue(user_id, hour, half, slotValue);
+	}
+	function teardownHoursRealtime(user_id: string) {
+		const current = hoursRealtimeByUser[user_id];
+		if (!current) return;
+		current.channel.unsubscribe();
+		hoursRealtimeByUser[user_id] = null;
+	}
+	function ensureHoursRealtime(user_id: string, day_id: string | null) {
+		const existing = hoursRealtimeByUser[user_id];
+		if (!day_id) {
+			if (existing) teardownHoursRealtime(user_id);
+			return;
+		}
+		if (existing && existing.day_id === day_id) return;
+		if (existing) teardownHoursRealtime(user_id);
+		const channel = supabase.channel(`hours:${user_id}:${day_id}`);
+		channel.on(
+			'postgres_changes',
+			{ event: '*', schema: 'public', table: 'hours', filter: `day_id=eq.${day_id}` },
+			(payload) =>
+				handleHoursRealtimeChange(
+					user_id,
+					payload as RealtimePostgresChangesPayload<HourRowPayload>
+				)
+		);
+		channel.subscribe();
+		hoursRealtimeByUser[user_id] = { channel, day_id };
+	}
+	function teardownSelectedSlotRealtime(user_id: string) {
+		const current = selectedSlotRealtimeByUser[user_id];
+		if (!current) return;
+		current.unsubscribe();
+		selectedSlotRealtimeByUser[user_id] = null;
+	}
+	function updateRemoteSelectionState(user_id: string, slot: SelectedSlot | null) {
+		remoteSelectedSlots = { ...remoteSelectedSlots, [user_id]: slot };
+	}
+	function selectionFromDbValues(hourValue: unknown, halfValue: unknown): SelectedSlot | null {
+		const hour = Number(hourValue);
+		if (!Number.isFinite(hour)) return null;
+		const hourIndex = getHourIndex(hour);
+		if (hourIndex === -1) return null;
+		if (halfValue === null || halfValue === undefined) return null;
+		const halfNumber = Number(halfValue);
+		const half = halfNumber === 1 ? 1 : 0;
+		return { hourIndex, half };
+	}
+	function applyRemoteSelectionFromDb(user_id: string, hourValue: unknown, halfValue: unknown) {
+		const slot = selectionFromDbValues(hourValue, halfValue);
+		updateRemoteSelectionState(user_id, slot);
+	}
+	function handleSelectedSlotRealtime(
+		user_id: string,
+		payload: RealtimePostgresChangesPayload<SelectedSlotRowPayload>
+	) {
+		const row = (payload.new ?? payload.old) as SelectedSlotRowPayload | null;
+		if (!row) return;
+		applyRemoteSelectionFromDb(user_id, row.selected_slot_hour, row.selected_slot_half);
+	}
+	function ensureSelectedSlotRealtime(user_id: string) {
+		const existing = selectedSlotRealtimeByUser[user_id];
+		if (existing) return;
+		const channel = supabase.channel(`selected-slot:${user_id}`);
+		channel.on(
+			'postgres_changes',
+			{ event: '*', schema: 'public', table: 'users', filter: `id=eq.${user_id}` },
+			(payload) =>
+				handleSelectedSlotRealtime(
+					user_id,
+					payload as RealtimePostgresChangesPayload<SelectedSlotRowPayload>
+				)
+		);
+		channel.subscribe();
+		selectedSlotRealtimeByUser[user_id] = channel;
+	}
+	async function broadcastSelectedSlot(selection: SelectedSlot | null) {
+		if (!viewerUserId) return;
+		const hour =
+			selection && selection.hourIndex >= 0 && selection.hourIndex < hours.length
+				? hours[selection.hourIndex]
+				: null;
+		const halfValue = selection ? (selection.half === 1 ? true : false) : null;
+		const key = hour === null || halfValue === null ? 'null' : `${hour}-${halfValue ? 1 : 0}`;
+		if (lastBroadcastedSelectionKey === key) return;
+		const previousKey = lastBroadcastedSelectionKey;
+		lastBroadcastedSelectionKey = key;
+		const { error } = await supabase
+			.from('users')
+			.update({
+				selected_slot_hour: hour,
+				selected_slot_half: halfValue
+			})
+			.eq('id', viewerUserId);
+		if (error) {
+			console.error('selected slot update error', error);
+			lastBroadcastedSelectionKey = previousKey;
+		}
+	}
+	function teardownAllRealtime() {
+		for (const userId of Object.keys(hoursRealtimeByUser)) {
+			teardownHoursRealtime(userId);
+		}
+		for (const userId of Object.keys(selectedSlotRealtimeByUser)) {
+			teardownSelectedSlotRealtime(userId);
+		}
 	}
 	async function loadHabitsForUser(user_id: string) {
 		const { data, error } = await supabase
@@ -1725,6 +1897,7 @@
 			console.info('viewer not authenticated, continuing in read-only mode', authErr);
 			viewerUserId = null;
 		}
+		lastBroadcastedSelectionKey = null;
 		if (!viewerUserId) {
 			selectedSlot = null;
 			hoverSlot = null;
@@ -1734,18 +1907,25 @@
 		try {
 			const { data: rows, error: uerr } = await supabase
 				.from('users')
-				.select('id, display_name')
+				.select('id, display_name, selected_slot_hour, selected_slot_half')
 				.order('display_name', { ascending: true });
 			if (uerr) throw uerr;
 
-			people = (rows ?? []).map((r) => ({
-				label: r.display_name as string,
-				user_id: r.id as string
-			}));
+			people = (rows ?? []).map((r) => {
+				const user_id = r.id as string;
+				applyRemoteSelectionFromDb(user_id, r.selected_slot_hour, r.selected_slot_half);
+				return {
+					label: r.display_name as string,
+					user_id
+				};
+			});
 
 			updateTrackedPlayersFromPeople(people);
 			startPlayerStatusWatchers(viewerUserId);
 			startLocalPlayerPresenceIfTracked(viewerUserId);
+			for (const person of people) {
+				ensureSelectedSlotRealtime(person.user_id);
+			}
 
 			const perUserLoads = people.map(async ({ user_id }) => {
 				const create = viewerUserId === user_id;
@@ -1758,6 +1938,7 @@
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
+				ensureHoursRealtime(user_id, dayId);
 			});
 
 			const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
@@ -1794,6 +1975,7 @@
 	onDestroy(() => {
 		stopPlayerStatusWatchers();
 		stopLocalPlayerPresence?.();
+		teardownAllRealtime();
 	});
 </script>
 
