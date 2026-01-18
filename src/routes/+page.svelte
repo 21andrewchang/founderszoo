@@ -158,6 +158,18 @@
 	let reviewStats = $state<ReviewStats | null>(null);
 	let reviewDayDate = $state<string | null>(null);
 	let reviewSubmitting = $state(false);
+	let hideCursor = $state(false);
+	let lastPointerX = 0;
+	let lastPointerY = 0;
+	let hasPointer = false;
+	let lastKeyAt = 0;
+
+	function setCursorHidden(hidden: boolean) {
+		hideCursor = hidden;
+		if (typeof document !== 'undefined') {
+			document.body.classList.toggle('cursor-hidden', hidden);
+		}
+	}
 
 	type BugChecklistItem = {
 		id: string;
@@ -1833,17 +1845,15 @@
 		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
 
-		if (destinationHasHoursContent) {
-			const { error: deleteDestErr } = await supabase
-				.from('hours')
-				.delete()
-				.eq('day_id', day_id)
-				.eq('hour', toHour)
-				.eq('half', toHalf === 1);
-			if (deleteDestErr) {
-				console.error('block move destination delete error', deleteDestErr);
-				return false;
-			}
+		const { error: deleteDestErr } = await supabase
+			.from('hours')
+			.delete()
+			.eq('day_id', day_id)
+			.eq('hour', toHour)
+			.eq('half', toHalf === 1);
+		if (deleteDestErr) {
+			console.error('block move destination delete error', deleteDestErr);
+			return false;
 		}
 
 		const { error: updateErr } = await supabase
@@ -2370,17 +2380,37 @@
 		updateCurrentTime();
 		scheduleClockTick();
 		init();
-		const keyHandler = (event: KeyboardEvent) => handleGlobalKeydown(event);
-		const pointerHandler = () => {
+		const keyHandler = (event: KeyboardEvent) => {
+			lastKeyAt = Date.now();
+			setCursorHidden(true);
+			handleGlobalKeydown(event);
+		};
+		const pointerHandler = (event: PointerEvent) => {
 			if (suppressHoverSelection) suppressHoverSelection = false;
+			const now = Date.now();
+			const { clientX, clientY } = event;
+			const moved = !hasPointer || Math.hypot(clientX - lastPointerX, clientY - lastPointerY) > 2;
+			lastPointerX = clientX;
+			lastPointerY = clientY;
+			hasPointer = true;
+			if (event.type === 'pointerdown') {
+				setCursorHidden(false);
+				return;
+			}
+			if (!moved) return;
+			if (now - lastKeyAt < 150) return;
+			setCursorHidden(false);
 		};
 		window.addEventListener('keydown', keyHandler);
 		window.addEventListener('pointermove', pointerHandler);
+		window.addEventListener('pointerdown', pointerHandler);
 		requestAnimationFrame(() => (showTimes = true));
 		return () => {
 			stopClockTick();
 			window.removeEventListener('keydown', keyHandler);
 			window.removeEventListener('pointermove', pointerHandler);
+			window.removeEventListener('pointerdown', pointerHandler);
+			setCursorHidden(false);
 		};
 	});
 
@@ -2393,6 +2423,7 @@
 
 <div
 	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none"
+	class:cursor-none={hideCursor}
 >
 	<div class="flex flex-row space-x-4">
 		{#if isLoading}

@@ -1,3 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 @import 'tailwind-scrollbar-hide/v4';
+
+body.cursor-hidden,
+body.cursor-hidden * {
+	cursor: none !important;
+}
