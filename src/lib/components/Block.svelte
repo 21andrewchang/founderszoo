@@ -45,11 +45,11 @@
 	});
 
 	const trimmed = $derived((title ?? '').trim());
-	const isFilled = $derived(trimmed.length > 0);
-
 	const habitKey = $derived(habitPlaceholder.toLowerCase());
 	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
+	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
+	const isFilled = $derived(displayTitle.length > 0);
 
 	const currentClass = $derived(isCurrentBlock ? 'bg-stone-200' : '');
 
@@ -65,7 +65,7 @@
 	);
 
 	const showStatus = $derived(isFilled && !isHabit);
-	const canToggleHabit = $derived(isHabit && status !== null);
+	const canToggleHabit = $derived(isHabit);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
@@ -200,7 +200,7 @@
 			{/if}
 
 			{#if isFilled}
-				{trimmed}
+				{displayTitle}
 			{:else}
 				&nbsp;
 			{/if}

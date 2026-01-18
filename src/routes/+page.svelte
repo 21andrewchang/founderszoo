@@ -159,6 +159,28 @@
 	let reviewDayDate = $state<string | null>(null);
 	let reviewSubmitting = $state(false);
 
+	type BugChecklistItem = {
+		id: string;
+		label: string;
+		done: boolean;
+	};
+	let bugsOpen = $state(false);
+	let bugChecklist = $state<BugChecklistItem[]>([
+		{ id: 'habit-labels', label: 'Habit labels show for all users', done: false },
+		{ id: 'habit-enter', label: 'Enter toggles habit completion', done: false },
+		{ id: 'habit-delete', label: 'Deleting habit clears today block', done: false },
+		{
+			id: 'status-cycle',
+			label: 'Block status cycles planned → in progress → complete',
+			done: false
+		}
+	]);
+	function toggleBugChecklistItem(id: string) {
+		bugChecklist = bugChecklist.map((item) =>
+			item.id === id ? { ...item, done: !item.done } : item
+		);
+	}
+
 	type BlockValue = { title: string; status: boolean | null };
 	type BlockRow = { first: BlockValue; second: BlockValue };
 	type HabitBlockRow = { first: string | null; second: string | null };
@@ -215,6 +237,12 @@
 	};
 
 	const createEmptyBlock = (): BlockValue => ({ title: '', status: null });
+
+	function getDisplayTitle(user_id: string, h: number, half01: 0 | 1) {
+		const title = getTitle(user_id, h, half01).trim();
+		if (title.length > 0) return title;
+		return (getHabitTitle(user_id, h, half01) ?? '').trim();
+	}
 	let blocksByUser = $state<Record<string, Record<number, BlockRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitBlockRow>>>({});
 	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
@@ -293,9 +321,9 @@
 	const pendingMoveSummary = $derived.by(() => {
 		if (!pendingMove) return null;
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = pendingMove;
-		const sourceTitle = (getTitle(user_id, fromHour, fromHalf) ?? '').trim();
+		const sourceTitle = getDisplayTitle(user_id, fromHour, fromHalf);
 		const sourceHabit = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
-		const destinationTitle = (getTitle(user_id, toHour, toHalf) ?? '').trim();
+		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
 		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
 		const destinationHasContent = destinationTitle.length > 0 || destinationHabit.length > 0;
 		const mode: 'swap' | 'move' = destinationHasContent ? 'swap' : 'move';
@@ -312,7 +340,7 @@
 	const pendingDeleteSummary = $derived.by(() => {
 		if (!pendingDelete) return null;
 		const { user_id, hour, half } = pendingDelete;
-		const title = (getTitle(user_id, hour, half) ?? '').trim();
+		const title = getDisplayTitle(user_id, hour, half);
 		const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
 		const hasContent = title.length > 0 || habit.length > 0;
 		return {
@@ -530,7 +558,6 @@
 			dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
 			if (dayId) {
 				await loadHoursForDay(viewerUserId, dayId);
-				await ensureHabitHoursForDay(viewerUserId, dayId);
 			} else {
 				blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
 			}
@@ -678,58 +705,15 @@
 		return Math.max(0, Math.min(hours.length - 1, idx));
 	}
 	function blockIsEmpty(user_id: string, h: number, half01: 0 | 1) {
-		return getTitle(user_id, h, half01).trim().length === 0;
+		return getDisplayTitle(user_id, h, half01).length === 0;
 	}
 	function blockHasContent(user_id: string, h: number, half01: 0 | 1) {
-		const title = getTitle(user_id, h, half01).trim();
-		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
-		return title.length > 0 || habitName.length > 0;
+		return getDisplayTitle(user_id, h, half01).length > 0;
 	}
 	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
 		if (isCutSource(user_id, h, half01)) return false;
 		return blockHasContent(user_id, h, half01);
-	}
-	async function insertHabitHours(
-		user_id: string,
-		day_id: string | null,
-		entries: { hour: number; half: 0 | 1; name: string }[]
-	) {
-		if (!day_id || entries.length === 0) return;
-		const payload = entries.map(({ hour, half, name }) => ({
-			day_id,
-			hour,
-			half: half === 1,
-			title: name,
-			status: false,
-			habit: true
-		}));
-		const { error } = await supabase
-			.from('hours')
-			.upsert(payload, { onConflict: 'day_id,hour,half' });
-		if (error) {
-			console.error('habit hour insert error', error);
-			return;
-		}
-		for (const { hour, half, name } of entries) {
-			setTitle(user_id, hour, half, name, false);
-		}
-	}
-	async function ensureHabitHoursForDay(user_id: string, day_id: string | null) {
-		if (!day_id) return;
-		const userHabits = habitsByUser[user_id];
-		if (!userHabits) return;
-		const pending: { hour: number; half: 0 | 1; name: string }[] = [];
-		for (const [hourStr, row] of Object.entries(userHabits)) {
-			const hour = Number(hourStr);
-			if (Number.isNaN(hour)) continue;
-			if (row.first && blockIsEmpty(user_id, hour, 0))
-				pending.push({ hour, half: 0, name: row.first });
-			if (row.second && blockIsEmpty(user_id, hour, 1))
-				pending.push({ hour, half: 1, name: row.second });
-		}
-		if (pending.length === 0) return;
-		await insertHabitHours(user_id, day_id, pending);
 	}
 	function setSelectedBlock(next: SelectedBlock | null) {
 		if (!viewerUserId) {
@@ -907,11 +891,9 @@
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
 		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
-		const habitName = getHabitTitle(viewerUserId, hour, selectedBlock.half);
-		if ((habitName ?? '').trim().length > 0) return true;
-
-		const title = getTitle(viewerUserId, hour, selectedBlock.half);
-		if (title.trim().length === 0) return true;
+		const habitName = (getHabitTitle(viewerUserId, hour, selectedBlock.half) ?? '').trim();
+		const title = getTitle(viewerUserId, hour, selectedBlock.half).trim();
+		if (!title && !habitName) return true;
 		void cycleStatus(viewerUserId, hour, selectedBlock.half);
 		return true;
 	}
@@ -936,7 +918,8 @@
 			const status = getStatus(user_id, hour, half);
 			const habitName = getHabitTitle(user_id, hour, half);
 			const hasHabit = (habitName ?? '').trim().length > 0;
-			const hasContent = title.trim().length > 0 || hasHabit;
+			const hasContent = getDisplayTitle(user_id, hour, half).length > 0;
+
 			if (!hasContent) continue;
 			entries.push({
 				index: idx,
@@ -1743,13 +1726,15 @@
 		const block = getBlock(user_id, hour, half);
 		if (isHabitBlock) {
 			const nextStatus = block.status === true ? false : true;
+			const resolvedTitle = (block.title ?? '').trim() || habitName;
 			const { error } = await supabase.from('hours').upsert(
 				{
 					day_id,
 					hour,
 					half: half === 1,
-					title: block.title ?? habitName,
-					status: nextStatus
+					title: resolvedTitle,
+					status: nextStatus,
+					habit: true
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
@@ -1757,7 +1742,7 @@
 				console.error('cycle habit status error', error);
 				return;
 			}
-			setStatus(user_id, hour, half, nextStatus);
+			setTitle(user_id, hour, half, resolvedTitle, nextStatus);
 			void loadHabitStreaksForUser(user_id);
 			return;
 		}
@@ -2146,18 +2131,21 @@
 		if (!habitCheckPrompt || isHabitPromptSubmitting) return;
 		isHabitPromptSubmitting = true;
 
-		const { user_id, habitHour, habitHalf, currHour, currHalf, habitKey } = habitCheckPrompt;
+		const { user_id, habitHour, habitHalf, currHour, currHalf, habitKey, habitName } =
+			habitCheckPrompt;
 		try {
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 			const block = getBlock(user_id, habitHour, habitHalf);
+			const resolvedTitle = (block.title ?? '').trim() || habitName;
 			const { error } = await supabase.from('hours').upsert(
 				{
 					day_id,
 					hour: habitHour,
 					half: habitHalf === 1,
-					title: block.title ?? '',
-					status: completed
+					title: resolvedTitle,
+					status: completed,
+					habit: true
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
@@ -2165,7 +2153,7 @@
 				console.error('habit prompt update error', error);
 				return;
 			}
-			setStatus(user_id, habitHour, habitHalf, completed);
+			setTitle(user_id, habitHour, habitHalf, resolvedTitle, completed);
 			habitCheckPrompt = null;
 			void loadHabitStreaksForUser(user_id);
 		} finally {
@@ -2362,7 +2350,6 @@
 				];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
-				if (dayId) await ensureHabitHoursForDay(user_id, dayId);
 				ensureHoursRealtime(user_id, dayId);
 			});
 
@@ -2565,6 +2552,43 @@
 			</button>
 		</div>
 	{/if}
+</div>
+
+<div class="fixed bottom-4 left-4 z-50">
+	<div class="relative">
+		<button
+			class="rounded-full border border-stone-300 bg-white px-3 py-1 text-[10px] font-semibold tracking-wide text-stone-700 uppercase shadow-sm hover:bg-stone-100"
+			onclick={() => (bugsOpen = !bugsOpen)}
+		>
+			Bugs
+		</button>
+		{#if bugsOpen}
+			<div
+				class="absolute bottom-full mb-2 w-64 rounded-lg border border-stone-200 bg-white shadow-lg"
+			>
+				<div
+					class="border-b border-stone-100 px-3 py-2 text-[10px] font-semibold tracking-wide text-stone-500 uppercase"
+				>
+					Bug checklist
+				</div>
+				<div class="space-y-2 px-3 py-2">
+					{#each bugChecklist as item}
+						<label class="flex items-start gap-2 text-xs text-stone-700">
+							<input
+								type="checkbox"
+								class="mt-0.5 h-3 w-3 rounded border-stone-300"
+								checked={item.done}
+								onchange={() => toggleBugChecklistItem(item.id)}
+							/>
+							<span class:line-through={item.done} class:text-stone-400={item.done}>
+								{item.label}
+							</span>
+						</label>
+					{/each}
+				</div>
+			</div>
+		{/if}
+	</div>
 </div>
 
 {#if modalOverlayActive}
