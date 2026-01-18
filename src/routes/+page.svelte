@@ -362,6 +362,13 @@
 		if (!viewerUserId) return localToday();
 		return activeDayDateByUser[user_id] ?? localToday();
 	};
+	const canShowReviewDayButton = () => {
+		if (!viewerUserId) return false;
+		if (!isNightWindow()) return false;
+		const activeDayDate = activeDayDateByUser[viewerUserId];
+		if (activeDayDate === undefined || activeDayDate === null) return false;
+		return activeDayDate === localToday();
+	};
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
 		blocksByUser[user_id] ??= {};
@@ -2398,7 +2405,7 @@
 </script>
 
 <div
-	class="flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none"
+	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none"
 >
 	<div class="flex flex-row space-x-4">
 		{#if isLoading}
@@ -2547,10 +2554,11 @@
 			</div>
 		</div>
 	</div>
-	{#if viewerUserId && isNightWindow() && displayDateForUser(viewerUserId) === localToday()}
-		<div class="mt-4 flex w-full justify-center">
+	{#if canShowReviewDayButton()}
+		<div class="pointer-events-none absolute bottom-6 left-0 flex w-full justify-center">
 			<button
-				class="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold tracking-wide text-stone-700 uppercase hover:bg-stone-100"
+				in:fly={{ y: 12, duration: 220 }}
+				class="pointer-events-auto rounded-full border border-stone-300 px-4 py-2 text-[10px] font-semibold tracking-wide text-stone-700 uppercase hover:bg-stone-100"
 				onclick={() => viewerUserId && openReviewDay(viewerUserId)}
 			>
 				Review day

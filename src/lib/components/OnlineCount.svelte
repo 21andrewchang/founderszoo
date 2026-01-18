@@ -13,7 +13,7 @@
 
 {#if counts.connected}
 	<div
-		class="group fixed top-5 right-6 flex h-4 z-[999] select-none"
+		class="group fixed top-5 right-6 z-30 flex h-4 select-none"
 		aria-live="polite"
 		aria-label="Live spectator count"
 	>

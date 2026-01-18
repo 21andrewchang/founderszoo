@@ -1,7 +1,7 @@
 <script lang="ts">
 	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { onMount, setContext } from 'svelte';
-	import { fly, blur } from 'svelte/transition';
+	import { fly, blur, scale } from 'svelte/transition';
 	import '../app.css';
 	import { writable, type Writable } from 'svelte/store';
 	import { browser } from '$app/environment';
@@ -14,7 +14,7 @@
 	import { useGlobalPresence } from '$lib/presence';
 
 	type Person = { label: string; user_id: string };
-	type Goal = { title: string; due_date: string };
+	type Goal = { id: string; title: string; due_date: string };
 	type PlayerDisplay = { label: string; user_id: string | null };
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
@@ -75,6 +75,10 @@
 	let newGoalTitle = $state('');
 	let newGoalDueDate = $state('');
 	let isCreatingGoal = $state(false);
+	let isEditingGoal = $state(false);
+	let editGoalTitle = $state('');
+	let editGoalDueDate = $state('');
+	let isSavingGoal = $state(false);
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -152,10 +156,11 @@
 					due_date: newGoalDueDate,
 					created_at: formatLocalTimestamp(new Date())
 				})
-				.select('title, due_date')
+				.select('id, title, due_date')
 				.single();
 			if (error) throw error;
 			activeGoal = {
+				id: data.id as string,
 				title: (data.title ?? title).trim(),
 				due_date: data.due_date as string
 			};
@@ -165,6 +170,52 @@
 			console.error('goal create error', error);
 		} finally {
 			isCreatingGoal = false;
+		}
+	}
+
+	function startGoalEdit() {
+		if (!viewerId || !activeGoal) return;
+		editGoalTitle = activeGoal.title ?? '';
+		editGoalDueDate = activeGoal.due_date ?? '';
+		isEditingGoal = true;
+	}
+
+	function cancelGoalEdit() {
+		if (isSavingGoal) return;
+		isEditingGoal = false;
+		editGoalTitle = '';
+		editGoalDueDate = '';
+	}
+
+	function handleGoalBackdropClick(event: MouseEvent) {
+		if (event.target !== event.currentTarget) return;
+		cancelGoalEdit();
+	}
+
+	async function saveGoalEdit(event?: Event) {
+		event?.preventDefault();
+		if (!viewerId || !activeGoal || isSavingGoal) return;
+		const title = editGoalTitle.trim();
+		if (!title || !editGoalDueDate) return;
+		isSavingGoal = true;
+		try {
+			const { data, error } = await supabase
+				.from('goals')
+				.update({ title, due_date: editGoalDueDate })
+				.eq('id', activeGoal.id)
+				.select('id, title, due_date')
+				.single();
+			if (error) throw error;
+			activeGoal = {
+				id: data.id as string,
+				title: (data.title ?? title).trim(),
+				due_date: data.due_date as string
+			};
+			isEditingGoal = false;
+		} catch (error) {
+			console.error('goal update error', error);
+		} finally {
+			isSavingGoal = false;
 		}
 	}
 
@@ -390,12 +441,13 @@
 	async function loadActiveGoal(userId: string | null) {
 		if (!userId) {
 			activeGoal = null;
+			isEditingGoal = false;
 			return;
 		}
 		try {
 			const { data, error } = await supabase
 				.from('goals')
-				.select('title, due_date')
+				.select('id, title, due_date')
 				.order('due_date', { ascending: true })
 				.limit(1)
 				.maybeSingle();
@@ -407,8 +459,15 @@
 				throw error;
 			}
 			activeGoal = data
-				? { title: (data.title ?? '').trim(), due_date: data.due_date as string }
+				? {
+						id: data.id as string,
+						title: (data.title ?? '').trim(),
+						due_date: data.due_date as string
+					}
 				: null;
+			if (!data) {
+				isEditingGoal = false;
+			}
 		} catch (error) {
 			console.error('goal load error', error);
 			activeGoal = null;
@@ -581,18 +640,88 @@
 			{@const daysRemaining = daysUntilDue(activeGoal.due_date)}
 			{@const dueLabel = formatDaysUntilText(daysRemaining)}
 			<div class="pointer-events-none fixed top-5 left-1/2 z-40 -translate-x-1/2">
-				<div
-					class="pointer-events-auto flex items-center gap-2 text-xs font-semibold tracking-wide text-stone-800 uppercase"
-				>
-					<span>{activeGoal.title || 'Goal'}</span>
-					{#if dueLabel}
-						<span class="text-xs font-semibold tracking-wide text-stone-500">
-							{dueLabel}
-						</span>
-					{/if}
-				</div>
+				{#if viewerId}
+					<button
+						type="button"
+						class="pointer-events-auto flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold tracking-wide text-stone-800 uppercase transition hover:bg-stone-100"
+						onclick={startGoalEdit}
+					>
+						<span>{activeGoal.title || 'Goal'}</span>
+						{#if dueLabel}
+							<span class="text-xs font-semibold tracking-wide text-stone-500">
+								{dueLabel}
+							</span>
+						{/if}
+					</button>
+				{:else}
+					<div
+						class="pointer-events-auto flex items-center gap-2 text-xs font-semibold tracking-wide text-stone-800 uppercase"
+					>
+						<span>{activeGoal.title || 'Goal'}</span>
+						{#if dueLabel}
+							<span class="text-xs font-semibold tracking-wide text-stone-500">
+								{dueLabel}
+							</span>
+						{/if}
+					</div>
+				{/if}
 			</div>
 		{/if}
+	</div>
+{/if}
+
+{#if isEditingGoal}
+	<div
+		class="fixed inset-0 z-70 flex items-center justify-center bg-black/40"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Edit goal"
+		onclick={handleGoalBackdropClick}
+	>
+		<div
+			in:scale={{ start: 0.95, duration: 160 }}
+			class="w-full max-w-md rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+		>
+			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
+				<div class="rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase">
+					Edit goal
+				</div>
+			</div>
+			<form class="px-4 pt-3 pb-4" onsubmit={saveGoalEdit}>
+				<div class="flex w-full flex-row items-center">
+					<input
+						class="w-full p-2 text-2xl text-stone-800 transition outline-none"
+						placeholder="Goal"
+						bind:value={editGoalTitle}
+					/>
+				</div>
+				<div class="mt-3 flex w-full flex-row items-center">
+					<input
+						class="w-full rounded-md border border-stone-200 px-3 py-2 text-sm text-stone-700 outline-none"
+						placeholder="YYYY-MM-DD"
+						type="text"
+						bind:value={editGoalDueDate}
+					/>
+				</div>
+				<div class="mt-4 flex justify-end gap-2">
+					<button
+						type="button"
+						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600 disabled:opacity-60"
+						onclick={cancelGoalEdit}
+						disabled={isSavingGoal}
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
+						disabled={isSavingGoal}
+					>
+						Save
+					</button>
+				</div>
+			</form>
+		</div>
 	</div>
 {/if}
 
