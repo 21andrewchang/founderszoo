@@ -226,13 +226,13 @@
 
 	{#if showStatus}
 		<div
-			class="relative ml-3 grid h-3 w-3 place-items-center rounded-full focus:outline-none"
+			class="relative ml-3 grid aspect-square h-4 w-4 shrink-0 place-items-center rounded-full focus:outline-none"
 			class:bg-stone-700={status === true}
-			class:status-pop-checked={statusAnim === 'check'}
+			class:status-pop-checked={statusAnim === 'check' || statusAnim === 'progress'}
 			class:status-pop-unchecked={statusAnim === 'uncheck'}
 		>
 			{#if status === true}
-				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-50" fill="none">
+				<svg viewBox="0 0 24 24" class="relative z-10 h-3.5 w-3.5 text-stone-50" fill="none">
 					<path
 						d="M7 12.5 L10.25 15.75 L16.75 9.25"
 						stroke="currentColor"
@@ -245,7 +245,7 @@
 					/>
 				</svg>
 			{:else}
-				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-700" fill="none">
+				<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
 					<circle
 						cx="12"
 						cy="12"
