@@ -883,13 +883,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const startIndex = slotIndex(selectedSlot.hourIndex, selectedSlot.half);
 		const entries = collectShiftEntries(viewerUserId, startIndex);
 		if (entries.length === 0) return false;
-		const hasHabit = entries.some((entry) => entry.hasHabit);
-		let includeHabits = true;
-		if (hasHabit) {
-			includeHabits = window.confirm(
-				'This shift includes habit slots. Move habits too? Choosing cancel keeps habits in place.'
-			);
-		}
+		const includeHabits = false;
 		const movableEntries = entries.filter((entry) => includeHabits || !entry.hasHabit);
 		if (movableEntries.length === 0) return false;
 		const lockedHabits = new Set(
@@ -929,98 +923,72 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			if (!ok) return false;
 		}
 		const clearEntries = [...overflow, ...moves.map((move) => move.entry)];
+		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
 		isShiftSubmitting = true;
-		try {
-			for (const entry of clearEntries) {
-				const { error: clearErr } = await supabase
-					.from('hours')
-					.delete()
-					.eq('day_id', day_id)
-					.eq('hour', entry.hour)
-					.eq('half', entry.half === 1);
-				if (clearErr) {
-					console.error('shift slot clear error', clearErr);
-					return false;
-				}
-				if (entry.hasHabit) {
-					const { error: habitClearErr } = await supabase
-						.from('habits')
-						.delete()
-						.eq('user_id', viewerUserId)
-						.eq('hour', entry.hour)
-						.eq('half', entry.half === 1);
-					if (habitClearErr) {
-						console.error('shift habit clear error', habitClearErr);
-						return false;
-					}
-				}
-			}
-			for (const move of moves) {
-				const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
-				if (toHour === undefined) continue;
-				const habitName = move.entry.habitName ?? null;
-				const baseTitle = move.entry.title ?? '';
-				const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
-				const hasHoursContent =
-					resolvedTitle.trim().length > 0 || move.entry.todo !== null || move.entry.hasHabit;
-				if (hasHoursContent) {
-					const { error: upsertErr } = await supabase.from('hours').upsert(
-						{
-							day_id,
-							hour: toHour,
-							half: toHalf === 1,
-							title: resolvedTitle,
-							todo: move.entry.todo
-						},
-						{ onConflict: 'day_id,hour,half' }
-					);
-					if (upsertErr) {
-						console.error('shift slot upsert error', upsertErr);
-						return false;
-					}
-				}
-				if (move.entry.hasHabit && habitName) {
-					const { error: habitUpsertErr } = await supabase.from('habits').upsert(
-						{
-							user_id: viewerUserId,
-							name: habitName,
-							hour: toHour,
-							half: toHalf === 1
-						},
-						{ onConflict: 'user_id,hour,half' }
-					);
-					if (habitUpsertErr) {
-						console.error('shift habit upsert error', habitUpsertErr);
-						return false;
-					}
-				}
-			}
-			for (const entry of clearEntries) {
-				setTitle(viewerUserId, entry.hour, entry.half, '', null);
-				if (entry.hasHabit) setHabitTitle(viewerUserId, entry.hour, entry.half, null);
-			}
-			for (const move of moves) {
-				const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
-				if (toHour === undefined) continue;
-				const habitName = move.entry.habitName ?? null;
-				const baseTitle = move.entry.title ?? '';
-				const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
-				setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.todo ?? null);
-				if (move.entry.hasHabit) {
-					setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
-				}
-			}
-			const movedSelection = moves.find((move) => move.fromIndex === startIndex);
-			if (movedSelection) {
-				const { hourIndex, half } = slotFromIndex(movedSelection.toIndex);
-				if (hourIndex >= 0 && hourIndex < hours.length) {
-					setSelectedSlot({ hourIndex, half });
-				}
-			}
-			return true;
-		} finally {
-			isShiftSubmitting = false;
+		for (const entry of clearEntries) {
+			setTitle(viewerUserId, entry.hour, entry.half, '', null);
+			if (entry.hasHabit) setHabitTitle(viewerUserId, entry.hour, entry.half, null);
 		}
+		for (const move of moves) {
+			const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+			if (toHour === undefined) continue;
+			const habitName = move.entry.habitName ?? null;
+			const baseTitle = move.entry.title ?? '';
+			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+			setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.todo ?? null);
+			if (move.entry.hasHabit) {
+				setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
+			}
+		}
+		if (movedSelection) {
+			const { hourIndex, half } = slotFromIndex(movedSelection.toIndex);
+			if (hourIndex >= 0 && hourIndex < hours.length) {
+				setSelectedSlot({ hourIndex, half });
+			}
+		}
+		const persistShift = async () => {
+			try {
+				const updates = new Map<string, { day_id: string; hour: number; half: boolean; title: string; todo: boolean | null }>();
+				for (const entry of clearEntries) {
+					updates.set(`${entry.hour}-${entry.half}`, {
+						day_id,
+						hour: entry.hour,
+						half: entry.half === 1,
+						title: '',
+						todo: null
+					});
+				}
+				for (const move of moves) {
+					const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+					if (toHour === undefined) continue;
+					const habitName = move.entry.habitName ?? null;
+					const baseTitle = move.entry.title ?? '';
+					const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+					const hasHoursContent =
+						resolvedTitle.trim().length > 0 || move.entry.todo !== null || move.entry.hasHabit;
+					if (!hasHoursContent) continue;
+					updates.set(`${toHour}-${toHalf}`, {
+						day_id,
+						hour: toHour,
+						half: toHalf === 1,
+						title: resolvedTitle,
+						todo: move.entry.todo
+					});
+				}
+				if (updates.size > 0) {
+					const { error: upsertErr } = await supabase
+						.from('hours')
+						.upsert([...updates.values()], { onConflict: 'day_id,hour,half' });
+					if (upsertErr) {
+						console.error('shift slots error', upsertErr);
+					}
+				}
+			} finally {
+				isShiftSubmitting = false;
+			}
+		};
+		void persistShift();
+		return true;
 	}
 	function handleSlotSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
