@@ -1644,8 +1644,28 @@
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
 		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
-		if (habitName.length > 0) return;
+		const isHabitBlock = habitName.length > 0;
 		const block = getBlock(user_id, hour, half);
+		if (isHabitBlock) {
+			const nextStatus = block.status === true ? false : true;
+			const { error } = await supabase.from('hours').upsert(
+				{
+					day_id,
+					hour,
+					half: half === 1,
+					title: block.title ?? habitName,
+					status: nextStatus
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+			if (error) {
+				console.error('cycle habit status error', error);
+				return;
+			}
+			setStatus(user_id, hour, half, nextStatus);
+			void loadHabitStreaksForUser(user_id);
+			return;
+		}
 		const title = (block.title ?? '').trim();
 		if (!title) return;
 		const nextStatus = block.status === null ? false : block.status === false ? true : null;

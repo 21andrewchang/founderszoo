@@ -58,19 +58,20 @@
 
 	const habitClasses = $derived(
 		isHabit
-			? 'border border-stone-700 text-stone-900'
+			? `border border-stone-700 text-stone-900 ${status === true ? '' : 'border-dashed'}`
 			: `${
 					isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'
 				}`
 	);
 
 	const showStatus = $derived(isFilled && !isHabit);
+	const canToggleHabit = $derived(isHabit && status !== null);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleBlockClick() {
 		if (onPrimaryAction()) return;
-		if (showStatus) {
+		if (showStatus || canToggleHabit) {
 			onCycleStatus();
 			return;
 		}
