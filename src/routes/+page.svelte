@@ -145,7 +145,19 @@
 	// auth + data
 	let viewerUserId = $state<string | null>(null);
 	let dayIdByUser = $state<Record<string, string | null>>({});
+	let activeDayDateByUser = $state<Record<string, string | null>>({});
+	let spectatorDate = $state<string | null>(null);
 	let isLoading = $state(true);
+
+	type ReviewStats = {
+		planned: number;
+		completed: number;
+		productiveHours: number;
+	};
+	let reviewOpen = $state(false);
+	let reviewStats = $state<ReviewStats | null>(null);
+	let reviewDayDate = $state<string | null>(null);
+	let reviewSubmitting = $state(false);
 
 	type BlockValue = { title: string; status: boolean | null };
 	type BlockRow = { first: BlockValue; second: BlockValue };
@@ -322,7 +334,9 @@
 	});
 
 	const modalOverlayActive = $derived.by(() =>
-		Boolean(logOpen || habitCheckPrompt || carryoverPrompt || pendingMove || pendingDelete)
+		Boolean(
+			logOpen || habitCheckPrompt || carryoverPrompt || pendingMove || pendingDelete || reviewOpen
+		)
 	);
 
 	// prevent re-prompting within same block
@@ -337,6 +351,17 @@
 		return formatDateString(d);
 	};
 	const localToday = () => formatDateString(getNow());
+	const addDaysToDateString = (dateStr: string, days: number) => {
+		const baseMs = parseHabitDate(dateStr);
+		if (baseMs === null) return localToday();
+		const d = new Date(baseMs);
+		d.setDate(d.getDate() + days);
+		return formatDateString(d);
+	};
+	const displayDateForUser = (user_id: string) => {
+		if (!viewerUserId) return localToday();
+		return activeDayDateByUser[user_id] ?? localToday();
+	};
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
 		blocksByUser[user_id] ??= {};
@@ -444,6 +469,70 @@
 		date.setFullYear(year, month - 1, day);
 		date.setHours(0, 0, 0, 0);
 		return date.getTime();
+	}
+
+	function reviewStatsForUser(user_id: string): ReviewStats {
+		let planned = 0;
+		let completed = 0;
+		for (const hour of hours) {
+			for (const half of [0, 1] as const) {
+				const title = (getTitle(user_id, hour, half) ?? '').trim();
+				const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
+				if (title.length > 0 || habit.length > 0) planned += 1;
+				if (getStatus(user_id, hour, half) === true) completed += 1;
+			}
+		}
+		return {
+			planned,
+			completed,
+			productiveHours: completed / 2
+		};
+	}
+
+	function formatProductiveHours(value: number) {
+		const rounded = Math.round(value * 10) / 10;
+		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function openReviewDay(user_id: string) {
+		if (!viewerUserId || viewerUserId !== user_id) return;
+		reviewStats = reviewStatsForUser(user_id);
+		reviewDayDate = displayDateForUser(user_id);
+		reviewOpen = true;
+	}
+
+	function closeReviewDay() {
+		reviewOpen = false;
+		reviewStats = null;
+		reviewDayDate = null;
+	}
+
+	async function startNextDayPlanning() {
+		if (!viewerUserId || reviewSubmitting) return;
+		reviewSubmitting = true;
+		const currentDate = displayDateForUser(viewerUserId);
+		const nextDate = addDaysToDateString(currentDate, 1);
+		try {
+			const { error } = await supabase
+				.from('users')
+				.update({ active_day_date: nextDate })
+				.eq('id', viewerUserId);
+			if (error) throw error;
+			activeDayDateByUser = { ...activeDayDateByUser, [viewerUserId]: nextDate };
+			const dayId = await getDayIdForUser(viewerUserId, nextDate, true);
+			dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
+			if (dayId) {
+				await loadHoursForDay(viewerUserId, dayId);
+				await ensureHabitHoursForDay(viewerUserId, dayId);
+			} else {
+				blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
+			}
+			closeReviewDay();
+		} catch (error) {
+			console.error('start next day error', error);
+		} finally {
+			reviewSubmitting = false;
+		}
 	}
 	function calculateHabitStreak(records: HabitDayStatus[]): PlayerStreak | null {
 		if (records.length === 0) return null;
@@ -1219,13 +1308,12 @@
 		}
 	}
 
-	async function getTodayDayIdForUser(user_id: string, createIfMissing: boolean) {
-		const today = localToday();
+	async function getDayIdForUser(user_id: string, dateStr: string, createIfMissing: boolean) {
 		const { data: found, error: findErr } = await supabase
 			.from('days')
 			.select('id')
 			.eq('user_id', user_id)
-			.eq('date', today)
+			.eq('date', dateStr)
 			.maybeSingle();
 		if (findErr) throw findErr;
 		if (found?.id) return found.id as string;
@@ -1233,7 +1321,7 @@
 		const createdAt = formatLocalTimestamp(getNow());
 		const { data: created, error: insErr } = await supabase
 			.from('days')
-			.insert({ user_id, date: today, created_at: createdAt })
+			.insert({ user_id, date: dateStr, created_at: createdAt })
 			.select('id')
 			.single();
 		if (insErr) throw insErr;
@@ -2079,12 +2167,35 @@
 		openEditor(user_id, currHour, currHalf, false);
 	}
 
+	async function refreshSpectatorDay(dateStr: string) {
+		const perUserLoads = people.map(async ({ user_id }) => {
+			const dayId = await getDayIdForUser(user_id, dateStr, false);
+			dayIdByUser[user_id] = dayId;
+			if (dayId) {
+				await loadHoursForDay(user_id, dayId);
+			} else {
+				blocksByUser = { ...blocksByUser, [user_id]: {} };
+			}
+			ensureHoursRealtime(user_id, dayId);
+		});
+		await Promise.all(perUserLoads);
+	}
+
 	function updateCurrentTime() {
 		const now = getNow();
 		currentHour = now.getHours();
 		currentMinute = now.getMinutes();
 		currentHalf = now.getMinutes() < 30 ? 0 : 1;
 		maybePromptForMissing();
+		if (!viewerUserId) {
+			const today = localToday();
+			if (!spectatorDate) {
+				spectatorDate = today;
+			} else if (spectatorDate !== today) {
+				spectatorDate = today;
+				void refreshSpectatorDay(today);
+			}
+		}
 	}
 
 	const ENABLE_NOTIFS = true;
@@ -2200,18 +2311,31 @@
 		try {
 			const { data: rows, error: uerr } = await supabase
 				.from('users')
-				.select('id, display_name, selected_block_hour, selected_block_half')
+				.select('id, display_name, selected_block_hour, selected_block_half, active_day_date')
 				.order('display_name', { ascending: true });
 			if (uerr) throw uerr;
 
+			const nextActiveDayDates: Record<string, string | null> = {};
 			people = (rows ?? []).map((r) => {
 				const user_id = r.id as string;
 				applyRemoteSelectionFromDb(user_id, r.selected_block_hour, r.selected_block_half);
+				nextActiveDayDates[user_id] = (r.active_day_date as string | null) ?? null;
 				return {
 					label: r.display_name as string,
 					user_id
 				};
 			});
+			activeDayDateByUser = nextActiveDayDates;
+			if (viewerUserId && !nextActiveDayDates[viewerUserId]) {
+				const today = localToday();
+				nextActiveDayDates[viewerUserId] = today;
+				activeDayDateByUser = { ...nextActiveDayDates };
+				const { error } = await supabase
+					.from('users')
+					.update({ active_day_date: today })
+					.eq('id', viewerUserId);
+				if (error) console.error('active day update error', error);
+			}
 
 			updateTrackedPlayersFromPeople(people);
 			startPlayerStatusWatchers(viewerUserId);
@@ -2221,8 +2345,9 @@
 			}
 
 			const perUserLoads = people.map(async ({ user_id }) => {
-				const create = viewerUserId === user_id;
-				const dayId = await getTodayDayIdForUser(user_id, create);
+				const dateStr = displayDateForUser(user_id);
+				const create = viewerUserId === user_id && Boolean(viewerUserId);
+				const dayId = await getDayIdForUser(user_id, dateStr, create);
 				dayIdByUser[user_id] = dayId;
 				const tasks: Promise<void>[] = [
 					loadHabitsForUser(user_id),
@@ -2422,25 +2547,65 @@
 			</div>
 		</div>
 	</div>
-	{#if isNightWindow()}
-		<div
-			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
-			class:bg-amber-200={isNightWindow}
-			class:bg-stone-100={!isNightWindow}
-			class:text-stone-900={isNightWindow}
-		>
-			{countdownText()}
+	{#if viewerUserId && isNightWindow()}
+		<div class="mt-4 flex w-full justify-center">
+			<button
+				class="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold tracking-wide text-stone-700 uppercase hover:bg-stone-100"
+				onclick={() => viewerUserId && openReviewDay(viewerUserId)}
+			>
+				Review day
+			</button>
 		</div>
-	{:else}
-		<div
-			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
-			class:bg-stone-100={!isNightWindow}
-		></div>
 	{/if}
 </div>
 
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
+{/if}
+
+{#if reviewOpen}
+	<div class="fixed inset-0 z-60 flex items-center justify-center">
+		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Day review</div>
+			{#if reviewDayDate}
+				<div class="mt-1 text-sm font-medium text-stone-900">{reviewDayDate}</div>
+			{/if}
+			<div class="mt-3 space-y-2 text-sm text-stone-700">
+				<div class="flex items-center justify-between">
+					<span>Tasks planned</span>
+					<span class="font-semibold text-stone-900">{reviewStats?.planned ?? 0}</span>
+				</div>
+				<div class="flex items-center justify-between">
+					<span>Tasks completed</span>
+					<span class="font-semibold text-stone-900">{reviewStats?.completed ?? 0}</span>
+				</div>
+				<div class="flex items-center justify-between">
+					<span>Productive hours</span>
+					<span class="font-semibold text-stone-900">
+						{formatProductiveHours(reviewStats?.productiveHours ?? 0)}
+					</span>
+				</div>
+			</div>
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-60"
+					onclick={closeReviewDay}
+					disabled={reviewSubmitting}
+				>
+					Close
+				</button>
+				<button
+					type="button"
+					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
+					onclick={() => void startNextDayPlanning()}
+					disabled={reviewSubmitting}
+				>
+					Start next day
+				</button>
+			</div>
+		</div>
+	</div>
 {/if}
 
 <LogModal

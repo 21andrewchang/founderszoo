@@ -6,3 +6,5 @@
 - [ ] Row overlay when both halves share the same title
 - [ ] Status propagation across adjacent blocks with the same title
 - [ ] Shift-backwards guard that blocks moving before current time
+
+# review day and planning
