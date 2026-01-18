@@ -272,7 +272,7 @@
 
 			const { data: hoursRows, error: hoursErr } = await supabase
 				.from('hours')
-				.select('day_id, hour, half, title, todo')
+				.select('day_id, hour, half, title, status')
 				.in('day_id', dayIds);
 			if (hoursErr) throw hoursErr;
 
@@ -286,14 +286,16 @@
 				const hour = Number(row.hour);
 				const half = ((row.half as boolean) ? 1 : 0) as 0 | 1;
 				const title = (row.title as string | null) ?? '';
-				const todo = row.todo as boolean | null;
+				const status = row.status as boolean | null;
+
 				if (!dayId || Number.isNaN(hour)) continue;
 				const key = dayToKey.get(dayId);
 				if (!key) continue;
 				if (!blockIsDue(hour, half, currentHour, currentHalf)) continue;
 				const trimmed = title.trim();
-				// todo === false means explicitly incomplete
-				const isComplete = todo === false ? false : trimmed.length > 0 || todo === true;
+				// status === false means explicitly in progress
+				const isComplete = status === false ? false : trimmed.length > 0 || status === true;
+
 				if (!isComplete) continue;
 				filledCounts[key] += 1;
 			}

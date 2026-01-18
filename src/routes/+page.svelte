@@ -147,7 +147,7 @@
 	let dayIdByUser = $state<Record<string, string | null>>({});
 	let isLoading = $state(true);
 
-	type BlockValue = { title: string; todo: boolean | null };
+	type BlockValue = { title: string; status: boolean | null };
 	type BlockRow = { first: BlockValue; second: BlockValue };
 	type HabitBlockRow = { first: string | null; second: string | null };
 	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
@@ -176,7 +176,7 @@
 		hour: number;
 		half: 0 | 1;
 		title: string;
-		todo: boolean | null;
+		status: boolean | null;
 		habitName: string | null;
 		hasHabit: boolean;
 	};
@@ -190,7 +190,7 @@
 		hour: number;
 		half: boolean;
 		title: string | null;
-		todo: boolean | null;
+		status: boolean | null;
 	};
 	type HoursRealtimeState = {
 		channel: RealtimeChannel;
@@ -202,7 +202,7 @@
 		selected_block_half: boolean | number | null;
 	};
 
-	const createEmptyBlock = (): BlockValue => ({ title: '', todo: null });
+	const createEmptyBlock = (): BlockValue => ({ title: '', status: null });
 	let blocksByUser = $state<Record<string, Record<number, BlockRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitBlockRow>>>({});
 	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
@@ -212,7 +212,7 @@
 	let habitHasTodayEntryByUser = $state<Record<string, Record<HabitKey, boolean>>>({});
 
 	let logOpen = $state(false);
-	type TodoCarryoverPrompt = {
+	type BlockCarryoverPrompt = {
 		user_id: string;
 		prevHour: number;
 		prevHalf: 0 | 1;
@@ -221,8 +221,8 @@
 		title: string;
 	};
 
-	let todoCarryPrompt = $state<TodoCarryoverPrompt | null>(null);
-	let isTodoCarrySubmitting = $state(false);
+	let carryoverPrompt = $state<BlockCarryoverPrompt | null>(null);
+	let isCarryoverSubmitting = $state(false);
 	type HabitPrompt = {
 		user_id: string;
 		habitHour: number;
@@ -254,13 +254,13 @@
 		hour: number | null;
 		half: 0 | 1 | null;
 		title: string;
-		todo: boolean | null;
+		status: boolean | null;
 	}>({
 		user_id: null,
 		hour: null,
 		half: null,
 		title: '',
-		todo: null
+		status: null
 	});
 	let selectedBlock = $state<SelectedBlock | null>(null);
 	let hjklBlock = $state<SelectedBlock | null>(null);
@@ -285,9 +285,7 @@
 		const sourceHabit = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		const destinationTitle = (getTitle(user_id, toHour, toHalf) ?? '').trim();
 		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
-		const destinationTodo = getTodo(user_id, toHour, toHalf);
-		const destinationHasContent =
-			destinationTitle.length > 0 || destinationHabit.length > 0 || destinationTodo !== null;
+		const destinationHasContent = destinationTitle.length > 0 || destinationHabit.length > 0;
 		const mode: 'swap' | 'move' = destinationHasContent ? 'swap' : 'move';
 		return {
 			blockLabel: sourceTitle || sourceHabit || 'this block',
@@ -304,8 +302,7 @@
 		const { user_id, hour, half } = pendingDelete;
 		const title = (getTitle(user_id, hour, half) ?? '').trim();
 		const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
-		const todo = getTodo(user_id, hour, half);
-		const hasContent = title.length > 0 || habit.length > 0 || todo !== null;
+		const hasContent = title.length > 0 || habit.length > 0;
 		return {
 			blockLabel: title || habit || 'this block',
 			locationLabel: formatBlockLabel(hour, half),
@@ -325,7 +322,7 @@
 	});
 
 	const modalOverlayActive = $derived.by(() =>
-		Boolean(logOpen || habitCheckPrompt || todoCarryPrompt || pendingMove || pendingDelete)
+		Boolean(logOpen || habitCheckPrompt || carryoverPrompt || pendingMove || pendingDelete)
 	);
 
 	// prevent re-prompting within same block
@@ -351,22 +348,22 @@
 		h: number,
 		half01: 0 | 1,
 		text: string,
-		todo?: boolean | null
+		status?: boolean | null
 	) {
 		const row = ensureBlockRow(user_id, h);
 		if (half01 === 0) {
 			row.first.title = text;
-			if (todo !== undefined) row.first.todo = todo;
+			if (status !== undefined) row.first.status = status;
 		} else {
 			row.second.title = text;
-			if (todo !== undefined) row.second.todo = todo;
+			if (status !== undefined) row.second.status = status;
 		}
 	}
 
-	function setTodo(user_id: string, h: number, half01: 0 | 1, value: boolean | null) {
+	function setStatus(user_id: string, h: number, half01: 0 | 1, value: boolean | null) {
 		const row = ensureBlockRow(user_id, h);
-		if (half01 === 0) row.first.todo = value;
-		else row.second.todo = value;
+		if (half01 === 0) row.first.status = value;
+		else row.second.status = value;
 	}
 
 	function getBlock(user_id: string, h: number, half01: 0 | 1): BlockValue {
@@ -389,8 +386,8 @@
 		return getBlock(user_id, h, half01).title ?? '';
 	}
 
-	function getTodo(user_id: string, h: number, half01: 0 | 1) {
-		return getBlock(user_id, h, half01).todo ?? null;
+	function getStatus(user_id: string, h: number, half01: 0 | 1) {
+		return getBlock(user_id, h, half01).status ?? null;
 	}
 
 	function ensureHabitRow(user_id: string, h: number): HabitBlockRow {
@@ -536,8 +533,8 @@
 		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
 		const hasTodayEntry = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
 		const blockElapsed = blockHasElapsed(h, half01);
-		const blockTodo = getTodo(user_id, h, half01);
-		const blockCompleted = blockTodo === true;
+		const blockStatus = getStatus(user_id, h, half01);
+		const blockCompleted = blockStatus === true;
 		return HABIT_STREAK_KEYS.reduce(
 			(acc, key) => {
 				const promptActive =
@@ -589,9 +586,8 @@
 	}
 	function blockHasContent(user_id: string, h: number, half01: 0 | 1) {
 		const title = getTitle(user_id, h, half01).trim();
-		const todo = getTodo(user_id, h, half01);
 		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
-		return title.length > 0 || todo !== null || habitName.length > 0;
+		return title.length > 0 || habitName.length > 0;
 	}
 	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
@@ -609,7 +605,7 @@
 			hour,
 			half: half === 1,
 			title: name,
-			todo: false,
+			status: false,
 			habit: true
 		}));
 		const { error } = await supabase
@@ -723,7 +719,7 @@
 			user_id,
 			hour,
 			half,
-			value: { title: sourceValue.title ?? '', todo: sourceValue.todo },
+			value: { title: sourceValue.title ?? '', status: sourceValue.status },
 			habitTitle: habitName.length > 0 ? habitName : null
 		};
 		const hourIndex = getHourIndex(hour);
@@ -815,17 +811,12 @@
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
 		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
-		const todoValue = getTodo(viewerUserId, hour, selectedBlock.half);
-		if (todoValue !== null) {
-			void toggleTodo(viewerUserId, hour, selectedBlock.half);
-			return true;
-		}
-
 		const habitName = getHabitTitle(viewerUserId, hour, selectedBlock.half);
 		if ((habitName ?? '').trim().length > 0) return true;
 
 		const title = getTitle(viewerUserId, hour, selectedBlock.half);
-		if (title.trim().length > 0) return false;
+		if (title.trim().length === 0) return true;
+		void cycleStatus(viewerUserId, hour, selectedBlock.half);
 		return true;
 	}
 
@@ -846,17 +837,17 @@
 			const { hour, half } = blockFromIndex(idx);
 			if (hour === undefined) continue;
 			const title = getTitle(user_id, hour, half);
-			const todo = getTodo(user_id, hour, half);
+			const status = getStatus(user_id, hour, half);
 			const habitName = getHabitTitle(user_id, hour, half);
 			const hasHabit = (habitName ?? '').trim().length > 0;
-			const hasContent = title.trim().length > 0 || todo !== null || hasHabit;
+			const hasContent = title.trim().length > 0 || hasHabit;
 			if (!hasContent) continue;
 			entries.push({
 				index: idx,
 				hour,
 				half,
 				title: title ?? '',
-				todo: todo ?? null,
+				status: status ?? null,
 				habitName,
 				hasHabit
 			});
@@ -935,7 +926,7 @@
 			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
 			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
-			setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.todo ?? null);
+			setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.status ?? null);
 			if (move.entry.hasHabit) {
 				setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
 			}
@@ -950,7 +941,7 @@
 			try {
 				const updates = new Map<
 					string,
-					{ day_id: string; hour: number; half: boolean; title: string; todo: boolean | null }
+					{ day_id: string; hour: number; half: boolean; title: string; status: boolean | null }
 				>();
 				for (const entry of clearEntries) {
 					updates.set(`${entry.hour}-${entry.half}`, {
@@ -958,7 +949,7 @@
 						hour: entry.hour,
 						half: entry.half === 1,
 						title: '',
-						todo: null
+						status: null
 					});
 				}
 				for (const move of moves) {
@@ -967,15 +958,14 @@
 					const habitName = move.entry.habitName ?? null;
 					const baseTitle = move.entry.title ?? '';
 					const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
-					const hasHoursContent =
-						resolvedTitle.trim().length > 0 || move.entry.todo !== null || move.entry.hasHabit;
+					const hasHoursContent = resolvedTitle.trim().length > 0 || move.entry.hasHabit;
 					if (!hasHoursContent) continue;
 					updates.set(`${toHour}-${toHalf}`, {
 						day_id,
 						hour: toHour,
 						half: toHalf === 1,
 						title: resolvedTitle,
-						todo: move.entry.todo
+						status: move.entry.status
 					});
 				}
 				if (updates.size > 0) {
@@ -997,9 +987,9 @@
 		if (maybeHandlePaste(user_id, hour, half)) return;
 		openEditor(user_id, hour, half, normal);
 	}
-	function handleBlockToggle(user_id: string, hour: number, half: 0 | 1) {
+	function handleBlockCycle(user_id: string, hour: number, half: 0 | 1) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
-		void toggleTodo(user_id, hour, half);
+		void cycleStatus(user_id, hour, half);
 	}
 
 	function cleanupDragImage() {
@@ -1253,7 +1243,7 @@
 	async function loadHoursForDay(user_id: string, day_id: string) {
 		const { data, error } = await supabase
 			.from('hours')
-			.select('hour, half, title, todo')
+			.select('hour, half, title, status')
 			.eq('day_id', day_id);
 		if (error) throw error;
 		const next: Record<number, BlockRow> = {};
@@ -1262,7 +1252,7 @@
 			const half01 = (r.half ? 1 : 0) as 0 | 1;
 			const blockValue: BlockValue = {
 				title: r.title ?? '',
-				todo: r.todo as boolean | null
+				status: r.status as boolean | null
 			};
 			next[h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
 			if (half01 === 0) next[h].first = blockValue;
@@ -1280,7 +1270,7 @@
 			setTitle(user_id, hour, half01, '', null);
 			return;
 		}
-		setTitle(user_id, hour, half01, value.title ?? '', value.todo ?? null);
+		setTitle(user_id, hour, half01, value.title ?? '', value.status ?? null);
 	}
 	function handleHoursRealtimeChange(
 		user_id: string,
@@ -1346,7 +1336,7 @@
 
 		const blockValue: BlockValue = {
 			title: row.title ?? '',
-			todo: (row.todo as boolean | null) ?? null
+			status: (row.status as boolean | null) ?? null
 		};
 		applyRealtimeBlockValue(user_id, hour, half, blockValue);
 	}
@@ -1594,7 +1584,7 @@
 			hour: h,
 			half: half01,
 			title: block.title ?? '',
-			todo: block.todo ?? null
+			status: block.status ?? null
 		};
 		editorMode = normal ?? editorMode;
 		logOpen = true;
@@ -1607,7 +1597,7 @@
 		suppressHoverSelection = true;
 	}
 
-	async function saveLog(text: string, todo: boolean | null, hour: number, half: 0 | 1) {
+	async function saveLog(text: string, status: boolean | null, hour: number, half: 0 | 1) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
 		const day_id = dayIdByUser[user_id];
@@ -1618,13 +1608,13 @@
 			hour: number;
 			half: boolean;
 			title: string;
-			todo: boolean | null;
+			status: boolean | null;
 		} = {
 			day_id,
 			hour,
 			half: half === 1,
 			title: text,
-			todo
+			status
 		};
 		const { error } = await supabase
 			.from('hours')
@@ -1635,7 +1625,7 @@
 			return;
 		}
 
-		setTitle(user_id, hour, half, text, todo);
+		setTitle(user_id, hour, half, text, status);
 		if (viewerUserId && user_id === viewerUserId) {
 			const hourIndex = getHourIndex(hour);
 			if (hourIndex !== -1) {
@@ -1648,35 +1638,32 @@
 		closeLogModal();
 	}
 
-	async function toggleTodo(user_id: string, hour: number, half: 0 | 1) {
+	async function cycleStatus(user_id: string, hour: number, half: 0 | 1) {
 		if (viewerUserId !== user_id) return;
 		if (suppressNextClick) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
-		const habitName = getHabitTitle(user_id, hour, half);
-		const habitKey = normalizeHabitName(habitName);
-		const isHabitBlock = habitKey !== null;
+		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
+		if (habitName.length > 0) return;
 		const block = getBlock(user_id, hour, half);
-		if (block.todo === null) return;
-		const nextTodo = !block.todo;
+		const title = (block.title ?? '').trim();
+		if (!title) return;
+		const nextStatus = block.status === null ? false : block.status === false ? true : null;
 		const { error } = await supabase.from('hours').upsert(
 			{
 				day_id,
 				hour,
 				half: half === 1,
 				title: block.title ?? '',
-				todo: nextTodo
+				status: nextStatus
 			},
 			{ onConflict: 'day_id,hour,half' }
 		);
 		if (error) {
-			console.error('toggle todo error', error);
+			console.error('cycle status error', error);
 			return;
 		}
-		setTodo(user_id, hour, half, nextTodo);
-		if (isHabitBlock) {
-			void loadHabitStreaksForUser(user_id);
-		}
+		setStatus(user_id, hour, half, nextStatus);
 	}
 
 	function cancelPendingMove() {
@@ -1734,16 +1721,15 @@
 		const sourceBlock = getBlock(user_id, fromHour, fromHalf);
 		const sourceValue: BlockValue = {
 			title: sourceBlock.title ?? '',
-			todo: sourceBlock.todo
+			status: sourceBlock.status
 		};
 		const destinationHadEntry = blockHasContent(user_id, toHour, toHalf);
 		const destinationBlockValue = destinationHadEntry ? getBlock(user_id, toHour, toHalf) : null;
 		const destinationValue: BlockValue | null = destinationBlockValue
-			? { title: destinationBlockValue.title ?? '', todo: destinationBlockValue.todo }
+			? { title: destinationBlockValue.title ?? '', status: destinationBlockValue.status }
 			: null;
 		const destinationHasHoursContent =
-			destinationValue !== null &&
-			((destinationValue.title ?? '').trim().length > 0 || destinationValue.todo !== null);
+			destinationValue !== null && (destinationValue.title ?? '').trim().length > 0;
 		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
 
@@ -1772,7 +1758,7 @@
 			return false;
 		}
 
-		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.todo);
+		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.status);
 		if (destinationHasHoursContent && destinationValue) {
 			const { error: swapInsertErr } = await supabase.from('hours').upsert(
 				{
@@ -1780,14 +1766,14 @@
 					hour: fromHour,
 					half: fromHalf === 1,
 					title: destinationValue.title ?? '',
-					todo: destinationValue.todo
+					status: destinationValue.status
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
 			if (swapInsertErr) {
 				console.error('block swap insert error', swapInsertErr);
 			}
-			setTitle(user_id, fromHour, fromHalf, destinationValue.title ?? '', destinationValue.todo);
+			setTitle(user_id, fromHour, fromHalf, destinationValue.title ?? '', destinationValue.status);
 		} else {
 			setTitle(user_id, fromHour, fromHalf, '', null);
 		}
@@ -1879,7 +1865,7 @@
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen || todoCarryPrompt || habitCheckPrompt) return;
+		if (!viewerUserId || logOpen || carryoverPrompt || habitCheckPrompt) return;
 
 		const date = localToday();
 		const h = currentHour;
@@ -1893,16 +1879,16 @@
 		const key = blockKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
 
-		// 1) Check if previous block was an *unfinished* TODO
+		// 1) Check if previous block is still in progress
 		const prev = previousBlock(h, half);
 		if (prev) {
 			const { hour: prevHour, half: prevHalf } = prev;
-			const prevTodo = getTodo(viewerUserId, prevHour, prevHalf);
+			const prevStatus = getStatus(viewerUserId, prevHour, prevHalf);
 			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
 			const prevHabitName = (getHabitTitle(viewerUserId, prevHour, prevHalf) ?? '').trim();
 			const prevHabitKey = normalizeHabitName(prevHabitName);
 
-			if (prevHabitKey && prevTodo === false) {
+			if (prevHabitKey && prevStatus === false) {
 				habitCheckPrompt = {
 					user_id: viewerUserId,
 					habitHour: prevHour,
@@ -1916,9 +1902,9 @@
 				return;
 			}
 
-			// Only prompt if previous block is a TODO that is still unfinished (todo === false)
-			if (prevTodo === false && prevTitle.length > 0) {
-				todoCarryPrompt = {
+			// Only prompt if previous block is still in progress (status === false)
+			if (prevStatus === false && prevTitle.length > 0) {
+				carryoverPrompt = {
 					user_id: viewerUserId,
 					prevHour,
 					prevHalf,
@@ -1939,58 +1925,58 @@
 		}
 	}
 
-	async function markPreviousTodoCompletedAndOpenCurrent() {
-		if (!todoCarryPrompt) return;
-		if (isTodoCarrySubmitting) return;
-		isTodoCarrySubmitting = true;
+	async function markPreviousBlockCompleteAndOpenCurrent() {
+		if (!carryoverPrompt) return;
+		if (isCarryoverSubmitting) return;
+		isCarryoverSubmitting = true;
 
-		const { user_id, prevHour, prevHalf, currHour, currHalf } = todoCarryPrompt;
+		const { user_id, prevHour, prevHalf, currHour, currHalf } = carryoverPrompt;
 		try {
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 
 			const prevBlock = getBlock(user_id, prevHour, prevHalf);
 
-			// Mark previous as completed (todo = true)
+			// Mark previous as completed (status = true)
 			const { error } = await supabase.from('hours').upsert(
 				{
 					day_id,
 					hour: prevHour,
 					half: prevHalf === 1,
 					title: prevBlock.title ?? '',
-					todo: true
+					status: true
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
 
 			if (error) {
-				console.error('mark previous todo completed error', error);
+				console.error('mark previous status completed error', error);
 				return;
 			}
 
-			setTodo(user_id, prevHour, prevHalf, true);
+			setStatus(user_id, prevHour, prevHalf, true);
 
 			// Close prompt and open editor for the current block
-			todoCarryPrompt = null;
+			carryoverPrompt = null;
 			openEditor(user_id, currHour, currHalf, false);
 		} finally {
-			isTodoCarrySubmitting = false;
+			isCarryoverSubmitting = false;
 		}
 	}
 
-	async function continuePreviousTodoIntoCurrent() {
-		if (!todoCarryPrompt) return;
-		if (isTodoCarrySubmitting) return;
-		isTodoCarrySubmitting = true;
+	async function continuePreviousBlockIntoCurrent() {
+		if (!carryoverPrompt) return;
+		if (isCarryoverSubmitting) return;
+		isCarryoverSubmitting = true;
 
-		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = todoCarryPrompt;
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = carryoverPrompt;
 		try {
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 
 			const prevBlock = getBlock(user_id, prevHour, prevHalf);
 
-			// 1) Turn previous into a normal block (todo = null, keep title)
+			// 1) Turn previous into a normal block (status = null, keep title)
 			{
 				const { error } = await supabase.from('hours').upsert(
 					{
@@ -1998,18 +1984,18 @@
 						hour: prevHour,
 						half: prevHalf === 1,
 						title: prevBlock.title ?? '',
-						todo: null
+						status: null
 					},
 					{ onConflict: 'day_id,hour,half' }
 				);
 				if (error) {
-					console.error('clear previous todo error', error);
+					console.error('clear previous status error', error);
 					return;
 				}
-				setTodo(user_id, prevHour, prevHalf, null);
+				setStatus(user_id, prevHour, prevHalf, null);
 			}
 
-			// 2) Copy into current block as a new TODO
+			// 2) Copy into current block as in progress
 			{
 				const { error } = await supabase.from('hours').upsert(
 					{
@@ -2017,28 +2003,28 @@
 						hour: currHour,
 						half: currHalf === 1,
 						title,
-						todo: false
+						status: false
 					},
 					{ onConflict: 'day_id,hour,half' }
 				);
 				if (error) {
-					console.error('create continued todo in current block error', error);
+					console.error('create continued status in current block error', error);
 					return;
 				}
 				setTitle(user_id, currHour, currHalf, title, false);
 			}
 
-			todoCarryPrompt = null;
+			carryoverPrompt = null;
 			// You can choose whether to auto-open the editor here.
 			// Spec says just copy it, so no openEditor() call.
 		} finally {
-			isTodoCarrySubmitting = false;
+			isCarryoverSubmitting = false;
 		}
 	}
 
-	function cancelTodoCarryPrompt() {
-		if (isTodoCarrySubmitting) return;
-		todoCarryPrompt = null;
+	function cancelCarryoverPrompt() {
+		if (isCarryoverSubmitting) return;
+		carryoverPrompt = null;
 	}
 
 	async function resolveHabitPrompt(completed: boolean) {
@@ -2056,7 +2042,7 @@
 					hour: habitHour,
 					half: habitHalf === 1,
 					title: block.title ?? '',
-					todo: completed
+					status: completed
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
@@ -2064,7 +2050,7 @@
 				console.error('habit prompt update error', error);
 				return;
 			}
-			setTodo(user_id, habitHour, habitHalf, completed);
+			setStatus(user_id, habitHour, habitHalf, completed);
 			habitCheckPrompt = null;
 			void loadHabitStreaksForUser(user_id);
 		} finally {
@@ -2365,11 +2351,11 @@
 										>
 											<Block
 												title={getTitle(person.user_id, h, 0)}
-												todo={getTodo(person.user_id, h, 0)}
+												status={getStatus(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
-												onToggleTodo={() => handleBlockToggle(person.user_id, h, 0)}
+												onCycleStatus={() => handleBlockCycle(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 0)}
 												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
@@ -2395,11 +2381,11 @@
 										>
 											<Block
 												title={getTitle(person.user_id, h, 1)}
-												todo={getTodo(person.user_id, h, 1)}
+												status={getStatus(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
-												onToggleTodo={() => handleBlockToggle(person.user_id, h, 1)}
+												onCycleStatus={() => handleBlockCycle(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 1)}
 												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
@@ -2445,7 +2431,7 @@
 	initialHour={draft.hour}
 	initialHalf={draft.half}
 	initialTitle={draft.title}
-	initialTodo={draft.todo}
+	initialStatus={draft.status}
 	habitStreaks={logModalHabitStreaks}
 />
 
@@ -2479,31 +2465,31 @@
 	</div>
 {/if}
 
-{#if todoCarryPrompt}
+{#if carryoverPrompt}
 	<div class="fixed inset-0 z-60 flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
-				Previous block TODO
+				Previous block in progress
 			</div>
 			<div class="mt-1 text-sm font-medium text-stone-900">Did you complete this?</div>
 			<div class="mt-2 truncate text-sm text-stone-700">
-				{todoCarryPrompt?.title}
+				{carryoverPrompt?.title}
 			</div>
 
 			<div class="mt-4 flex justify-end gap-2">
 				<button
 					type="button"
 					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100"
-					onclick={continuePreviousTodoIntoCurrent}
-					disabled={isTodoCarrySubmitting}
+					onclick={continuePreviousBlockIntoCurrent}
+					disabled={isCarryoverSubmitting}
 				>
 					Continue this block
 				</button>
 				<button
 					type="button"
 					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
-					onclick={markPreviousTodoCompletedAndOpenCurrent}
-					disabled={isTodoCarrySubmitting}
+					onclick={markPreviousBlockCompleteAndOpenCurrent}
+					disabled={isCarryoverSubmitting}
 				>
 					Mark done
 				</button>
@@ -2512,8 +2498,8 @@
 			<button
 				type="button"
 				class="mt-2 text-xs text-stone-400 hover:text-stone-600"
-				onclick={cancelTodoCarryPrompt}
-				disabled={isTodoCarrySubmitting}
+				onclick={cancelCarryoverPrompt}
+				disabled={isCarryoverSubmitting}
 			>
 				Cancel
 			</button>

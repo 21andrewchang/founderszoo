@@ -115,7 +115,7 @@
 				{#if warningShouldRender}
 					<div class={`rounded-lg border px-3 py-2 text-xs ${warningClasses}`}>
 						{#if isDelete}
-							This will permanently clear this block including TODOs and Habits.
+							This will permanently clear this block including progress and habits.
 						{:else}
 							{#if isSwap}
 								This will swap with

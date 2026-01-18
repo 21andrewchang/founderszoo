@@ -11,10 +11,10 @@
 
 	const props = $props<{
 		title?: string;
-		todo?: boolean | null;
+		status?: boolean | null;
 		editable?: boolean;
 		onSelect?: () => void;
-		onToggleTodo?: () => void;
+		onCycleStatus?: () => void;
 		onPrimaryAction?: () => boolean;
 		selected?: boolean;
 		habit?: string | null;
@@ -26,8 +26,8 @@
 	const title = $derived(props.title ?? '');
 	const editable = $derived(props.editable ?? false);
 	const onSelect = $derived(props.onSelect ?? (() => {}));
-	const todo = $derived(props.todo ?? null);
-	const onToggleTodo = $derived(props.onToggleTodo ?? (() => {}));
+	const status = $derived(props.status ?? null);
+	const onCycleStatus = $derived(props.onCycleStatus ?? (() => {}));
 	const onPrimaryAction = $derived(props.onPrimaryAction ?? (() => false));
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
@@ -58,20 +58,20 @@
 
 	const habitClasses = $derived(
 		isHabit
-			? `border border-stone-700 text-stone-900 ${todo ? '' : 'border-dashed'}`
+			? 'border border-stone-700 text-stone-900'
 			: `${
 					isFilled ? 'bg-stone-100 text-stone-900' : 'bg-stone-100 text-stone-600 border-stone-100'
 				}`
 	);
 
-	const showTodo = $derived(todo !== null);
+	const showStatus = $derived(isFilled && !isHabit);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleBlockClick() {
 		if (onPrimaryAction()) return;
-		if (todo !== null) {
-			onToggleTodo();
+		if (showStatus) {
+			onCycleStatus();
 			return;
 		}
 		if (!canOpen) return;
@@ -138,45 +138,46 @@
 		lastStreakKind = kind;
 	});
 
-	let todoAnim = $state<'none' | 'check' | 'uncheck'>('none');
-	let lastTodo = $state<boolean | null>(null);
+	let statusAnim = $state<'none' | 'check' | 'uncheck' | 'progress'>('none');
+	let lastStatus = $state<boolean | null>(null);
 
-	function triggerTodoAnim(kind: 'check' | 'uncheck') {
+	function triggerStatusAnim(kind: 'check' | 'uncheck' | 'progress') {
 		if (typeof window === 'undefined') return;
-		todoAnim = 'none';
+		statusAnim = 'none';
 		requestAnimationFrame(() => {
-			todoAnim = kind;
+			statusAnim = kind;
 			window.setTimeout(() => {
-				todoAnim = 'none';
+				statusAnim = 'none';
 			}, 220);
 		});
 	}
 
 	$effect(() => {
-		// Only animate when this block has a todo indicator at all
-		if (todo === null) {
-			lastTodo = null;
-			todoAnim = 'none';
+		if (!showStatus) {
+			lastStatus = null;
+			statusAnim = 'none';
 			return;
 		}
 
 		// First render: just set baseline
-		if (lastTodo === null) {
-			lastTodo = todo;
+		if (lastStatus === null && status === null) {
+			lastStatus = status;
 			return;
 		}
 
-		// Changed from unchecked → checked
-		if (lastTodo === false && todo === true) {
-			triggerTodoAnim('check');
+		if (lastStatus === null && status === false) {
+			triggerStatusAnim('progress');
 		}
 
-		// Changed from checked → unchecked
-		if (lastTodo === true && todo === false) {
-			triggerTodoAnim('uncheck');
+		if (lastStatus !== true && status === true) {
+			triggerStatusAnim('check');
 		}
 
-		lastTodo = todo;
+		if (lastStatus === true && status !== true) {
+			triggerStatusAnim('uncheck');
+		}
+
+		lastStatus = status;
 	});
 </script>
 
@@ -223,16 +224,14 @@
 		{/if}
 	</span>
 
-	{#if showTodo && !isHabit}
+	{#if showStatus}
 		<div
 			class="relative ml-3 grid h-3 w-3 place-items-center rounded-full focus:outline-none"
-			class:bg-stone-700={todo}
-			class:border={todo === false}
-			class:border-stone-400={todo === false}
-			class:todo-pop-checked={todoAnim === 'check'}
-			class:todo-pop-unchecked={todoAnim === 'uncheck'}
+			class:bg-stone-700={status === true}
+			class:status-pop-checked={statusAnim === 'check'}
+			class:status-pop-unchecked={statusAnim === 'uncheck'}
 		>
-			{#if todo}
+			{#if status === true}
 				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-50" fill="none">
 					<path
 						d="M7 12.5 L10.25 15.75 L16.75 9.25"
@@ -242,15 +241,27 @@
 						stroke-linejoin="round"
 						pathLength="100"
 						class="check"
-						class:check-animated={todoAnim === 'check'}
+						class:check-animated={statusAnim === 'check'}
 					/>
 				</svg>
 			{:else}
-				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-400" fill="none" />
+				<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-700" fill="none">
+					<circle
+						cx="12"
+						cy="12"
+						r="9"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						class:status-ring-dashed={status === null}
+						class:status-ring-solid={status === false}
+						class:status-ring-progress={statusAnim === 'progress'}
+					/>
+				</svg>
 			{/if}
 
-			{#if todoAnim === 'check'}
-				<span class="todo-halo absolute inset-0 rounded-full" aria-hidden="true" />
+			{#if statusAnim === 'check'}
+				<span class="status-halo absolute inset-0 rounded-full" aria-hidden="true" />
 			{/if}
 		</div>
 	{/if}
@@ -289,21 +300,33 @@
 		}
 	}
 
-	.todo-pop-checked {
-		animation: todo-pop-checked 0.22s ease-out;
+	.status-pop-checked {
+		animation: status-pop-checked 0.22s ease-out;
 	}
 
-	.todo-pop-unchecked {
-		animation: todo-pop-unchecked 0.18s ease-in;
+	.status-pop-unchecked {
+		animation: status-pop-unchecked 0.18s ease-in;
 	}
 
-	.todo-halo {
+	.status-ring-dashed {
+		stroke-dasharray: 3 3;
+	}
+
+	.status-ring-solid {
+		stroke-dasharray: 0;
+	}
+
+	.status-ring-progress {
+		animation: status-ring-progress 0.22s ease-out;
+	}
+
+	.status-halo {
 		background: radial-gradient(circle, rgba(15, 23, 42, 0.25), transparent 70%);
-		animation: todo-halo-fade 0.25s ease-out forwards;
+		animation: status-halo-fade 0.25s ease-out forwards;
 		pointer-events: none;
 	}
 
-	@keyframes todo-pop-checked {
+	@keyframes status-pop-checked {
 		0% {
 			transform: scale(0.9);
 		}
@@ -315,7 +338,7 @@
 		}
 	}
 
-	@keyframes todo-pop-unchecked {
+	@keyframes status-pop-unchecked {
 		0% {
 			transform: scale(1);
 		}
@@ -327,7 +350,7 @@
 		}
 	}
 
-	@keyframes todo-halo-fade {
+	@keyframes status-halo-fade {
 		0% {
 			opacity: 0.4;
 			transform: scale(0.6);
@@ -335,6 +358,15 @@
 		100% {
 			opacity: 0;
 			transform: scale(1.4);
+		}
+	}
+
+	@keyframes status-ring-progress {
+		0% {
+			stroke-dasharray: 3 3;
+		}
+		100% {
+			stroke-dasharray: 0;
 		}
 	}
 

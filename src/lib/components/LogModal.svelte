@@ -15,17 +15,17 @@
 		initialHour = null,
 		initialHalf = null,
 		initialTitle = '',
-		initialTodo = null,
+		initialStatus = null,
 		habitStreaks = null
 	} = $props<{
 		normal?: boolean;
 		open?: boolean;
 		onClose?: () => void;
-		onSave?: (text: string, todo: boolean | null, hour: number, half: 0 | 1) => void;
+		onSave?: (text: string, status: boolean | null, hour: number, half: 0 | 1) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
-		initialTodo?: boolean | null;
+		initialStatus?: boolean | null;
 		habitStreaks?: Record<string, PlayerStreak | null> | null;
 	}>();
 
@@ -72,7 +72,7 @@
 	};
 
 	let text = $state('');
-	let todo = $state<boolean | null>(null);
+	let status = $state<boolean | null>(null);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
@@ -124,7 +124,7 @@
 
 		if (mode === 'normal' && key === 't') {
 			e.preventDefault();
-			todo = todo === null ? false : null;
+			status = status === null ? false : null;
 			return;
 		}
 
@@ -161,9 +161,9 @@
 
 		saving = true;
 		try {
-			await Promise.resolve(onSave(value, todo, hour, half));
+			await Promise.resolve(onSave(value, status, hour, half));
 			text = '';
-			todo = null;
+			status = null;
 			onClose();
 		} finally {
 			saving = false;
@@ -186,7 +186,7 @@
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
-		todo = initialTodo ?? null;
+		status = initialStatus ?? null;
 	});
 
 	function fillPreset(s: string) {
@@ -250,7 +250,7 @@
 					bind:value={text}
 					autocomplete="off"
 				/>
-				{#if todo === false}
+				{#if status === false}
 					<div
 						class="relative mr-5 grid h-3 w-3 rounded-full p-3"
 						transition:fly={{ y: 2, duration: 200 }}
@@ -288,12 +288,17 @@
 				<button
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 					onclick={() => {
-						if (todo === null) todo = false;
-						else todo = null;
+						if (status === null) status = false;
+						else status = null;
 					}}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						<span class={`h-2 w-2 rounded-full border border-stone-400`} />
+						<span
+							class="h-2 w-2 rounded-full border"
+							class:border-dashed={status === null}
+							class:border-stone-400={status === null}
+							class:border-stone-700={status !== null}
+						/>
 						{#if mode === 'normal'}
 							<span
 								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
@@ -303,7 +308,7 @@
 							</span>
 						{/if}
 					</span>
-					Todo
+					In progress
 				</button>
 			</div>
 
