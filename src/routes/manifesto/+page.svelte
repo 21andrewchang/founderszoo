@@ -7,9 +7,6 @@
 		paragraphs: string[];
 	};
 
-    const sectionDelay = 200;
-    const paragraphDelay = 100;
-
 	const sections: Section[] = [
 		{
 			title: 'synergy',
