@@ -16,17 +16,25 @@
 		initialHalf = null,
 		initialTitle = '',
 		initialStatus = null,
-		habitStreaks = null
+		habitStreaks = null,
+		maxBlockCountFor = null
 	} = $props<{
 		normal?: boolean;
 		open?: boolean;
 		onClose?: () => void;
-		onSave?: (text: string, status: boolean | null, hour: number, half: 0 | 1) => void;
+		onSave?: (
+			text: string,
+			status: boolean | null,
+			hour: number,
+			half: 0 | 1,
+			blockCount: number
+		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
 		initialStatus?: boolean | null;
 		habitStreaks?: Record<string, PlayerStreak | null> | null;
+		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
@@ -73,6 +81,17 @@
 
 	let text = $state('');
 	let status = $state<boolean | null>(null);
+	let blockCount = $state(1);
+	const statusLabel = $derived(
+		status === true ? 'Completed' : status === false ? 'In progress' : 'Planned'
+	);
+	const statusBorderClass = $derived(
+		status === true
+			? 'border-stone-800 bg-stone-800'
+			: status === false
+				? 'border-stone-700'
+				: 'border-stone-400 border-dashed'
+	);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
@@ -103,6 +122,19 @@
 		if (e.target === e.currentTarget) onClose();
 	}
 
+	function cycleStatus() {
+		status = status === null ? false : status === false ? true : null;
+	}
+
+	function maxBlockCount() {
+		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
+	}
+
+	function cycleBlockCount() {
+		const maxCount = maxBlockCount();
+		blockCount = blockCount >= maxCount ? 1 : blockCount + 1;
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
@@ -124,7 +156,7 @@
 
 		if (mode === 'normal' && key === 't') {
 			e.preventDefault();
-			status = status === null ? false : null;
+			cycleBlockCount();
 			return;
 		}
 
@@ -161,7 +193,7 @@
 
 		saving = true;
 		try {
-			await Promise.resolve(onSave(value, status, hour, half));
+			await Promise.resolve(onSave(value, status, hour, half, blockCount));
 			text = '';
 			status = null;
 			onClose();
@@ -187,6 +219,15 @@
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
+		blockCount = 1;
+	});
+
+	$effect(() => {
+		if (!open) return;
+		const maxCount = maxBlockCount();
+		if (blockCount > maxCount) {
+			blockCount = maxCount;
+		}
 	});
 
 	function fillPreset(s: string) {
@@ -250,16 +291,15 @@
 					bind:value={text}
 					autocomplete="off"
 				/>
-				{#if status === false}
-					<div
-						class="relative mr-5 grid h-3 w-3 rounded-full p-3"
-						transition:fly={{ y: 2, duration: 200 }}
-					>
-						<span
-							class="pointer-events-none absolute inset-0 rounded-full border border-[1px] border-stone-400 transition duration-200 ease-out"
-						/>
-					</div>
-				{/if}
+				<button
+					type="button"
+					class="relative mr-5 grid h-3 w-3 rounded-full p-3"
+					onclick={cycleStatus}
+				>
+					<span
+						class={`pointer-events-none absolute inset-0 rounded-full border border-[1px] transition duration-200 ease-out ${statusBorderClass}`}
+					/>
+				</button>
 			</div>
 
 			<div class="flex flex-row gap-1 px-4 pb-2">
@@ -286,19 +326,12 @@
 					</button>
 				{/each}
 				<button
+					type="button"
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					onclick={() => {
-						if (status === null) status = false;
-						else status = null;
-					}}
+					onclick={cycleBlockCount}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						<span
-							class="h-2 w-2 rounded-full border"
-							class:border-dashed={status === null}
-							class:border-stone-400={status === null}
-							class:border-stone-700={status !== null}
-						/>
+						<span class="h-2 w-2 rounded-full border border-stone-400" />
 						{#if mode === 'normal'}
 							<span
 								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
@@ -308,7 +341,17 @@
 							</span>
 						{/if}
 					</span>
-					In progress
+					{blockCount} block{blockCount === 1 ? '' : 's'}
+				</button>
+				<button
+					type="button"
+					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					onclick={cycleStatus}
+				>
+					<span class="relative flex h-3 w-3 items-center justify-center">
+						<span class={`h-2 w-2 rounded-full border ${statusBorderClass}`} />
+					</span>
+					{statusLabel}
 				</button>
 			</div>
 

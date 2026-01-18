@@ -31,7 +31,7 @@
 	const isDelete = $derived(mode === 'delete');
 	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : 'Move');
 	const actionVerbIng = $derived(isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : 'Moving…');
-	const warningShouldRender = $derived(isDelete || hasDestinationContent);
+	const warningShouldRender = $derived(isDelete || hasDestinationContent || isHabit);
 	const warningClasses = $derived(
 		isDelete
 			? 'border-rose-200 bg-rose-50 text-rose-900'
@@ -116,7 +116,7 @@
 					<div class={`rounded-lg border px-3 py-2 text-xs ${warningClasses}`}>
 						{#if isDelete}
 							This will permanently clear this block including progress and habits.
-						{:else}
+						{:else if hasDestinationContent}
 							{#if isSwap}
 								This will swap with
 							{:else}
@@ -128,6 +128,8 @@
 								the existing entry
 							{/if}
 							at <span class="font-medium">{toLabel}</span>.
+						{:else if isHabit}
+							This will clear the habit from <span class="font-medium">{fromLabel}</span>.
 						{/if}
 					</div>
 				{/if}

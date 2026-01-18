@@ -720,8 +720,27 @@
 		return getDisplayTitle(user_id, h, half01).length === 0;
 	}
 	function blockHasContent(user_id: string, h: number, half01: 0 | 1) {
-		return getDisplayTitle(user_id, h, half01).length > 0;
+		const title = getTitle(user_id, h, half01).trim();
+		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
+		return title.length > 0 || habitName.length > 0;
 	}
+	function maxBlockCountFor(user_id: string | null, h: number, half01: 0 | 1) {
+		if (!user_id) return 1;
+		const hourIndex = getHourIndex(h);
+		if (hourIndex === -1) return 1;
+		const totalBlocks = hours.length * 2;
+		let maxCount = 1;
+		for (let offset = 1; offset <= 2; offset += 1) {
+			const nextIndex = blockIndex(hourIndex, half01) + offset;
+			if (nextIndex >= totalBlocks) return maxCount;
+			const { hour: nextHour, half: nextHalf } = blockFromIndex(nextIndex);
+			if (nextHour === undefined) return maxCount;
+			if (blockHasContent(user_id, nextHour, nextHalf)) return maxCount;
+			maxCount += 1;
+		}
+		return maxCount;
+	}
+
 	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
 		if (isCutSource(user_id, h, half01)) return false;
@@ -1687,37 +1706,54 @@
 		suppressHoverSelection = true;
 	}
 
-	async function saveLog(text: string, status: boolean | null, hour: number, half: 0 | 1) {
+	async function saveLog(
+		text: string,
+		status: boolean | null,
+		hour: number,
+		half: 0 | 1,
+		blockCount: number
+	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
 
-		const hourPayload: {
-			day_id: string;
-			hour: number;
-			half: boolean;
-			title: string;
-			status: boolean | null;
-		} = {
+		const hourIndex = getHourIndex(hour);
+		if (hourIndex === -1) return;
+		const totalBlocks = hours.length * 2;
+		const maxCount = maxBlockCountFor(user_id, hour, half);
+		const desiredCount = Math.min(blockCount, maxCount);
+		const targets: { hour: number; half: 0 | 1 }[] = [];
+		for (let offset = 0; offset < desiredCount; offset += 1) {
+			const nextIndex = blockIndex(hourIndex, half) + offset;
+			if (nextIndex >= totalBlocks) break;
+			const { hour: nextHour, half: nextHalf } = blockFromIndex(nextIndex);
+			if (nextHour === undefined) break;
+			if (offset > 0 && blockHasContent(user_id, nextHour, nextHalf)) break;
+			targets.push({ hour: nextHour, half: nextHalf });
+		}
+		if (targets.length === 0) return;
+
+		const payload = targets.map((target) => ({
 			day_id,
-			hour,
-			half: half === 1,
+			hour: target.hour,
+			half: target.half === 1,
 			title: text,
 			status
-		};
+		}));
 		const { error } = await supabase
 			.from('hours')
-			.upsert(hourPayload, { onConflict: 'day_id,hour,half' });
+			.upsert(payload, { onConflict: 'day_id,hour,half' });
 
 		if (error) {
 			console.error('save error', error);
 			return;
 		}
 
-		setTitle(user_id, hour, half, text, status);
+		for (const target of targets) {
+			setTitle(user_id, target.hour, target.half, text, status);
+		}
 		if (viewerUserId && user_id === viewerUserId) {
-			const hourIndex = getHourIndex(hour);
 			if (hourIndex !== -1) {
 				setSelectedBlock({ hourIndex, half });
 				hoverBlock = null;
@@ -2681,6 +2717,7 @@
 	initialTitle={draft.title}
 	initialStatus={draft.status}
 	habitStreaks={logModalHabitStreaks}
+	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 />
 
 {#if habitCheckPrompt}
