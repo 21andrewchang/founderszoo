@@ -1371,6 +1371,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	}
 	function ensureHoursRealtime(user_id: string, day_id: string | null) {
 		const existing = hoursRealtimeByUser[user_id];
+		if (viewerUserId && user_id === viewerUserId) {
+			if (existing) teardownHoursRealtime(user_id);
+			return;
+		}
 		if (!day_id) {
 			if (existing) teardownHoursRealtime(user_id);
 			return;
@@ -1424,6 +1428,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	}
 	function ensureSelectedSlotRealtime(user_id: string) {
 		const existing = selectedSlotRealtimeByUser[user_id];
+		if (viewerUserId && user_id === viewerUserId) {
+			if (existing) teardownSelectedSlotRealtime(user_id);
+			return;
+		}
 		if (existing) return;
 		const channel = supabase.channel(`selected-slot:${user_id}`);
 		channel.on(
