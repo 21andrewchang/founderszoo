@@ -272,9 +272,19 @@
 		currHalf: 0 | 1;
 		title: string;
 	};
+	type PlannedPrompt = {
+		user_id: string;
+		prevHour: number;
+		prevHalf: 0 | 1;
+		currHour: number;
+		currHalf: 0 | 1;
+		title: string;
+	};
 
 	let carryoverPrompt = $state<BlockCarryoverPrompt | null>(null);
+	let plannedPrompt = $state<PlannedPrompt | null>(null);
 	let isCarryoverSubmitting = $state(false);
+	let isPlannedSubmitting = $state(false);
 	type HabitPrompt = {
 		user_id: string;
 		habitHour: number;
@@ -375,7 +385,13 @@
 
 	const modalOverlayActive = $derived.by(() =>
 		Boolean(
-			logOpen || habitCheckPrompt || carryoverPrompt || pendingMove || pendingDelete || reviewOpen
+			logOpen ||
+				habitCheckPrompt ||
+				carryoverPrompt ||
+				plannedPrompt ||
+				pendingMove ||
+				pendingDelete ||
+				reviewOpen
 		)
 	);
 
@@ -1022,8 +1038,12 @@
 		}
 		return lastFixed;
 	}
-	async function shiftBlocksFromIndex(user_id: string, startIndex: number, direction: 1 | -1) {
-		if (isShiftSubmitting) return false;
+	async function shiftBlocksOnce(
+		user_id: string,
+		startIndex: number,
+		direction: 1 | -1,
+		confirmOverflow: boolean
+	) {
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return false;
 		const totalBlocks = hours.length * 2;
@@ -1062,7 +1082,7 @@
 			moves.push({ fromIndex: entry.index, toIndex: target, entry });
 			occupiedTargets.add(target);
 		}
-		if (direction === 1 && overflow.length > 0) {
+		if (confirmOverflow && direction === 1 && overflow.length > 0) {
 			const ok = window.confirm(
 				`Shifting will delete ${overflow.length} block${overflow.length === 1 ? '' : 's'}. Continue?`
 			);
@@ -1070,7 +1090,6 @@
 		}
 		const clearEntries = [...overflow, ...moves.map((move) => move.entry)];
 		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
-		isShiftSubmitting = true;
 		for (const entry of clearEntries) {
 			setTitle(user_id, entry.hour, entry.half, '', null);
 			if (entry.hasHabit) setHabitTitle(user_id, entry.hour, entry.half, null);
@@ -1092,64 +1111,76 @@
 				setSelectedBlock({ hourIndex, half });
 			}
 		}
-		const persistShift = async () => {
-			try {
-				if (clearEntries.length > 0) {
-					const deletions = await Promise.all(
-						clearEntries.map((entry) =>
-							supabase
-								.from('hours')
-								.delete()
-								.eq('day_id', day_id)
-								.eq('hour', entry.hour)
-								.eq('half', entry.half === 1)
-						)
-					);
-					const deleteErr = deletions.find((result) => result.error)?.error;
-					if (deleteErr) {
-						console.error('shift blocks delete error', deleteErr);
-					}
-				}
-				const updates = new Map<
-					string,
-					{ day_id: string; hour: number; half: boolean; title: string; status: boolean | null }
-				>();
-				for (const move of moves) {
-					const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
-					if (toHour === undefined) continue;
-					const habitName = move.entry.habitName ?? null;
-					const baseTitle = move.entry.title ?? '';
-					const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
-					const hasHoursContent = resolvedTitle.trim().length > 0 || move.entry.hasHabit;
-					if (!hasHoursContent) continue;
-					updates.set(`${toHour}-${toHalf}`, {
-						day_id,
-						hour: toHour,
-						half: toHalf === 1,
-						title: resolvedTitle,
-						status: move.entry.status
-					});
-				}
-				if (updates.size > 0) {
-					const { error: upsertErr } = await supabase
+		if (clearEntries.length > 0) {
+			const deletions = await Promise.all(
+				clearEntries.map((entry) =>
+					supabase
 						.from('hours')
-						.upsert([...updates.values()], { onConflict: 'day_id,hour,half' });
-					if (upsertErr) {
-						console.error('shift blocks error', upsertErr);
-					}
-				}
-			} finally {
-				isShiftSubmitting = false;
+						.delete()
+						.eq('day_id', day_id)
+						.eq('hour', entry.hour)
+						.eq('half', entry.half === 1)
+				)
+			);
+			const deleteErr = deletions.find((result) => result.error)?.error;
+			if (deleteErr) {
+				console.error('shift blocks delete error', deleteErr);
 			}
-		};
-		void persistShift();
+		}
+		const updates = new Map<
+			string,
+			{ day_id: string; hour: number; half: boolean; title: string; status: boolean | null }
+		>();
+		for (const move of moves) {
+			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
+			if (toHour === undefined) continue;
+			const habitName = move.entry.habitName ?? null;
+			const baseTitle = move.entry.title ?? '';
+			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
+			const hasHoursContent = resolvedTitle.trim().length > 0 || move.entry.hasHabit;
+			if (!hasHoursContent) continue;
+			updates.set(`${toHour}-${toHalf}`, {
+				day_id,
+				hour: toHour,
+				half: toHalf === 1,
+				title: resolvedTitle,
+				status: move.entry.status
+			});
+		}
+		if (updates.size > 0) {
+			const { error: upsertErr } = await supabase
+				.from('hours')
+				.upsert([...updates.values()], { onConflict: 'day_id,hour,half' });
+			if (upsertErr) {
+				console.error('shift blocks error', upsertErr);
+			}
+		}
 		return true;
+	}
+
+	async function shiftBlocksFromIndex(
+		user_id: string,
+		startIndex: number,
+		direction: 1 | -1,
+		steps = 1
+	) {
+		if (isShiftSubmitting) return false;
+		isShiftSubmitting = true;
+		try {
+			for (let step = 0; step < steps; step += 1) {
+				const ok = await shiftBlocksOnce(user_id, startIndex, direction, step === 0);
+				if (!ok) return false;
+			}
+			return true;
+		} finally {
+			isShiftSubmitting = false;
+		}
 	}
 
 	async function shiftSelection(direction: 1 | -1) {
 		if (!viewerUserId || !selectedBlock) return false;
 		const startIndex = blockIndex(selectedBlock.hourIndex, selectedBlock.half);
-		return shiftBlocksFromIndex(viewerUserId, startIndex, direction);
+		return shiftBlocksFromIndex(viewerUserId, startIndex, direction, 1);
 	}
 	function handleBlockSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
@@ -2125,7 +2156,7 @@
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen || carryoverPrompt || habitCheckPrompt) return;
+		if (!viewerUserId || logOpen || carryoverPrompt || plannedPrompt || habitCheckPrompt) return;
 
 		const date = localToday();
 		const h = currentHour;
@@ -2170,6 +2201,19 @@
 					title: prevTitle
 				};
 				lastPromptKey = key; // avoid re-prompting for this block
+				return;
+			}
+
+			if (prevStatus === null && prevTitle.length > 0) {
+				plannedPrompt = {
+					user_id: viewerUserId,
+					prevHour,
+					prevHalf,
+					currHour: h,
+					currHalf: half,
+					title: prevTitle
+				};
+				lastPromptKey = key;
 				return;
 			}
 		}
@@ -2299,6 +2343,209 @@
 	function cancelCarryoverPrompt() {
 		if (isCarryoverSubmitting) return;
 		carryoverPrompt = null;
+	}
+
+	function cancelPlannedPrompt() {
+		if (isPlannedSubmitting) return;
+		plannedPrompt = null;
+	}
+
+	function openEditorIfEmpty(user_id: string, hour: number, half: 0 | 1) {
+		if (!blockHasContent(user_id, hour, half)) {
+			openEditor(user_id, hour, half, false);
+		}
+	}
+
+	async function markPlannedComplete() {
+		if (!plannedPrompt || isPlannedSubmitting) return;
+		isPlannedSubmitting = true;
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = plannedPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+			const { startIndex, endIndex } = blockRunRange(user_id, prevHour, prevHalf);
+			const updates = [] as {
+				day_id: string;
+				hour: number;
+				half: boolean;
+				title: string;
+				status: boolean | null;
+			}[];
+			for (let idx = startIndex; idx <= endIndex; idx += 1) {
+				const { hour, half } = blockFromIndex(idx);
+				if (hour === undefined) break;
+				const nextTitle = getTitle(user_id, hour, half).trim();
+				if (nextTitle !== title) continue;
+				updates.push({
+					day_id,
+					hour,
+					half: half === 1,
+					title: nextTitle,
+					status: true
+				});
+			}
+			if (updates.length > 0) {
+				const { error } = await supabase.from('hours').upsert(updates, {
+					onConflict: 'day_id,hour,half'
+				});
+				if (error) {
+					console.error('planned complete error', error);
+					return;
+				}
+				for (const update of updates) {
+					setStatus(user_id, update.hour, update.half ? 1 : 0, true);
+				}
+			}
+			plannedPrompt = null;
+			openEditorIfEmpty(user_id, currHour, currHalf);
+		} finally {
+			isPlannedSubmitting = false;
+		}
+	}
+
+	async function markPlannedInProgress() {
+		if (!plannedPrompt || isPlannedSubmitting) return;
+		isPlannedSubmitting = true;
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = plannedPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+			const { startIndex, endIndex } = blockRunRange(user_id, prevHour, prevHalf);
+			const updates = [] as {
+				day_id: string;
+				hour: number;
+				half: boolean;
+				title: string;
+				status: boolean | null;
+			}[];
+			for (let idx = startIndex; idx <= endIndex; idx += 1) {
+				const { hour, half } = blockFromIndex(idx);
+				if (hour === undefined) break;
+				const nextTitle = getTitle(user_id, hour, half).trim();
+				if (nextTitle !== title) continue;
+				updates.push({
+					day_id,
+					hour,
+					half: half === 1,
+					title: nextTitle,
+					status: false
+				});
+			}
+			if (updates.length > 0) {
+				const { error } = await supabase.from('hours').upsert(updates, {
+					onConflict: 'day_id,hour,half'
+				});
+				if (error) {
+					console.error('planned in-progress error', error);
+					return;
+				}
+				for (const update of updates) {
+					setStatus(user_id, update.hour, update.half ? 1 : 0, false);
+				}
+			}
+
+			const currHasContent = blockHasContent(user_id, currHour, currHalf);
+			if (currHasContent) {
+				const currHourIndex = getHourIndex(currHour);
+				if (currHourIndex !== -1) {
+					const currIndex = blockIndex(currHourIndex, currHalf);
+					const shifted = await shiftBlocksFromIndex(user_id, currIndex, 1, 1);
+					if (!shifted) return;
+				}
+			}
+
+			const { error: currentErr } = await supabase.from('hours').upsert(
+				{
+					day_id,
+					hour: currHour,
+					half: currHalf === 1,
+					title,
+					status: false
+				},
+				{ onConflict: 'day_id,hour,half' }
+			);
+			if (currentErr) {
+				console.error('planned continue error', currentErr);
+				return;
+			}
+			setTitle(user_id, currHour, currHalf, title, false);
+
+			plannedPrompt = null;
+		} finally {
+			isPlannedSubmitting = false;
+		}
+	}
+
+	async function startPlannedNow() {
+		if (!plannedPrompt || isPlannedSubmitting) return;
+		isPlannedSubmitting = true;
+		const { user_id, prevHour, prevHalf, currHour, currHalf, title } = plannedPrompt;
+		try {
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return;
+			const { startIndex, endIndex } = blockRunRange(user_id, prevHour, prevHalf);
+			const runLength = endIndex - startIndex + 1;
+			const deletions = [] as { hour: number; half: 0 | 1 }[];
+			for (let idx = startIndex; idx <= endIndex; idx += 1) {
+				const { hour, half } = blockFromIndex(idx);
+				if (hour === undefined) break;
+				deletions.push({ hour, half });
+			}
+			if (deletions.length > 0) {
+				const results = await Promise.all(
+					deletions.map((target) =>
+						supabase
+							.from('hours')
+							.delete()
+							.eq('day_id', day_id)
+							.eq('hour', target.hour)
+							.eq('half', target.half === 1)
+					)
+				);
+				const deleteErr = results.find((result) => result.error)?.error;
+				if (deleteErr) {
+					console.error('planned delete error', deleteErr);
+					return;
+				}
+				for (const target of deletions) {
+					setTitle(user_id, target.hour, target.half, '', null);
+				}
+			}
+			const currHourIndex = getHourIndex(currHour);
+			if (currHourIndex === -1) return;
+			const currIndex = blockIndex(currHourIndex, currHalf);
+			const shifted = await shiftBlocksFromIndex(user_id, currIndex, 1, runLength);
+			if (!shifted) return;
+			const totalBlocks = hours.length * 2;
+			const targets: { hour: number; half: 0 | 1 }[] = [];
+			for (let idx = currIndex; idx < totalBlocks && targets.length < runLength; idx += 1) {
+				const { hour, half } = blockFromIndex(idx);
+				if (hour === undefined) break;
+				if (blockHasContent(user_id, hour, half)) continue;
+				targets.push({ hour, half });
+			}
+			if (targets.length === 0) return;
+			const payload = targets.map((target) => ({
+				day_id,
+				hour: target.hour,
+				half: target.half === 1,
+				title,
+				status: false
+			}));
+			const { error } = await supabase.from('hours').upsert(payload, {
+				onConflict: 'day_id,hour,half'
+			});
+			if (error) {
+				console.error('planned start now error', error);
+				return;
+			}
+			for (const target of targets) {
+				setTitle(user_id, target.hour, target.half, title, false);
+			}
+			plannedPrompt = null;
+		} finally {
+			isPlannedSubmitting = false;
+		}
 	}
 
 	async function resolveHabitPrompt(completed: boolean) {
@@ -2899,7 +3146,7 @@
 					onclick={continuePreviousBlockIntoCurrent}
 					disabled={isCarryoverSubmitting}
 				>
-					Continue this block
+					In progress
 				</button>
 				<button
 					type="button"
@@ -2907,7 +3154,7 @@
 					onclick={markPreviousBlockCompleteAndOpenCurrent}
 					disabled={isCarryoverSubmitting}
 				>
-					Mark done
+					Complete
 				</button>
 			</div>
 
@@ -2916,6 +3163,51 @@
 				class="mt-2 text-xs text-stone-400 hover:text-stone-600"
 				onclick={cancelCarryoverPrompt}
 				disabled={isCarryoverSubmitting}
+			>
+				Cancel
+			</button>
+		</div>
+	</div>
+{/if}
+{#if plannedPrompt}
+	<div class="fixed inset-0 z-60 flex items-center justify-center">
+		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Planned block</div>
+			<div class="mt-1 text-sm font-medium text-stone-900">Did you start this?</div>
+			<div class="mt-2 truncate text-sm text-stone-700">{plannedPrompt?.title}</div>
+
+			<div class="mt-4 flex flex-wrap justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100"
+					onclick={() => void markPlannedComplete()}
+					disabled={isPlannedSubmitting}
+				>
+					Completed
+				</button>
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100"
+					onclick={() => void markPlannedInProgress()}
+					disabled={isPlannedSubmitting}
+				>
+					In progress
+				</button>
+				<button
+					type="button"
+					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
+					onclick={() => void startPlannedNow()}
+					disabled={isPlannedSubmitting}
+				>
+					Start now
+				</button>
+			</div>
+
+			<button
+				type="button"
+				class="mt-2 text-xs text-stone-400 hover:text-stone-600"
+				onclick={cancelPlannedPrompt}
+				disabled={isPlannedSubmitting}
 			>
 				Cancel
 			</button>
