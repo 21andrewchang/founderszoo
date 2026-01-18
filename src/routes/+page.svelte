@@ -171,6 +171,20 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		value: SlotValue;
 		habitTitle: string | null;
 	};
+	type ShiftEntry = {
+		index: number;
+		hour: number;
+		half: 0 | 1;
+		title: string;
+		todo: boolean | null;
+		habitName: string | null;
+		hasHabit: boolean;
+	};
+	type ShiftMove = {
+		fromIndex: number;
+		toIndex: number;
+		entry: ShiftEntry;
+	};
 	type HourRowPayload = {
 		day_id: string;
 		hour: number;
@@ -259,6 +273,9 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	let isMoveSubmitting = $state(false);
 	let pendingDelete = $state<PendingDelete | null>(null);
 	let isDeleteSubmitting = $state(false);
+	let isShiftSubmitting = $state(false);
+	let commandCount = $state<number | null>(null);
+	let pendingG = $state(false);
 	let dragImageEl: HTMLElement | null = null;
 	let cutSlot = $state<CutSlot | null>(null);
 	const pendingMoveSummary = $derived.by(() => {
@@ -671,6 +688,15 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (target.isContentEditable) return true;
 		return !!target.closest('input, textarea, [contenteditable="true"]');
 	}
+	function slotIndex(hourIndex: number, half: 0 | 1) {
+		return hourIndex * 2 + half;
+	}
+	function slotFromIndex(index: number) {
+		const hourIndex = Math.floor(index / 2);
+		const half = (index % 2) as 0 | 1;
+		const hour = hours[hourIndex];
+		return { hourIndex, half, hour };
+	}
 	function moveSelectionLeft() {
 		if (!viewerUserId || !selectedSlot) return false;
 		if (selectedSlot.half === 0) return true;
@@ -747,11 +773,28 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		return pasteCutSlotToTarget(hour, half);
 	}
 
-	function moveSelectionVertical(delta: 1 | -1) {
+	function moveSelectionVertical(delta: 1 | -1, count = 1) {
 		if (!viewerUserId || !selectedSlot) return false;
-		const nextIndex = selectedSlot.hourIndex + delta;
+		const step = delta * Math.max(1, count);
+		const nextIndex = selectedSlot.hourIndex + step;
 		if (nextIndex < 0 || nextIndex >= hours.length) return false;
 		setSelectedSlot({ hourIndex: nextIndex, half: selectedSlot.half });
+		return true;
+	}
+	function selectFirstSlot() {
+		if (!selectedSlot) return false;
+		setSelectedSlot({ hourIndex: 0, half: selectedSlot.half });
+		return true;
+	}
+	function selectLastSlot() {
+		if (!selectedSlot) return false;
+		setSelectedSlot({ hourIndex: hours.length - 1, half: selectedSlot.half });
+		return true;
+	}
+	function selectMiddleSlot() {
+		if (!selectedSlot) return false;
+		const middleIndex = Math.floor(hours.length / 2);
+		setSelectedSlot({ hourIndex: middleIndex, half: selectedSlot.half });
 		return true;
 	}
 	function promptDeleteSelectedSlot() {
@@ -795,6 +838,189 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if ((habitName ?? '').trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedSlot.half, normal);
 		return true;
+	}
+	function collectShiftEntries(user_id: string, startIndex: number) {
+		const entries: ShiftEntry[] = [];
+		const totalSlots = hours.length * 2;
+		for (let idx = startIndex; idx < totalSlots; idx += 1) {
+			const { hour, half } = slotFromIndex(idx);
+			if (hour === undefined) continue;
+			const title = getTitle(user_id, hour, half);
+			const todo = getTodo(user_id, hour, half);
+			const habitName = getHabitTitle(user_id, hour, half);
+			const hasHabit = (habitName ?? '').trim().length > 0;
+			const hasContent = title.trim().length > 0 || todo !== null || hasHabit;
+			if (!hasContent) continue;
+			entries.push({
+				index: idx,
+				hour,
+				half,
+				title: title ?? '',
+				todo: todo ?? null,
+				habitName,
+				hasHabit
+			});
+		}
+		return entries;
+	}
+	function maxFixedContentIndex(user_id: string, startIndex: number) {
+		let lastFixed = -1;
+		for (let idx = 0; idx < startIndex; idx += 1) {
+			const { hour, half } = slotFromIndex(idx);
+			if (hour === undefined) continue;
+			if (slotHasContent(user_id, hour, half)) {
+				lastFixed = idx;
+			}
+		}
+		return lastFixed;
+	}
+	async function shiftSelection(direction: 1 | -1) {
+		if (isShiftSubmitting) return false;
+		if (!viewerUserId || !selectedSlot) return false;
+		const day_id = dayIdByUser[viewerUserId];
+		if (!day_id) return false;
+		const totalSlots = hours.length * 2;
+		const startIndex = slotIndex(selectedSlot.hourIndex, selectedSlot.half);
+		const entries = collectShiftEntries(viewerUserId, startIndex);
+		if (entries.length === 0) return false;
+		const hasHabit = entries.some((entry) => entry.hasHabit);
+		let includeHabits = true;
+		if (hasHabit) {
+			includeHabits = window.confirm(
+				'This shift includes habit slots. Move habits too? Choosing cancel keeps habits in place.'
+			);
+		}
+		const movableEntries = entries.filter((entry) => includeHabits || !entry.hasHabit);
+		if (movableEntries.length === 0) return false;
+		const lockedHabits = new Set(
+			entries.filter((entry) => entry.hasHabit && !includeHabits).map((entry) => entry.index)
+		);
+		const lastFixed = maxFixedContentIndex(viewerUserId, startIndex);
+		const moves: ShiftMove[] = [];
+		const overflow: ShiftEntry[] = [];
+		const occupiedTargets = new Set<number>();
+		const orderedEntries = [...movableEntries].sort((a, b) =>
+			direction === 1 ? b.index - a.index : a.index - b.index
+		);
+		for (const entry of orderedEntries) {
+			let target = entry.index + direction;
+			while (lockedHabits.has(target) || occupiedTargets.has(target)) {
+				target += direction;
+			}
+			if (direction === -1 && target <= lastFixed) {
+				target = entry.index;
+			}
+			if (target < 0) return false;
+			if (target >= totalSlots) {
+				overflow.push(entry);
+				continue;
+			}
+			if (target === entry.index) {
+				occupiedTargets.add(target);
+				continue;
+			}
+			moves.push({ fromIndex: entry.index, toIndex: target, entry });
+			occupiedTargets.add(target);
+		}
+		if (direction === 1 && overflow.length > 0) {
+			const ok = window.confirm(
+				`Shifting will delete ${overflow.length} slot${overflow.length === 1 ? '' : 's'}. Continue?`
+			);
+			if (!ok) return false;
+		}
+		const clearEntries = [...overflow, ...moves.map((move) => move.entry)];
+		isShiftSubmitting = true;
+		try {
+			for (const entry of clearEntries) {
+				const { error: clearErr } = await supabase
+					.from('hours')
+					.delete()
+					.eq('day_id', day_id)
+					.eq('hour', entry.hour)
+					.eq('half', entry.half === 1);
+				if (clearErr) {
+					console.error('shift slot clear error', clearErr);
+					return false;
+				}
+				if (entry.hasHabit) {
+					const { error: habitClearErr } = await supabase
+						.from('habits')
+						.delete()
+						.eq('user_id', viewerUserId)
+						.eq('hour', entry.hour)
+						.eq('half', entry.half === 1);
+					if (habitClearErr) {
+						console.error('shift habit clear error', habitClearErr);
+						return false;
+					}
+				}
+			}
+			for (const move of moves) {
+				const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+				if (toHour === undefined) continue;
+				const habitName = move.entry.habitName ?? null;
+				const baseTitle = move.entry.title ?? '';
+				const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+				const hasHoursContent =
+					resolvedTitle.trim().length > 0 || move.entry.todo !== null || move.entry.hasHabit;
+				if (hasHoursContent) {
+					const { error: upsertErr } = await supabase.from('hours').upsert(
+						{
+							day_id,
+							hour: toHour,
+							half: toHalf === 1,
+							title: resolvedTitle,
+							todo: move.entry.todo
+						},
+						{ onConflict: 'day_id,hour,half' }
+					);
+					if (upsertErr) {
+						console.error('shift slot upsert error', upsertErr);
+						return false;
+					}
+				}
+				if (move.entry.hasHabit && habitName) {
+					const { error: habitUpsertErr } = await supabase.from('habits').upsert(
+						{
+							user_id: viewerUserId,
+							name: habitName,
+							hour: toHour,
+							half: toHalf === 1
+						},
+						{ onConflict: 'user_id,hour,half' }
+					);
+					if (habitUpsertErr) {
+						console.error('shift habit upsert error', habitUpsertErr);
+						return false;
+					}
+				}
+			}
+			for (const entry of clearEntries) {
+				setTitle(viewerUserId, entry.hour, entry.half, '', null);
+				if (entry.hasHabit) setHabitTitle(viewerUserId, entry.hour, entry.half, null);
+			}
+			for (const move of moves) {
+				const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+				if (toHour === undefined) continue;
+				const habitName = move.entry.habitName ?? null;
+				const baseTitle = move.entry.title ?? '';
+				const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+				setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.todo ?? null);
+				if (move.entry.hasHabit) {
+					setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
+				}
+			}
+			const movedSelection = moves.find((move) => move.fromIndex === startIndex);
+			if (movedSelection) {
+				const { hourIndex, half } = slotFromIndex(movedSelection.toIndex);
+				if (hourIndex >= 0 && hourIndex < hours.length) {
+					setSelectedSlot({ hourIndex, half });
+				}
+			}
+			return true;
+		} finally {
+			isShiftSubmitting = false;
+		}
 	}
 	function handleSlotSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
@@ -949,7 +1175,31 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			}
 			return;
 		}
-		if (!['h', 'j', 'k', 'l', 'Enter', 'i', 'd', 'x', 'p'].includes(normalized)) return;
+		if (key.length === 1 && key >= '0' && key <= '9') {
+			if (key === '0' && commandCount === null) return;
+			commandCount = (commandCount ?? 0) * 10 + Number(key);
+			pendingG = false;
+			event.preventDefault();
+			return;
+		}
+		if (
+			![
+				'h',
+				'j',
+				'k',
+				'l',
+				'g',
+				'm',
+				'>',
+				'<',
+				'Enter',
+				'i',
+				'd',
+				'x',
+				'p'
+			].includes(normalized)
+		)
+			return;
 		hoverSlot = null;
 		ensureSelectionExists();
 		if (!selectedSlot) return;
@@ -961,11 +1211,39 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			case 'l':
 				handled = moveSelectionRight();
 				break;
-			case 'j':
-				handled = moveSelectionVertical(1);
+			case 'j': {
+				const count = commandCount ?? 1;
+				handled = moveSelectionVertical(1, count);
 				break;
-			case 'k':
-				handled = moveSelectionVertical(-1);
+			}
+			case 'k': {
+				const count = commandCount ?? 1;
+				handled = moveSelectionVertical(-1, count);
+				break;
+			}
+			case 'g':
+				if (key === 'G') {
+					handled = selectLastSlot();
+					pendingG = false;
+				} else if (pendingG) {
+					handled = selectFirstSlot();
+					pendingG = false;
+				} else {
+					pendingG = true;
+				}
+				break;
+			case 'm':
+				if (key === 'M') {
+					handled = selectMiddleSlot();
+				}
+				break;
+			case '>':
+				handled = true;
+				void shiftSelection(1);
+				break;
+			case '<':
+				handled = true;
+				void shiftSelection(-1);
 				break;
 			case 'Enter':
 				hjklSlot = selectedSlot;
@@ -985,7 +1263,15 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				handled = pasteCutSlotAtSelection();
 				break;
 		}
-		if (handled) event.preventDefault();
+		if ((normalized === 'j' || normalized === 'k') && commandCount !== null) {
+			commandCount = null;
+		}
+		if (handled) {
+			pendingG = false;
+			event.preventDefault();
+		} else if (normalized !== 'g') {
+			pendingG = false;
+		}
 	}
 
 	async function getTodayDayIdForUser(user_id: string, createIfMissing: boolean) {
