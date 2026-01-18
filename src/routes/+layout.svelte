@@ -524,7 +524,7 @@
 			</div>
 		</nav>
 	</div>
-{:else if authSet && $session.user && currentCombinedPct && presenceCounts.connected}
+{:else if authSet && $session.user && presenceCounts.connected}
 	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
 		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<div

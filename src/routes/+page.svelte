@@ -2547,7 +2547,7 @@
 			</div>
 		</div>
 	</div>
-	{#if viewerUserId && isNightWindow()}
+	{#if viewerUserId && isNightWindow() && displayDateForUser(viewerUserId) === localToday()}
 		<div class="mt-4 flex w-full justify-center">
 			<button
 				class="rounded-md border border-stone-300 px-3 py-2 text-xs font-semibold tracking-wide text-stone-700 uppercase hover:bg-stone-100"
