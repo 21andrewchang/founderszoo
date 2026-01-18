@@ -5,7 +5,7 @@
 		open = false,
 		onCancel = () => {},
 		onConfirm = () => {},
-		slotLabel = '',
+		blockLabel = '',
 		fromLabel = '',
 		toLabel = '',
 		destinationLabel = null,
@@ -17,7 +17,7 @@
 		open?: boolean;
 		onCancel?: () => void;
 		onConfirm?: () => void | Promise<void>;
-		slotLabel?: string;
+		blockLabel?: string;
 		fromLabel?: string;
 		toLabel?: string;
 		destinationLabel?: string | null;
@@ -74,10 +74,10 @@
 		role="dialog"
 		aria-modal="true"
 		aria-label={isDelete
-			? 'Delete slot confirmation'
+			? 'Delete block confirmation'
 			: isSwap
-				? 'Swap slots confirmation'
-				: 'Move slot confirmation'}
+				? 'Swap blocks confirmation'
+				: 'Move block confirmation'}
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
@@ -89,24 +89,24 @@
 			<div class="space-y-3 px-5 py-5 text-sm text-stone-600">
 				<div class="text-base font-semibold text-stone-900">
 					{#if isDelete}
-						Delete {isHabit ? 'habit' : 'slot'}?
+						Delete {isHabit ? 'habit' : 'block'}?
 					{:else if isSwap}
-						Swap slots?
+						Swap blocks?
 					{:else}
-						Move {isHabit ? 'habit' : 'slot'}?
+						Move {isHabit ? 'habit' : 'block'}?
 					{/if}
 				</div>
 				{#if isDelete}
 					<p>
 						<span class="font-medium text-stone-900"
-							>{slotLabel || (isHabit ? 'this habit' : 'this slot')}</span
+							>{blockLabel || (isHabit ? 'this habit' : 'this block')}</span
 						>
 						at <span class="font-medium text-stone-900">{fromLabel}</span>
 					</p>
 				{:else}
 					<p>
 						<span class="font-medium text-stone-900"
-							>{slotLabel || (isHabit ? 'this habit' : 'this slot')}</span
+							>{blockLabel || (isHabit ? 'this habit' : 'this block')}</span
 						>
 						from <span class="font-medium text-stone-900">{fromLabel}</span> to
 						<span class="font-medium text-stone-900">{toLabel}</span>?
@@ -115,7 +115,7 @@
 				{#if warningShouldRender}
 					<div class={`rounded-lg border px-3 py-2 text-xs ${warningClasses}`}>
 						{#if isDelete}
-							This will permanently clear this slot including TODOs and Habits.
+							This will permanently clear this block including TODOs and Habits.
 						{:else}
 							{#if isSwap}
 								This will swap with

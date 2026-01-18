@@ -31,7 +31,7 @@
 	const onPrimaryAction = $derived(props.onPrimaryAction ?? (() => false));
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
-	const isCurrentSlot = $derived(Boolean(props.isCurrent));
+	const isCurrentBlock = $derived(Boolean(props.isCurrent));
 	const habitStreak = $derived(props.habitStreak ?? null);
 	const habitStreakLabel = $derived(() => {
 		if (habitStreak == null || !habitStreak || habitStreak.length <= 0) return null;
@@ -51,7 +51,7 @@
 	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
 
-	const currentClass = $derived(isCurrentSlot ? 'bg-stone-200' : '');
+	const currentClass = $derived(isCurrentBlock ? 'bg-stone-200' : '');
 
 	const baseClasses =
 		'flex w-full min-w-0 flex-row items-center rounded-sm p-2 transition overflow-hidden focus:outline-0';
@@ -68,7 +68,7 @@
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
-	function handleSlotClick() {
+	function handleBlockClick() {
 		if (onPrimaryAction()) return;
 		if (todo !== null) {
 			onToggleTodo();
@@ -78,11 +78,11 @@
 		onSelect();
 	}
 
-	function handleSlotKeydown(event: KeyboardEvent) {
+	function handleBlockKeydown(event: KeyboardEvent) {
 		if (!editable) return;
 		if (event.key === 'Enter' || event.key === ' ') {
 			event.preventDefault();
-			handleSlotClick();
+			handleBlockClick();
 		}
 	}
 	const streakArrowClass = $derived.by(() => {
@@ -153,7 +153,7 @@
 	}
 
 	$effect(() => {
-		// Only animate when this slot has a todo indicator at all
+		// Only animate when this block has a todo indicator at all
 		if (todo === null) {
 			lastTodo = null;
 			todoAnim = 'none';
@@ -186,10 +186,10 @@
 	class:ring-stone-400={selected}
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
-	class:slot-cut-source={Boolean(props.isCut)}
+	class:block-cut-source={Boolean(props.isCut)}
 	role={canOpen ? 'button' : undefined}
-	onclick={handleSlotClick}
-	onkeydown={handleSlotKeydown}
+	onclick={handleBlockClick}
+	onkeydown={handleBlockKeydown}
 >
 	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
 		<div class="flex flex-row items-center gap-0.5">
@@ -359,7 +359,7 @@
 		}
 	}
 
-	.slot-cut-source {
+	.block-cut-source {
 		box-shadow: 0 0 0 2px rgb(248 113 113);
 		border-color: rgb(248 113 113);
 	}

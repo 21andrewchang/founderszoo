@@ -2,17 +2,17 @@
 	import ConfirmMoveModal from '$lib/components/ConfirmMoveModal.svelte';
 	import LogModal from '$lib/components/LogModal.svelte';
 	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
-	import Slot from '$lib/components/Slot.svelte';
+	import Block from '$lib/components/Block.svelte';
 	import { scale, fly } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
 	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
-import { supabase } from '$lib/supabaseClient';
-import type { Writable } from 'svelte/store';
-import type { Session } from '$lib/session';
-import { formatLocalTimestamp } from '$lib/time';
-import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+	import { supabase } from '$lib/supabaseClient';
+	import type { Writable } from 'svelte/store';
+	import type { Session } from '$lib/session';
+	import { formatLocalTimestamp } from '$lib/time';
+	import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
 	type Person = { label: string; user_id: string };
 
@@ -108,9 +108,9 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
-	const slotTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;
-	const formatSlotLabel = (hour: number, half: 0 | 1) =>
-		`${slotTimeLabel(hour, half)} (${blockLabelText(half)})`;
+	const blockTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;
+	const formatBlockLabel = (hour: number, half: 0 | 1) =>
+		`${blockTimeLabel(hour, half)} (${blockLabelText(half)})`;
 
 	const TEST_CLOCK = {
 		enabled: false,
@@ -147,11 +147,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	let dayIdByUser = $state<Record<string, string | null>>({});
 	let isLoading = $state(true);
 
-	type SlotValue = { title: string; todo: boolean | null };
-	type SlotRow = { first: SlotValue; second: SlotValue };
-	type HabitSlotRow = { first: string | null; second: string | null };
-	type SelectedSlot = { hourIndex: number; half: 0 | 1 };
-	type DraggingSlot = { user_id: string; hour: number; half: 0 | 1 };
+	type BlockValue = { title: string; todo: boolean | null };
+	type BlockRow = { first: BlockValue; second: BlockValue };
+	type HabitBlockRow = { first: string | null; second: string | null };
+	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
+	type DraggingBlock = { user_id: string; hour: number; half: 0 | 1 };
 	type PendingMove = {
 		user_id: string;
 		fromHour: number;
@@ -164,11 +164,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		hour: number;
 		half: 0 | 1;
 	};
-	type CutSlot = {
+	type CutBlock = {
 		user_id: string;
 		hour: number;
 		half: 0 | 1;
-		value: SlotValue;
+		value: BlockValue;
 		habitTitle: string | null;
 	};
 	type ShiftEntry = {
@@ -196,15 +196,15 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		channel: RealtimeChannel;
 		day_id: string;
 	};
-	type SelectedSlotRowPayload = {
+	type SelectedBlockRowPayload = {
 		id: string;
-		selected_slot_hour: number | null;
-		selected_slot_half: boolean | number | null;
+		selected_block_hour: number | null;
+		selected_block_half: boolean | number | null;
 	};
 
-	const createEmptySlot = (): SlotValue => ({ title: '', todo: null });
-	let slotsByUser = $state<Record<string, Record<number, SlotRow>>>({});
-	let habitsByUser = $state<Record<string, Record<number, HabitSlotRow>>>({});
+	const createEmptyBlock = (): BlockValue => ({ title: '', todo: null });
+	let blocksByUser = $state<Record<string, Record<number, BlockRow>>>({});
+	let habitsByUser = $state<Record<string, Record<number, HabitBlockRow>>>({});
 	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
 	let habitStreaksByUserExcludingToday = $state<
 		Record<string, Record<HabitKey, PlayerStreak | null>>
@@ -235,10 +235,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	let habitCheckPrompt = $state<HabitPrompt | null>(null);
 	let isHabitPromptSubmitting = $state(false);
 	const hoursRealtimeByUser: Record<string, HoursRealtimeState | null> = {};
-	let remoteSelectedSlots = $state<Record<string, SelectedSlot | null>>({});
-	const selectedSlotRealtimeByUser: Record<string, RealtimeChannel | null> = {};
+	let remoteSelectedBlocks = $state<Record<string, SelectedBlock | null>>({});
+	const selectedBlockRealtimeByUser: Record<string, RealtimeChannel | null> = {};
 	let lastBroadcastedSelectionKey: string | null = null;
-	function previousSlot(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
+	function previousBlock(hour: number, half: 0 | 1): { hour: number; half: 0 | 1 } | null {
 		if (half === 1) {
 			// B → previous is same hour, A
 			return { hour, half: 0 };
@@ -262,11 +262,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		title: '',
 		todo: null
 	});
-	let selectedSlot = $state<SelectedSlot | null>(null);
-	let hjklSlot = $state<SelectedSlot | null>(null);
-	let draggingSlot = $state<DraggingSlot | null>(null);
-	let dragHoverSlot = $state<SelectedSlot | null>(null);
-	let hoverSlot = $state<SelectedSlot | null>(null);
+	let selectedBlock = $state<SelectedBlock | null>(null);
+	let hjklBlock = $state<SelectedBlock | null>(null);
+	let draggingBlock = $state<DraggingBlock | null>(null);
+	let dragHoverBlock = $state<SelectedBlock | null>(null);
+	let hoverBlock = $state<SelectedBlock | null>(null);
 	let suppressHoverSelection = $state(false);
 	let pendingMove = $state<PendingMove | null>(null);
 	let pendingMoveSource = $state<'drag' | 'cut' | null>(null);
@@ -277,7 +277,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	let commandCount = $state<number | null>(null);
 	let pendingG = $state(false);
 	let dragImageEl: HTMLElement | null = null;
-	let cutSlot = $state<CutSlot | null>(null);
+	let cutBlock = $state<CutBlock | null>(null);
 	const pendingMoveSummary = $derived.by(() => {
 		if (!pendingMove) return null;
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = pendingMove;
@@ -290,9 +290,9 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			destinationTitle.length > 0 || destinationHabit.length > 0 || destinationTodo !== null;
 		const mode: 'swap' | 'move' = destinationHasContent ? 'swap' : 'move';
 		return {
-			slotLabel: sourceTitle || sourceHabit || 'this slot',
-			fromLabel: formatSlotLabel(fromHour, fromHalf),
-			toLabel: formatSlotLabel(toHour, toHalf),
+			blockLabel: sourceTitle || sourceHabit || 'this block',
+			fromLabel: formatBlockLabel(fromHour, fromHalf),
+			toLabel: formatBlockLabel(toHour, toHalf),
 			destinationLabel: destinationTitle || destinationHabit || null,
 			hasDestinationContent: destinationHasContent,
 			isHabit: sourceHabit.length > 0,
@@ -307,8 +307,8 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const todo = getTodo(user_id, hour, half);
 		const hasContent = title.length > 0 || habit.length > 0 || todo !== null;
 		return {
-			slotLabel: title || habit || 'this slot',
-			locationLabel: formatSlotLabel(hour, half),
+			blockLabel: title || habit || 'this block',
+			locationLabel: formatBlockLabel(hour, half),
 			hasContent,
 			isHabit: habit.length > 0
 		};
@@ -321,14 +321,14 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (h == null || half == null) {
 			return habitStreaksForUser(viewerUserId);
 		}
-		return habitStreakRecordForSlot(viewerUserId, h, half);
+		return habitStreakRecordForBlock(viewerUserId, h, half);
 	});
 
 	const modalOverlayActive = $derived.by(() =>
 		Boolean(logOpen || habitCheckPrompt || todoCarryPrompt || pendingMove || pendingDelete)
 	);
 
-	// prevent re-prompting within same slot
+	// prevent re-prompting within same block
 	let lastPromptKey = $state<string | null>(null);
 
 	const formatDateString = (date: Date) =>
@@ -341,10 +341,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	};
 	const localToday = () => formatDateString(getNow());
 
-	function ensureSlotRow(user_id: string, h: number): SlotRow {
-		slotsByUser[user_id] ??= {};
-		slotsByUser[user_id][h] ??= { first: createEmptySlot(), second: createEmptySlot() };
-		return slotsByUser[user_id][h];
+	function ensureBlockRow(user_id: string, h: number): BlockRow {
+		blocksByUser[user_id] ??= {};
+		blocksByUser[user_id][h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
+		return blocksByUser[user_id][h];
 	}
 	function setTitle(
 		user_id: string,
@@ -353,7 +353,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		text: string,
 		todo?: boolean | null
 	) {
-		const row = ensureSlotRow(user_id, h);
+		const row = ensureBlockRow(user_id, h);
 		if (half01 === 0) {
 			row.first.title = text;
 			if (todo !== undefined) row.first.todo = todo;
@@ -364,36 +364,36 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	}
 
 	function setTodo(user_id: string, h: number, half01: 0 | 1, value: boolean | null) {
-		const row = ensureSlotRow(user_id, h);
+		const row = ensureBlockRow(user_id, h);
 		if (half01 === 0) row.first.todo = value;
 		else row.second.todo = value;
 	}
 
-	function getSlot(user_id: string, h: number, half01: 0 | 1): SlotValue {
-		const row = slotsByUser[user_id]?.[h];
-		if (!row) return createEmptySlot();
+	function getBlock(user_id: string, h: number, half01: 0 | 1): BlockValue {
+		const row = blocksByUser[user_id]?.[h];
+		if (!row) return createEmptyBlock();
 		return half01 === 0 ? row.first : row.second;
 	}
 	function isCutSource(user_id: string, h: number, half01: 0 | 1) {
 		return Boolean(
-			cutSlot && cutSlot.user_id === user_id && cutSlot.hour === h && cutSlot.half === half01
+			cutBlock && cutBlock.user_id === user_id && cutBlock.hour === h && cutBlock.half === half01
 		);
 	}
-	function slotIsCut(user_id: string, h: number, half01: 0 | 1) {
+	function blockIsCut(user_id: string, h: number, half01: 0 | 1) {
 		return Boolean(
-			cutSlot && cutSlot.user_id === user_id && cutSlot.hour === h && cutSlot.half === half01
+			cutBlock && cutBlock.user_id === user_id && cutBlock.hour === h && cutBlock.half === half01
 		);
 	}
 
 	function getTitle(user_id: string, h: number, half01: 0 | 1) {
-		return getSlot(user_id, h, half01).title ?? '';
+		return getBlock(user_id, h, half01).title ?? '';
 	}
 
 	function getTodo(user_id: string, h: number, half01: 0 | 1) {
-		return getSlot(user_id, h, half01).todo ?? null;
+		return getBlock(user_id, h, half01).todo ?? null;
 	}
 
-	function ensureHabitRow(user_id: string, h: number): HabitSlotRow {
+	function ensureHabitRow(user_id: string, h: number): HabitBlockRow {
 		habitsByUser[user_id] ??= {};
 		habitsByUser[user_id][h] ??= { first: null, second: null };
 		return habitsByUser[user_id][h];
@@ -527,7 +527,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		};
 	}
 
-	function habitStreakRecordForSlot(
+	function habitStreakRecordForBlock(
 		user_id: string,
 		h: number,
 		half01: 0 | 1
@@ -535,9 +535,9 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
 		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
 		const hasTodayEntry = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
-		const slotElapsed = slotHasElapsed(h, half01);
-		const slotTodo = getTodo(user_id, h, half01);
-		const slotCompleted = slotTodo === true;
+		const blockElapsed = blockHasElapsed(h, half01);
+		const blockTodo = getTodo(user_id, h, half01);
+		const blockCompleted = blockTodo === true;
 		return HABIT_STREAK_KEYS.reduce(
 			(acc, key) => {
 				const promptActive =
@@ -550,10 +550,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 					acc[key] = (fallbackRecord ?? record)?.[key] ?? null;
 					return acc;
 				}
-				const useCurrent = slotCompleted || (slotElapsed && hasTodayEntry[key]);
+				const useCurrent = blockCompleted || (blockElapsed && hasTodayEntry[key]);
 				const source = useCurrent ? record : fallbackRecord;
 				let value = source?.[key] ?? null;
-				if (slotCompleted && !slotElapsed) {
+				if (blockCompleted && !blockElapsed) {
 					const base = fallbackRecord?.[key] ?? null;
 					const baseLen = base && base.kind === 'positive' ? base.length : 0;
 					value = {
@@ -569,11 +569,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		);
 	}
 
-	function habitStreakForSlot(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
+	function habitStreakForBlock(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
 		const habitName = getHabitTitle(user_id, h, half01);
 		const key = normalizeHabitName(habitName);
 		if (!key) return null;
-		const view = habitStreakRecordForSlot(user_id, h, half01);
+		const view = habitStreakRecordForBlock(user_id, h, half01);
 		return view[key] ?? null;
 	}
 
@@ -584,19 +584,19 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	function clampHourIndex(idx: number) {
 		return Math.max(0, Math.min(hours.length - 1, idx));
 	}
-	function slotIsEmpty(user_id: string, h: number, half01: 0 | 1) {
+	function blockIsEmpty(user_id: string, h: number, half01: 0 | 1) {
 		return getTitle(user_id, h, half01).trim().length === 0;
 	}
-	function slotHasContent(user_id: string, h: number, half01: 0 | 1) {
+	function blockHasContent(user_id: string, h: number, half01: 0 | 1) {
 		const title = getTitle(user_id, h, half01).trim();
 		const todo = getTodo(user_id, h, half01);
 		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
 		return title.length > 0 || todo !== null || habitName.length > 0;
 	}
-	function canDragSlot(user_id: string, h: number, half01: 0 | 1) {
+	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
 		if (isCutSource(user_id, h, half01)) return false;
-		return slotHasContent(user_id, h, half01);
+		return blockHasContent(user_id, h, half01);
 	}
 	async function insertHabitHours(
 		user_id: string,
@@ -631,54 +631,54 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		for (const [hourStr, row] of Object.entries(userHabits)) {
 			const hour = Number(hourStr);
 			if (Number.isNaN(hour)) continue;
-			if (row.first && slotIsEmpty(user_id, hour, 0))
+			if (row.first && blockIsEmpty(user_id, hour, 0))
 				pending.push({ hour, half: 0, name: row.first });
-			if (row.second && slotIsEmpty(user_id, hour, 1))
+			if (row.second && blockIsEmpty(user_id, hour, 1))
 				pending.push({ hour, half: 1, name: row.second });
 		}
 		if (pending.length === 0) return;
 		await insertHabitHours(user_id, day_id, pending);
 	}
-	function setSelectedSlot(next: SelectedSlot | null) {
+	function setSelectedBlock(next: SelectedBlock | null) {
 		if (!viewerUserId) {
-			selectedSlot = null;
+			selectedBlock = null;
 			return;
 		}
 		if (next === null) {
-			selectedSlot = null;
-			void broadcastSelectedSlot(null);
+			selectedBlock = null;
+			void broadcastSelectedBlock(null);
 			return;
 		}
-		const clamped: SelectedSlot = {
+		const clamped: SelectedBlock = {
 			hourIndex: clampHourIndex(next.hourIndex),
 			half: next.half === 1 ? 1 : 0
 		};
-		selectedSlot = clamped;
-		void broadcastSelectedSlot(clamped);
+		selectedBlock = clamped;
+		void broadcastSelectedBlock(clamped);
 	}
 	function ensureSelectionExists() {
-		if (!viewerUserId || selectedSlot) return;
-		const { hour, half } = slotInfoFromNow();
+		if (!viewerUserId || selectedBlock) return;
+		const { hour, half } = blockInfoFromNow();
 		const idx = getHourIndex(hour);
-		setSelectedSlot({
+		setSelectedBlock({
 			hourIndex: idx === -1 ? 0 : idx,
 			half
 		});
 	}
-	function slotMatches(selection: SelectedSlot | null, hourIndex: number, half: 0 | 1) {
+	function blockMatches(selection: SelectedBlock | null, hourIndex: number, half: 0 | 1) {
 		return selection?.hourIndex === hourIndex && selection?.half === half;
 	}
-	function highlightedSlotForUser(user_id: string): SelectedSlot | null {
+	function highlightedBlockForUser(user_id: string): SelectedBlock | null {
 		if (viewerUserId === user_id) {
-			return dragHoverSlot ?? hoverSlot ?? selectedSlot;
+			return dragHoverBlock ?? hoverBlock ?? selectedBlock;
 		}
-		return remoteSelectedSlots[user_id] ?? null;
+		return remoteSelectedBlocks[user_id] ?? null;
 	}
-	function slotIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
-		const active = highlightedSlotForUser(user_id);
-		return slotMatches(active, hourIndex, half);
+	function blockIsHighlighted(user_id: string, hourIndex: number, half: 0 | 1) {
+		const active = highlightedBlockForUser(user_id);
+		return blockMatches(active, hourIndex, half);
 	}
-	function slotIsCurrent(hour: number, half: 0 | 1) {
+	function blockIsCurrent(hour: number, half: 0 | 1) {
 		return currentHour === hour && currentHalf === half;
 	}
 	function isTypingTarget(target: EventTarget | null) {
@@ -688,38 +688,38 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (target.isContentEditable) return true;
 		return !!target.closest('input, textarea, [contenteditable="true"]');
 	}
-	function slotIndex(hourIndex: number, half: 0 | 1) {
+	function blockIndex(hourIndex: number, half: 0 | 1) {
 		return hourIndex * 2 + half;
 	}
-	function slotFromIndex(index: number) {
+	function blockFromIndex(index: number) {
 		const hourIndex = Math.floor(index / 2);
 		const half = (index % 2) as 0 | 1;
 		const hour = hours[hourIndex];
 		return { hourIndex, half, hour };
 	}
 	function moveSelectionLeft() {
-		if (!viewerUserId || !selectedSlot) return false;
-		if (selectedSlot.half === 0) return true;
-		setSelectedSlot({ hourIndex: selectedSlot.hourIndex, half: 0 });
+		if (!viewerUserId || !selectedBlock) return false;
+		if (selectedBlock.half === 0) return true;
+		setSelectedBlock({ hourIndex: selectedBlock.hourIndex, half: 0 });
 		return true;
 	}
 	function moveSelectionRight() {
-		if (!viewerUserId || !selectedSlot) return false;
-		if (selectedSlot.half === 1) return true;
-		setSelectedSlot({ hourIndex: selectedSlot.hourIndex, half: 1 });
+		if (!viewerUserId || !selectedBlock) return false;
+		if (selectedBlock.half === 1) return true;
+		setSelectedBlock({ hourIndex: selectedBlock.hourIndex, half: 1 });
 		return true;
 	}
-	function cancelCutSlot() {
-		cutSlot = null;
+	function cancelCutBlock() {
+		cutBlock = null;
 	}
-	function cutSlotAt(user_id: string, hour: number, half: 0 | 1) {
+	function cutBlockAt(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
 		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
-		if (!slotHasContent(user_id, hour, half)) return false;
+		if (!blockHasContent(user_id, hour, half)) return false;
 		if (habitName.length > 0) return false;
-		cancelCutSlot();
-		const sourceValue = getSlot(user_id, hour, half);
-		cutSlot = {
+		cancelCutBlock();
+		const sourceValue = getBlock(user_id, hour, half);
+		cutBlock = {
 			user_id,
 			hour,
 			half,
@@ -728,21 +728,21 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		};
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex !== -1) {
-			setSelectedSlot({ hourIndex, half });
+			setSelectedBlock({ hourIndex, half });
 		}
 		return true;
 	}
-	function cutSelectedSlot() {
-		if (!viewerUserId || !selectedSlot) return false;
-		const hour = hours[selectedSlot.hourIndex];
+	function cutSelectedBlock() {
+		if (!viewerUserId || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		return cutSlotAt(viewerUserId, hour, selectedSlot.half);
+		return cutBlockAt(viewerUserId, hour, selectedBlock.half);
 	}
-	function pasteCutSlotToTarget(hour: number, half: 0 | 1) {
-		if (!cutSlot) return false;
-		const { user_id, hour: fromHour, half: fromHalf } = cutSlot;
+	function pasteCutBlockToTarget(hour: number, half: 0 | 1) {
+		if (!cutBlock) return false;
+		const { user_id, hour: fromHour, half: fromHalf } = cutBlock;
 		if (hour === fromHour && half === fromHalf) {
-			cancelCutSlot();
+			cancelCutBlock();
 			return true;
 		}
 		const move: PendingMove = {
@@ -761,89 +761,89 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		}
 		return true;
 	}
-	function pasteCutSlotAtSelection() {
-		if (!viewerUserId || !cutSlot || !selectedSlot) return false;
-		const hour = hours[selectedSlot.hourIndex];
+	function pasteCutBlockAtSelection() {
+		if (!viewerUserId || !cutBlock || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		return pasteCutSlotToTarget(hour, selectedSlot.half);
+		return pasteCutBlockToTarget(hour, selectedBlock.half);
 	}
 	function maybeHandlePaste(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
-		if (!cutSlot || cutSlot.user_id !== user_id) return false;
-		return pasteCutSlotToTarget(hour, half);
+		if (!cutBlock || cutBlock.user_id !== user_id) return false;
+		return pasteCutBlockToTarget(hour, half);
 	}
 
 	function moveSelectionVertical(delta: 1 | -1, count = 1) {
-		if (!viewerUserId || !selectedSlot) return false;
+		if (!viewerUserId || !selectedBlock) return false;
 		const step = delta * Math.max(1, count);
-		const nextIndex = selectedSlot.hourIndex + step;
+		const nextIndex = selectedBlock.hourIndex + step;
 		if (nextIndex < 0 || nextIndex >= hours.length) return false;
-		setSelectedSlot({ hourIndex: nextIndex, half: selectedSlot.half });
+		setSelectedBlock({ hourIndex: nextIndex, half: selectedBlock.half });
 		return true;
 	}
-	function selectFirstSlot() {
-		if (!selectedSlot) return false;
-		setSelectedSlot({ hourIndex: 0, half: selectedSlot.half });
+	function selectFirstBlock() {
+		if (!selectedBlock) return false;
+		setSelectedBlock({ hourIndex: 0, half: selectedBlock.half });
 		return true;
 	}
-	function selectLastSlot() {
-		if (!selectedSlot) return false;
-		setSelectedSlot({ hourIndex: hours.length - 1, half: selectedSlot.half });
+	function selectLastBlock() {
+		if (!selectedBlock) return false;
+		setSelectedBlock({ hourIndex: hours.length - 1, half: selectedBlock.half });
 		return true;
 	}
-	function selectMiddleSlot() {
-		if (!selectedSlot) return false;
+	function selectMiddleBlock() {
+		if (!selectedBlock) return false;
 		const middleIndex = Math.floor(hours.length / 2);
-		setSelectedSlot({ hourIndex: middleIndex, half: selectedSlot.half });
+		setSelectedBlock({ hourIndex: middleIndex, half: selectedBlock.half });
 		return true;
 	}
-	function promptDeleteSelectedSlot() {
-		if (!viewerUserId || !selectedSlot) return false;
-		const hour = hours[selectedSlot.hourIndex];
+	function promptDeleteSelectedBlock() {
+		if (!viewerUserId || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		if (!slotHasContent(viewerUserId, hour, selectedSlot.half)) return false;
+		if (!blockHasContent(viewerUserId, hour, selectedBlock.half)) return false;
 		pendingDelete = {
 			user_id: viewerUserId,
 			hour,
-			half: selectedSlot.half
+			half: selectedBlock.half
 		};
 		return true;
 	}
 
-	function activateSelectedSlotFromKeyboard() {
-		if (!viewerUserId || !selectedSlot) return false;
-		const hour = hours[selectedSlot.hourIndex];
+	function activateSelectedBlockFromKeyboard() {
+		if (!viewerUserId || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		if (maybeHandlePaste(viewerUserId, hour, selectedSlot.half)) return true;
-		const todoValue = getTodo(viewerUserId, hour, selectedSlot.half);
+		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
+		const todoValue = getTodo(viewerUserId, hour, selectedBlock.half);
 		if (todoValue !== null) {
-			void toggleTodo(viewerUserId, hour, selectedSlot.half);
+			void toggleTodo(viewerUserId, hour, selectedBlock.half);
 			return true;
 		}
 
-		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
+		const habitName = getHabitTitle(viewerUserId, hour, selectedBlock.half);
 		if ((habitName ?? '').trim().length > 0) return true;
 
-		const title = getTitle(viewerUserId, hour, selectedSlot.half);
+		const title = getTitle(viewerUserId, hour, selectedBlock.half);
 		if (title.trim().length > 0) return false;
 		return true;
 	}
 
-	function openSelectedSlotEditorFromKeyboard(normal: boolean) {
-		if (!viewerUserId || !selectedSlot) return false;
-		const hour = hours[selectedSlot.hourIndex];
+	function openSelectedBlockEditorFromKeyboard(normal: boolean) {
+		if (!viewerUserId || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		if (maybeHandlePaste(viewerUserId, hour, selectedSlot.half)) return true;
-		const habitName = getHabitTitle(viewerUserId, hour, selectedSlot.half);
+		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
+		const habitName = getHabitTitle(viewerUserId, hour, selectedBlock.half);
 		if ((habitName ?? '').trim().length > 0) return false;
-		openEditor(viewerUserId, hour, selectedSlot.half, normal);
+		openEditor(viewerUserId, hour, selectedBlock.half, normal);
 		return true;
 	}
 	function collectShiftEntries(user_id: string, startIndex: number) {
 		const entries: ShiftEntry[] = [];
-		const totalSlots = hours.length * 2;
-		for (let idx = startIndex; idx < totalSlots; idx += 1) {
-			const { hour, half } = slotFromIndex(idx);
+		const totalBlocks = hours.length * 2;
+		for (let idx = startIndex; idx < totalBlocks; idx += 1) {
+			const { hour, half } = blockFromIndex(idx);
 			if (hour === undefined) continue;
 			const title = getTitle(user_id, hour, half);
 			const todo = getTodo(user_id, hour, half);
@@ -866,9 +866,9 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	function maxFixedContentIndex(user_id: string, startIndex: number) {
 		let lastFixed = -1;
 		for (let idx = 0; idx < startIndex; idx += 1) {
-			const { hour, half } = slotFromIndex(idx);
+			const { hour, half } = blockFromIndex(idx);
 			if (hour === undefined) continue;
-			if (slotHasContent(user_id, hour, half)) {
+			if (blockHasContent(user_id, hour, half)) {
 				lastFixed = idx;
 			}
 		}
@@ -876,11 +876,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	}
 	async function shiftSelection(direction: 1 | -1) {
 		if (isShiftSubmitting) return false;
-		if (!viewerUserId || !selectedSlot) return false;
+		if (!viewerUserId || !selectedBlock) return false;
 		const day_id = dayIdByUser[viewerUserId];
 		if (!day_id) return false;
-		const totalSlots = hours.length * 2;
-		const startIndex = slotIndex(selectedSlot.hourIndex, selectedSlot.half);
+		const totalBlocks = hours.length * 2;
+		const startIndex = blockIndex(selectedBlock.hourIndex, selectedBlock.half);
 		const entries = collectShiftEntries(viewerUserId, startIndex);
 		if (entries.length === 0) return false;
 		const includeHabits = false;
@@ -905,7 +905,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				target = entry.index;
 			}
 			if (target < 0) return false;
-			if (target >= totalSlots) {
+			if (target >= totalBlocks) {
 				overflow.push(entry);
 				continue;
 			}
@@ -918,7 +918,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		}
 		if (direction === 1 && overflow.length > 0) {
 			const ok = window.confirm(
-				`Shifting will delete ${overflow.length} slot${overflow.length === 1 ? '' : 's'}. Continue?`
+				`Shifting will delete ${overflow.length} block${overflow.length === 1 ? '' : 's'}. Continue?`
 			);
 			if (!ok) return false;
 		}
@@ -930,25 +930,28 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			if (entry.hasHabit) setHabitTitle(viewerUserId, entry.hour, entry.half, null);
 		}
 		for (const move of moves) {
-			const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
 			if (toHour === undefined) continue;
 			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
-			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
 			setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.todo ?? null);
 			if (move.entry.hasHabit) {
 				setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
 			}
 		}
 		if (movedSelection) {
-			const { hourIndex, half } = slotFromIndex(movedSelection.toIndex);
+			const { hourIndex, half } = blockFromIndex(movedSelection.toIndex);
 			if (hourIndex >= 0 && hourIndex < hours.length) {
-				setSelectedSlot({ hourIndex, half });
+				setSelectedBlock({ hourIndex, half });
 			}
 		}
 		const persistShift = async () => {
 			try {
-				const updates = new Map<string, { day_id: string; hour: number; half: boolean; title: string; todo: boolean | null }>();
+				const updates = new Map<
+					string,
+					{ day_id: string; hour: number; half: boolean; title: string; todo: boolean | null }
+				>();
 				for (const entry of clearEntries) {
 					updates.set(`${entry.hour}-${entry.half}`, {
 						day_id,
@@ -959,11 +962,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 					});
 				}
 				for (const move of moves) {
-					const { hour: toHour, half: toHalf } = slotFromIndex(move.toIndex);
+					const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
 					if (toHour === undefined) continue;
 					const habitName = move.entry.habitName ?? null;
 					const baseTitle = move.entry.title ?? '';
-					const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitName ?? '';
+					const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
 					const hasHoursContent =
 						resolvedTitle.trim().length > 0 || move.entry.todo !== null || move.entry.hasHabit;
 					if (!hasHoursContent) continue;
@@ -980,7 +983,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 						.from('hours')
 						.upsert([...updates.values()], { onConflict: 'day_id,hour,half' });
 					if (upsertErr) {
-						console.error('shift slots error', upsertErr);
+						console.error('shift blocks error', upsertErr);
 					}
 				}
 			} finally {
@@ -990,11 +993,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		void persistShift();
 		return true;
 	}
-	function handleSlotSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
+	function handleBlockSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
 		openEditor(user_id, hour, half, normal);
 	}
-	function handleSlotToggle(user_id: string, hour: number, half: 0 | 1) {
+	function handleBlockToggle(user_id: string, hour: number, half: 0 | 1) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
 		void toggleTodo(user_id, hour, half);
 	}
@@ -1006,42 +1009,42 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		dragImageEl = null;
 	}
 	function resetDragState() {
-		draggingSlot = null;
-		dragHoverSlot = null;
+		draggingBlock = null;
+		dragHoverBlock = null;
 		cleanupDragImage();
 	}
 
 	// pointer down: clear selection immediately before drag/focus
-	function handleSlotPointerDown(
+	function handleBlockPointerDown(
 		event: PointerEvent,
 		user_id: string,
 		hour: number,
 		half: 0 | 1,
 		hourIndex: number
 	) {
-		if (!canDragSlot(user_id, hour, half)) return;
+		if (!canDragBlock(user_id, hour, half)) return;
 
-		setSelectedSlot(null);
-		hoverSlot = null;
-		dragHoverSlot = null;
+		setSelectedBlock(null);
+		hoverBlock = null;
+		dragHoverBlock = null;
 	}
 
-	function handleSlotDragStart(
+	function handleBlockDragStart(
 		event: DragEvent,
 		user_id: string,
 		hour: number,
 		half: 0 | 1,
 		hourIndex: number
 	) {
-		if (!canDragSlot(user_id, hour, half)) {
+		if (!canDragBlock(user_id, hour, half)) {
 			event.preventDefault();
 			return;
 		}
 		isDragging = true;
 		suppressNextClick = true;
-		setSelectedSlot(null);
-		draggingSlot = { user_id, hour, half };
-		dragHoverSlot = { hourIndex, half };
+		setSelectedBlock(null);
+		draggingBlock = { user_id, hour, half };
+		dragHoverBlock = { hourIndex, half };
 		if (event.dataTransfer) {
 			event.dataTransfer.effectAllowed = 'move';
 			event.dataTransfer.setData('text/plain', `${hour}-${half}`);
@@ -1071,20 +1074,20 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			}
 		}
 	}
-	function handleSlotDragOver(event: DragEvent, user_id: string, half: 0 | 1, hourIndex: number) {
-		if (!draggingSlot || draggingSlot.user_id !== user_id) return;
+	function handleBlockDragOver(event: DragEvent, user_id: string, half: 0 | 1, hourIndex: number) {
+		if (!draggingBlock || draggingBlock.user_id !== user_id) return;
 		event.preventDefault();
 		event.stopPropagation();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-		if (!slotMatches(dragHoverSlot, hourIndex, half)) {
-			dragHoverSlot = { hourIndex, half };
+		if (!blockMatches(dragHoverBlock, hourIndex, half)) {
+			dragHoverBlock = { hourIndex, half };
 		}
 	}
-	function handleSlotDrop(event: DragEvent, user_id: string, hour: number, half: 0 | 1) {
-		if (!draggingSlot || draggingSlot.user_id !== user_id) return;
+	function handleBlockDrop(event: DragEvent, user_id: string, hour: number, half: 0 | 1) {
+		if (!draggingBlock || draggingBlock.user_id !== user_id) return;
 		event.preventDefault();
 		event.stopPropagation();
-		const source = draggingSlot;
+		const source = draggingBlock;
 		resetDragState();
 		if (source.hour === hour && source.half === half) return;
 		const move: PendingMove = {
@@ -1101,7 +1104,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			void submitMove(move, 'drag');
 		}
 	}
-	function handleSlotDragEnd() {
+	function handleBlockDragEnd() {
 		resetDragState();
 		isDragging = false;
 		queueMicrotask(() => {
@@ -1109,23 +1112,23 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		});
 	}
 	function captureHoverSelection() {
-		if (!viewerUserId || !hoverSlot) return false;
-		setSelectedSlot(hoverSlot);
-		hoverSlot = null;
+		if (!viewerUserId || !hoverBlock) return false;
+		setSelectedBlock(hoverBlock);
+		hoverBlock = null;
 		return true;
 	}
 
-	function handleSlotPointerEnter(user_id: string, hourIndex: number, half: 0 | 1) {
+	function handleBlockPointerEnter(user_id: string, hourIndex: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return;
 		if (suppressHoverSelection) return;
-		hoverSlot = { hourIndex, half };
-		if (draggingSlot) return;
-		setSelectedSlot({ hourIndex, half });
+		hoverBlock = { hourIndex, half };
+		if (draggingBlock) return;
+		setSelectedBlock({ hourIndex, half });
 	}
-	function handleSlotPointerLeave(user_id: string, hourIndex: number, half: 0 | 1) {
+	function handleBlockPointerLeave(user_id: string, hourIndex: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return;
-		if (hoverSlot && hoverSlot.hourIndex === hourIndex && hoverSlot.half === half) {
-			hoverSlot = null;
+		if (hoverBlock && hoverBlock.hourIndex === hourIndex && hoverBlock.half === half) {
+			hoverBlock = null;
 		}
 	}
 
@@ -1136,8 +1139,8 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
 		if (normalized === 'Escape') {
-			if (cutSlot) {
-				cancelCutSlot();
+			if (cutBlock) {
+				cancelCutBlock();
 				event.preventDefault();
 				return;
 			}
@@ -1150,27 +1153,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			event.preventDefault();
 			return;
 		}
-		if (
-			![
-				'h',
-				'j',
-				'k',
-				'l',
-				'g',
-				'm',
-				'>',
-				'<',
-				'Enter',
-				'i',
-				'd',
-				'x',
-				'p'
-			].includes(normalized)
-		)
+		if (!['h', 'j', 'k', 'l', 'g', 'm', '>', '<', 'Enter', 'i', 'd', 'x', 'p'].includes(normalized))
 			return;
-		hoverSlot = null;
+		hoverBlock = null;
 		ensureSelectionExists();
-		if (!selectedSlot) return;
+		if (!selectedBlock) return;
 		let handled = false;
 		switch (normalized) {
 			case 'h':
@@ -1191,10 +1178,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			}
 			case 'g':
 				if (key === 'G') {
-					handled = selectLastSlot();
+					handled = selectLastBlock();
 					pendingG = false;
 				} else if (pendingG) {
-					handled = selectFirstSlot();
+					handled = selectFirstBlock();
 					pendingG = false;
 				} else {
 					pendingG = true;
@@ -1202,7 +1189,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				break;
 			case 'm':
 				if (key === 'M') {
-					handled = selectMiddleSlot();
+					handled = selectMiddleBlock();
 				}
 				break;
 			case '>':
@@ -1214,21 +1201,21 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				void shiftSelection(-1);
 				break;
 			case 'Enter':
-				hjklSlot = selectedSlot;
-				handled = activateSelectedSlotFromKeyboard();
+				hjklBlock = selectedBlock;
+				handled = activateSelectedBlockFromKeyboard();
 				break;
 			case 'i':
-				hjklSlot = selectedSlot;
-				handled = openSelectedSlotEditorFromKeyboard(false);
+				hjklBlock = selectedBlock;
+				handled = openSelectedBlockEditorFromKeyboard(false);
 				break;
 			case 'd':
-				handled = promptDeleteSelectedSlot();
+				handled = promptDeleteSelectedBlock();
 				break;
 			case 'x':
-				handled = cutSelectedSlot();
+				handled = cutSelectedBlock();
 				break;
 			case 'p':
-				handled = pasteCutSlotAtSelection();
+				handled = pasteCutBlockAtSelection();
 				break;
 		}
 		if ((normalized === 'j' || normalized === 'k') && commandCount !== null) {
@@ -1269,25 +1256,25 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			.select('hour, half, title, todo')
 			.eq('day_id', day_id);
 		if (error) throw error;
-		const next: Record<number, SlotRow> = {};
+		const next: Record<number, BlockRow> = {};
 		for (const r of data ?? []) {
 			const h = r.hour as number;
 			const half01 = (r.half ? 1 : 0) as 0 | 1;
-			const slotValue: SlotValue = {
+			const blockValue: BlockValue = {
 				title: r.title ?? '',
 				todo: r.todo as boolean | null
 			};
-			next[h] ??= { first: createEmptySlot(), second: createEmptySlot() };
-			if (half01 === 0) next[h].first = slotValue;
-			else next[h].second = slotValue;
+			next[h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
+			if (half01 === 0) next[h].first = blockValue;
+			else next[h].second = blockValue;
 		}
-		slotsByUser[user_id] = next;
+		blocksByUser[user_id] = next;
 	}
-	function applyRealtimeSlotValue(
+	function applyRealtimeBlockValue(
 		user_id: string,
 		hour: number,
 		half01: 0 | 1,
-		value: SlotValue | null
+		value: BlockValue | null
 	) {
 		if (value === null) {
 			setTitle(user_id, hour, half01, '', null);
@@ -1326,7 +1313,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				return;
 			}
 			const half = oldRow.half ? 1 : 0;
-			applyRealtimeSlotValue(user_id, hour, half, null);
+			applyRealtimeBlockValue(user_id, hour, half, null);
 			return;
 		}
 		const row = payload.new;
@@ -1357,11 +1344,11 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			return;
 		}
 
-		const slotValue: SlotValue = {
+		const blockValue: BlockValue = {
 			title: row.title ?? '',
 			todo: (row.todo as boolean | null) ?? null
 		};
-		applyRealtimeSlotValue(user_id, hour, half, slotValue);
+		applyRealtimeBlockValue(user_id, hour, half, blockValue);
 	}
 	function teardownHoursRealtime(user_id: string) {
 		const current = hoursRealtimeByUser[user_id];
@@ -1382,29 +1369,26 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (existing && existing.day_id === day_id) return;
 		if (existing) teardownHoursRealtime(user_id);
 		const channel = supabase.channel(`hours:${user_id}:${day_id}`);
-		channel.on(
-			'postgres_changes',
-			{ event: '*', schema: 'public', table: 'hours' },
-			(payload) =>
-				handleHoursRealtimeChange(
-					user_id,
-					day_id,
-					payload as RealtimePostgresChangesPayload<HourRowPayload>
-				)
+		channel.on('postgres_changes', { event: '*', schema: 'public', table: 'hours' }, (payload) =>
+			handleHoursRealtimeChange(
+				user_id,
+				day_id,
+				payload as RealtimePostgresChangesPayload<HourRowPayload>
+			)
 		);
 		channel.subscribe();
 		hoursRealtimeByUser[user_id] = { channel, day_id };
 	}
-	function teardownSelectedSlotRealtime(user_id: string) {
-		const current = selectedSlotRealtimeByUser[user_id];
+	function teardownSelectedBlockRealtime(user_id: string) {
+		const current = selectedBlockRealtimeByUser[user_id];
 		if (!current) return;
 		current.unsubscribe();
-		selectedSlotRealtimeByUser[user_id] = null;
+		selectedBlockRealtimeByUser[user_id] = null;
 	}
-	function updateRemoteSelectionState(user_id: string, slot: SelectedSlot | null) {
-		remoteSelectedSlots = { ...remoteSelectedSlots, [user_id]: slot };
+	function updateRemoteSelectionState(user_id: string, block: SelectedBlock | null) {
+		remoteSelectedBlocks = { ...remoteSelectedBlocks, [user_id]: block };
 	}
-	function selectionFromDbValues(hourValue: unknown, halfValue: unknown): SelectedSlot | null {
+	function selectionFromDbValues(hourValue: unknown, halfValue: unknown): SelectedBlock | null {
 		const hour = Number(hourValue);
 		if (!Number.isFinite(hour)) return null;
 		const hourIndex = getHourIndex(hour);
@@ -1415,38 +1399,35 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		return { hourIndex, half };
 	}
 	function applyRemoteSelectionFromDb(user_id: string, hourValue: unknown, halfValue: unknown) {
-		const slot = selectionFromDbValues(hourValue, halfValue);
-		updateRemoteSelectionState(user_id, slot);
+		const block = selectionFromDbValues(hourValue, halfValue);
+		updateRemoteSelectionState(user_id, block);
 	}
-	function handleSelectedSlotRealtime(
+	function handleSelectedBlockRealtime(
 		user_id: string,
-		payload: RealtimePostgresChangesPayload<SelectedSlotRowPayload>
+		payload: RealtimePostgresChangesPayload<SelectedBlockRowPayload>
 	) {
-		const row = (payload.new ?? payload.old) as SelectedSlotRowPayload | null;
+		const row = (payload.new ?? payload.old) as SelectedBlockRowPayload | null;
 		if (!row || row.id !== user_id) return;
-		applyRemoteSelectionFromDb(user_id, row.selected_slot_hour, row.selected_slot_half);
+		applyRemoteSelectionFromDb(user_id, row.selected_block_hour, row.selected_block_half);
 	}
-	function ensureSelectedSlotRealtime(user_id: string) {
-		const existing = selectedSlotRealtimeByUser[user_id];
+	function ensureSelectedBlockRealtime(user_id: string) {
+		const existing = selectedBlockRealtimeByUser[user_id];
 		if (viewerUserId && user_id === viewerUserId) {
-			if (existing) teardownSelectedSlotRealtime(user_id);
+			if (existing) teardownSelectedBlockRealtime(user_id);
 			return;
 		}
 		if (existing) return;
-		const channel = supabase.channel(`selected-slot:${user_id}`);
-		channel.on(
-			'postgres_changes',
-			{ event: '*', schema: 'public', table: 'users' },
-			(payload) =>
-				handleSelectedSlotRealtime(
-					user_id,
-					payload as RealtimePostgresChangesPayload<SelectedSlotRowPayload>
-				)
+		const channel = supabase.channel(`selected-block:${user_id}`);
+		channel.on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload) =>
+			handleSelectedBlockRealtime(
+				user_id,
+				payload as RealtimePostgresChangesPayload<SelectedBlockRowPayload>
+			)
 		);
 		channel.subscribe();
-		selectedSlotRealtimeByUser[user_id] = channel;
+		selectedBlockRealtimeByUser[user_id] = channel;
 	}
-	async function broadcastSelectedSlot(selection: SelectedSlot | null) {
+	async function broadcastSelectedBlock(selection: SelectedBlock | null) {
 		if (!viewerUserId) return;
 		const hour =
 			selection && selection.hourIndex >= 0 && selection.hourIndex < hours.length
@@ -1460,12 +1441,12 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const { error } = await supabase
 			.from('users')
 			.update({
-				selected_slot_hour: hour,
-				selected_slot_half: halfValue
+				selected_block_hour: hour,
+				selected_block_half: halfValue
 			})
 			.eq('id', viewerUserId);
 		if (error) {
-			console.error('selected slot update error', error);
+			console.error('selected block update error', error);
 			lastBroadcastedSelectionKey = previousKey;
 		}
 	}
@@ -1473,8 +1454,8 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		for (const userId of Object.keys(hoursRealtimeByUser)) {
 			teardownHoursRealtime(userId);
 		}
-		for (const userId of Object.keys(selectedSlotRealtimeByUser)) {
-			teardownSelectedSlotRealtime(userId);
+		for (const userId of Object.keys(selectedBlockRealtimeByUser)) {
+			teardownSelectedBlockRealtime(userId);
 		}
 	}
 	async function loadHabitsForUser(user_id: string) {
@@ -1483,7 +1464,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			.select('hour, half, name')
 			.eq('user_id', user_id);
 		if (error) throw error;
-		const next: Record<number, HabitSlotRow> = {};
+		const next: Record<number, HabitBlockRow> = {};
 		for (const r of data ?? []) {
 			const h = r.hour as number;
 			const half01 = (r.half ? 1 : 0) as 0 | 1;
@@ -1563,7 +1544,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			};
 		}
 	}
-	function slotHasElapsed(hour: number, half: 0 | 1) {
+	function blockHasElapsed(hour: number, half: 0 | 1) {
 		if (currentHour < 0) return false;
 		if (currentHour > hour) return true;
 		if (currentHour === hour && currentHalf > half) return true;
@@ -1605,15 +1586,15 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (viewerUserId !== user_id) return;
 		const hourIndex = getHourIndex(h);
 		if (hourIndex !== -1) {
-			setSelectedSlot({ hourIndex, half: half01 });
+			setSelectedBlock({ hourIndex, half: half01 });
 		}
-		const slot = getSlot(user_id, h, half01);
+		const block = getBlock(user_id, h, half01);
 		draft = {
 			user_id,
 			hour: h,
 			half: half01,
-			title: slot.title ?? '',
-			todo: slot.todo ?? null
+			title: block.title ?? '',
+			todo: block.todo ?? null
 		};
 		editorMode = normal ?? editorMode;
 		logOpen = true;
@@ -1622,7 +1603,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	function closeLogModal() {
 		logOpen = false;
 		if (!viewerUserId) return;
-		hoverSlot = null;
+		hoverBlock = null;
 		suppressHoverSelection = true;
 	}
 
@@ -1658,8 +1639,8 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (viewerUserId && user_id === viewerUserId) {
 			const hourIndex = getHourIndex(hour);
 			if (hourIndex !== -1) {
-				setSelectedSlot({ hourIndex, half });
-				hoverSlot = null;
+				setSelectedBlock({ hourIndex, half });
+				hoverBlock = null;
 				suppressHoverSelection = true;
 			}
 		}
@@ -1674,16 +1655,16 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (!day_id) return;
 		const habitName = getHabitTitle(user_id, hour, half);
 		const habitKey = normalizeHabitName(habitName);
-		const isHabitSlot = habitKey !== null;
-		const slot = getSlot(user_id, hour, half);
-		if (slot.todo === null) return;
-		const nextTodo = !slot.todo;
+		const isHabitBlock = habitKey !== null;
+		const block = getBlock(user_id, hour, half);
+		if (block.todo === null) return;
+		const nextTodo = !block.todo;
 		const { error } = await supabase.from('hours').upsert(
 			{
 				day_id,
 				hour,
 				half: half === 1,
-				title: slot.title ?? '',
+				title: block.title ?? '',
 				todo: nextTodo
 			},
 			{ onConflict: 'day_id,hour,half' }
@@ -1693,7 +1674,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			return;
 		}
 		setTodo(user_id, hour, half, nextTodo);
-		if (isHabitSlot) {
+		if (isHabitBlock) {
 			void loadHabitStreaksForUser(user_id);
 		}
 	}
@@ -1717,7 +1698,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
 		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		if (sourceHabitName.length > 0) return true;
-		return slotHasContent(user_id, toHour, toHalf);
+		return blockHasContent(user_id, toHour, toHalf);
 	}
 	async function submitMove(
 		move: PendingMove,
@@ -1725,15 +1706,15 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	): Promise<boolean> {
 		isMoveSubmitting = true;
 		try {
-			const success = await moveSlot(move);
+			const success = await moveBlock(move);
 			if (success && source === 'cut') {
 				if (viewerUserId === move.user_id) {
 					const hourIndex = getHourIndex(move.toHour);
 					if (hourIndex !== -1) {
-						setSelectedSlot({ hourIndex, half: move.toHalf });
+						setSelectedBlock({ hourIndex, half: move.toHalf });
 					}
 				}
-				cancelCutSlot();
+				cancelCutBlock();
 			}
 			if (success && pendingMoveSource === source) {
 				pendingMoveSource = null;
@@ -1743,22 +1724,22 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			isMoveSubmitting = false;
 		}
 	}
-	async function moveSlot(move: PendingMove): Promise<boolean> {
+	async function moveBlock(move: PendingMove): Promise<boolean> {
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
 		if (viewerUserId !== user_id) return false;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return false;
-		if (!slotHasContent(user_id, fromHour, fromHalf)) return false;
+		if (!blockHasContent(user_id, fromHour, fromHalf)) return false;
 
-		const sourceSlot = getSlot(user_id, fromHour, fromHalf);
-		const sourceValue: SlotValue = {
-			title: sourceSlot.title ?? '',
-			todo: sourceSlot.todo
+		const sourceBlock = getBlock(user_id, fromHour, fromHalf);
+		const sourceValue: BlockValue = {
+			title: sourceBlock.title ?? '',
+			todo: sourceBlock.todo
 		};
-		const destinationHadEntry = slotHasContent(user_id, toHour, toHalf);
-		const destinationSlotValue = destinationHadEntry ? getSlot(user_id, toHour, toHalf) : null;
-		const destinationValue: SlotValue | null = destinationSlotValue
-			? { title: destinationSlotValue.title ?? '', todo: destinationSlotValue.todo }
+		const destinationHadEntry = blockHasContent(user_id, toHour, toHalf);
+		const destinationBlockValue = destinationHadEntry ? getBlock(user_id, toHour, toHalf) : null;
+		const destinationValue: BlockValue | null = destinationBlockValue
+			? { title: destinationBlockValue.title ?? '', todo: destinationBlockValue.todo }
 			: null;
 		const destinationHasHoursContent =
 			destinationValue !== null &&
@@ -1774,7 +1755,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				.eq('hour', toHour)
 				.eq('half', toHalf === 1);
 			if (deleteDestErr) {
-				console.error('slot move destination delete error', deleteDestErr);
+				console.error('block move destination delete error', deleteDestErr);
 				return false;
 			}
 		}
@@ -1787,7 +1768,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			.eq('half', fromHalf === 1);
 
 		if (updateErr) {
-			console.error('slot move error', updateErr);
+			console.error('block move error', updateErr);
 			return false;
 		}
 
@@ -1804,7 +1785,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				{ onConflict: 'day_id,hour,half' }
 			);
 			if (swapInsertErr) {
-				console.error('slot swap insert error', swapInsertErr);
+				console.error('block swap insert error', swapInsertErr);
 			}
 			setTitle(user_id, fromHour, fromHalf, destinationValue.title ?? '', destinationValue.todo);
 		} else {
@@ -1819,7 +1800,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				.eq('hour', toHour)
 				.eq('half', toHalf === 1);
 			if (deleteHabitErr) {
-				console.error('slot move destination habit delete error', deleteHabitErr);
+				console.error('block move destination habit delete error', deleteHabitErr);
 			}
 		}
 
@@ -1866,13 +1847,13 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		if (!pendingDelete || isDeleteSubmitting) return;
 		isDeleteSubmitting = true;
 		try {
-			const success = await deleteSlot(pendingDelete);
+			const success = await deleteBlock(pendingDelete);
 			if (success) pendingDelete = null;
 		} finally {
 			isDeleteSubmitting = false;
 		}
 	}
-	async function deleteSlot(action: PendingDelete): Promise<boolean> {
+	async function deleteBlock(action: PendingDelete): Promise<boolean> {
 		const { user_id, hour, half } = action;
 		if (viewerUserId !== user_id) return false;
 		const day_id = dayIdByUser[user_id];
@@ -1884,7 +1865,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				.eq('hour', hour)
 				.eq('half', half === 1);
 			if (error) {
-				console.error('slot delete error', error);
+				console.error('block delete error', error);
 				return false;
 			}
 		}
@@ -1893,7 +1874,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		return true;
 	}
 
-	function slotKey(u: string, date: string, h: number, half: 0 | 1) {
+	function blockKey(u: string, date: string, h: number, half: 0 | 1) {
 		return `${u}|${date}|${h}|${half}`;
 	}
 
@@ -1906,14 +1887,14 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 
 		if (h < START_HOUR || h >= END_HOUR) return;
 
-		// If the current slot already has *anything*, don't prompt
-		if (slotHasContent(viewerUserId, h, half)) return;
+		// If the current block already has *anything*, don't prompt
+		if (blockHasContent(viewerUserId, h, half)) return;
 
-		const key = slotKey(viewerUserId, date, h, half);
+		const key = blockKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
 
-		// 1) Check if previous slot was an *unfinished* TODO
-		const prev = previousSlot(h, half);
+		// 1) Check if previous block was an *unfinished* TODO
+		const prev = previousBlock(h, half);
 		if (prev) {
 			const { hour: prevHour, half: prevHalf } = prev;
 			const prevTodo = getTodo(viewerUserId, prevHour, prevHalf);
@@ -1935,7 +1916,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				return;
 			}
 
-			// Only prompt if previous slot is a TODO that is still unfinished (todo === false)
+			// Only prompt if previous block is a TODO that is still unfinished (todo === false)
 			if (prevTodo === false && prevTitle.length > 0) {
 				todoCarryPrompt = {
 					user_id: viewerUserId,
@@ -1945,12 +1926,12 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 					currHalf: half,
 					title: prevTitle
 				};
-				lastPromptKey = key; // avoid re-prompting for this slot
+				lastPromptKey = key; // avoid re-prompting for this block
 				return;
 			}
 		}
 
-		// 2) Normal behavior: if current slot is empty, open the editor
+		// 2) Normal behavior: if current block is empty, open the editor
 		const t = getTitle(viewerUserId, h, half);
 		if (!t || t.trim() === '') {
 			openEditor(viewerUserId, h, half, false);
@@ -1968,7 +1949,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 
-			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+			const prevBlock = getBlock(user_id, prevHour, prevHalf);
 
 			// Mark previous as completed (todo = true)
 			const { error } = await supabase.from('hours').upsert(
@@ -1976,7 +1957,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 					day_id,
 					hour: prevHour,
 					half: prevHalf === 1,
-					title: prevSlot.title ?? '',
+					title: prevBlock.title ?? '',
 					todo: true
 				},
 				{ onConflict: 'day_id,hour,half' }
@@ -1989,7 +1970,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 
 			setTodo(user_id, prevHour, prevHalf, true);
 
-			// Close prompt and open editor for the current slot
+			// Close prompt and open editor for the current block
 			todoCarryPrompt = null;
 			openEditor(user_id, currHour, currHalf, false);
 		} finally {
@@ -2007,16 +1988,16 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 
-			const prevSlot = getSlot(user_id, prevHour, prevHalf);
+			const prevBlock = getBlock(user_id, prevHour, prevHalf);
 
-			// 1) Turn previous into a normal slot (todo = null, keep title)
+			// 1) Turn previous into a normal block (todo = null, keep title)
 			{
 				const { error } = await supabase.from('hours').upsert(
 					{
 						day_id,
 						hour: prevHour,
 						half: prevHalf === 1,
-						title: prevSlot.title ?? '',
+						title: prevBlock.title ?? '',
 						todo: null
 					},
 					{ onConflict: 'day_id,hour,half' }
@@ -2028,7 +2009,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 				setTodo(user_id, prevHour, prevHalf, null);
 			}
 
-			// 2) Copy into current slot as a new TODO
+			// 2) Copy into current block as a new TODO
 			{
 				const { error } = await supabase.from('hours').upsert(
 					{
@@ -2041,7 +2022,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 					{ onConflict: 'day_id,hour,half' }
 				);
 				if (error) {
-					console.error('create continued todo in current slot error', error);
+					console.error('create continued todo in current block error', error);
 					return;
 				}
 				setTitle(user_id, currHour, currHalf, title, false);
@@ -2068,13 +2049,13 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		try {
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
-			const slot = getSlot(user_id, habitHour, habitHalf);
+			const block = getBlock(user_id, habitHour, habitHalf);
 			const { error } = await supabase.from('hours').upsert(
 				{
 					day_id,
 					hour: habitHour,
 					half: habitHalf === 1,
-					title: slot.title ?? '',
+					title: block.title ?? '',
 					todo: completed
 				},
 				{ onConflict: 'day_id,hour,half' }
@@ -2112,7 +2093,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		return false;
 	}
 
-	function slotInfoFromNow() {
+	function blockInfoFromNow() {
 		const now = getNow();
 		const hour = now.getHours();
 		const half = (now.getMinutes() < 30 ? 0 : 1) as 0 | 1;
@@ -2139,12 +2120,12 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		return hour >= START_HOUR && hour < END_HOUR;
 	}
 
-	function notifyCurrentSlot() {
+	function notifyCurrentBlock() {
 		if (!viewerUserId || !('Notification' in window) || Notification.permission !== 'granted') {
 			return;
 		}
 
-		const { hour, half } = slotInfoFromNow();
+		const { hour, half } = blockInfoFromNow();
 		if (!withinWindow(hour)) return;
 
 		const blockLabel = half === 0 ? 'Block A' : 'Block B';
@@ -2158,7 +2139,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 
 		new Notification(notifTitle, {
 			body,
-			tag: `slot-${localToday()}-${hour}-${half}`,
+			tag: `block-${localToday()}-${hour}-${half}`,
 			icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=',
 			requireInteraction: false,
 			silent: false
@@ -2174,7 +2155,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		const arm = async () => {
 			const ok = await ensureNotifPermission();
 			if (!ok) return;
-			notifyCurrentSlot();
+			notifyCurrentBlock();
 			window.clearTimeout(notifTimer as unknown as number);
 			notifTimer = window.setTimeout(arm, msUntilNextBoundary());
 		};
@@ -2205,21 +2186,21 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 		}
 		lastBroadcastedSelectionKey = null;
 		if (!viewerUserId) {
-			selectedSlot = null;
-			hoverSlot = null;
-			cancelCutSlot();
+			selectedBlock = null;
+			hoverBlock = null;
+			cancelCutBlock();
 		}
 
 		try {
 			const { data: rows, error: uerr } = await supabase
 				.from('users')
-				.select('id, display_name, selected_slot_hour, selected_slot_half')
+				.select('id, display_name, selected_block_hour, selected_block_half')
 				.order('display_name', { ascending: true });
 			if (uerr) throw uerr;
 
 			people = (rows ?? []).map((r) => {
 				const user_id = r.id as string;
-				applyRemoteSelectionFromDb(user_id, r.selected_slot_hour, r.selected_slot_half);
+				applyRemoteSelectionFromDb(user_id, r.selected_block_hour, r.selected_block_half);
 				return {
 					label: r.display_name as string,
 					user_id
@@ -2230,7 +2211,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			startPlayerStatusWatchers(viewerUserId);
 			startLocalPlayerPresenceIfTracked(viewerUserId);
 			for (const person of people) {
-				ensureSelectedSlotRealtime(person.user_id);
+				ensureSelectedBlockRealtime(person.user_id);
 			}
 
 			const perUserLoads = people.map(async ({ user_id }) => {
@@ -2330,8 +2311,8 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 							</div>
 							{#each hours as _}
 								<div class="flex h-7 w-full flex-row space-x-1">
-									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 								</div>
 							{/each}
 						</div>
@@ -2354,14 +2335,14 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 							{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
 								{#each hours as _}
 									<div class="flex h-7 w-full flex-row space-x-1">
-										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 									</div>
 								{/each}
 							{:else}
 								{#each hours as h, hourIndex}
-									{@const slotIsCutA = slotIsCut(person.user_id, h, 0)}
-									{@const slotIsCutB = slotIsCut(person.user_id, h, 1)}
+									{@const blockIsCutA = blockIsCut(person.user_id, h, 0)}
+									{@const blockIsCutB = blockIsCut(person.user_id, h, 1)}
 									<div
 										class="hover:none flex h-7 w-full flex-row space-x-1"
 										class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
@@ -2369,61 +2350,61 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 										<div
 											class="flex w-full min-w-0 bg-transparent"
 											role="presentation"
-											draggable={canDragSlot(person.user_id, h, 0)}
+											draggable={canDragBlock(person.user_id, h, 0)}
 											onpointerdown={(e) =>
-												handleSlotPointerDown(e, person.user_id, h, 0, hourIndex)}
-											onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 0)}
-											onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 0)}
+												handleBlockPointerDown(e, person.user_id, h, 0, hourIndex)}
+											onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 0)}
+											onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 0)}
 											ondragstart={(event) => {
-												handleSlotDragStart(event, person.user_id, h, 0, hourIndex);
+												handleBlockDragStart(event, person.user_id, h, 0, hourIndex);
 											}}
 											ondragover={(event) =>
-												handleSlotDragOver(event, person.user_id, 0, hourIndex)}
-											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 0)}
-											ondragend={handleSlotDragEnd}
+												handleBlockDragOver(event, person.user_id, 0, hourIndex)}
+											ondrop={(event) => handleBlockDrop(event, person.user_id, h, 0)}
+											ondragend={handleBlockDragEnd}
 										>
-											<Slot
+											<Block
 												title={getTitle(person.user_id, h, 0)}
 												todo={getTodo(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
-												onSelect={() => handleSlotSelect(person.user_id, h, 0, false)}
-												onToggleTodo={() => handleSlotToggle(person.user_id, h, 0)}
+												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
+												onToggleTodo={() => handleBlockToggle(person.user_id, h, 0)}
 												habit={getHabitTitle(person.user_id, h, 0)}
-												habitStreak={habitStreakForSlot(person.user_id, h, 0)}
-												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
-												isCurrent={slotIsCurrent(h, 0)}
-												isCut={slotIsCutA}
+												habitStreak={habitStreakForBlock(person.user_id, h, 0)}
+												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
+												isCurrent={blockIsCurrent(h, 0)}
+												isCut={blockIsCutA}
 											/>
 										</div>
 										<div
 											class="flex w-full min-w-0 bg-transparent"
 											role="presentation"
-											draggable={canDragSlot(person.user_id, h, 1)}
+											draggable={canDragBlock(person.user_id, h, 1)}
 											onpointerdown={(e) =>
-												handleSlotPointerDown(e, person.user_id, h, 1, hourIndex)}
-											onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 1)}
-											onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 1)}
+												handleBlockPointerDown(e, person.user_id, h, 1, hourIndex)}
+											onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 1)}
+											onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 1)}
 											ondragstart={(event) => {
-												handleSlotDragStart(event, person.user_id, h, 1, hourIndex);
+												handleBlockDragStart(event, person.user_id, h, 1, hourIndex);
 											}}
 											ondragover={(event) =>
-												handleSlotDragOver(event, person.user_id, 1, hourIndex)}
-											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 1)}
-											ondragend={handleSlotDragEnd}
+												handleBlockDragOver(event, person.user_id, 1, hourIndex)}
+											ondrop={(event) => handleBlockDrop(event, person.user_id, h, 1)}
+											ondragend={handleBlockDragEnd}
 										>
-											<Slot
+											<Block
 												title={getTitle(person.user_id, h, 1)}
 												todo={getTodo(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
-												onSelect={() => handleSlotSelect(person.user_id, h, 1, false)}
-												onToggleTodo={() => handleSlotToggle(person.user_id, h, 1)}
+												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
+												onToggleTodo={() => handleBlockToggle(person.user_id, h, 1)}
 												habit={getHabitTitle(person.user_id, h, 1)}
-												habitStreak={habitStreakForSlot(person.user_id, h, 1)}
-												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
-												isCurrent={slotIsCurrent(h, 1)}
-												isCut={slotIsCutB}
+												habitStreak={habitStreakForBlock(person.user_id, h, 1)}
+												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
+												isCurrent={blockIsCurrent(h, 1)}
+												isCut={blockIsCutB}
 											/>
 										</div>
 									</div>
@@ -2543,7 +2524,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	open={pendingMove !== null}
 	onCancel={cancelPendingMove}
 	onConfirm={() => void confirmPendingMove()}
-	slotLabel={pendingMoveSummary?.slotLabel ?? ''}
+	blockLabel={pendingMoveSummary?.blockLabel ?? ''}
 	fromLabel={pendingMoveSummary?.fromLabel ?? ''}
 	toLabel={pendingMoveSummary?.toLabel ?? ''}
 	destinationLabel={pendingMoveSummary?.destinationLabel ?? null}
@@ -2556,7 +2537,7 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 	open={pendingDelete !== null}
 	onCancel={cancelPendingDelete}
 	onConfirm={() => void confirmPendingDelete()}
-	slotLabel={pendingDeleteSummary?.slotLabel ?? ''}
+	blockLabel={pendingDeleteSummary?.blockLabel ?? ''}
 	fromLabel={pendingDeleteSummary?.locationLabel ?? ''}
 	toLabel={pendingDeleteSummary?.locationLabel ?? ''}
 	destinationLabel={null}
@@ -2567,13 +2548,13 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 />
 
 <style>
-	.loading-slot,
+	.loading-block,
 	.loading-sheen {
 		position: relative;
 		overflow: hidden;
 	}
 
-	.loading-slot::after,
+	.loading-block::after,
 	.loading-sheen::after {
 		content: '';
 		position: absolute;
@@ -2585,10 +2566,10 @@ import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/
 			transparent 100%
 		);
 		transform: translateX(-100%);
-		animation: slot-sheen 0.5s linear infinite;
+		animation: block-sheen 0.5s linear infinite;
 	}
 
-	@keyframes slot-sheen {
+	@keyframes block-sheen {
 		100% {
 			transform: translateX(100%);
 		}

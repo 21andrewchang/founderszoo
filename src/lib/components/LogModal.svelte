@@ -43,8 +43,22 @@
 	};
 
 	const PRESETS: HabitPreset[] = [
-		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read', emoji: '📖' },
-		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored', emoji: '😵‍💫' },
+		{
+			label: 'Read',
+			value: 'Read',
+			colorClass: 'bg-blue-500',
+			key: '1',
+			habitKey: 'read',
+			emoji: '📖'
+		},
+		{
+			label: 'Bored',
+			value: 'Bored',
+			colorClass: 'bg-emerald-500',
+			key: '2',
+			habitKey: 'bored',
+			emoji: '😵‍💫'
+		},
 		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym', emoji: '🏋️' }
 	];
 
@@ -62,8 +76,8 @@
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
-	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
-	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
+	let hour = $state<number>((initialHour ?? currentBlock().hour) as number);
+	let half = $state<0 | 1>((initialHalf ?? currentBlock().half) as 0 | 1);
 	let mode = $state<ModalMode>(normal ? 'normal' : 'insert');
 
 	function focusInputSoon() {
@@ -134,7 +148,7 @@
 		}
 	}
 
-	function currentSlot(): { hour: number; half: 0 | 1 } {
+	function currentBlock(): { hour: number; half: 0 | 1 } {
 		const now = new Date();
 		const hour = now.getHours();
 		const half = (now.getMinutes() < 30 ? 0 : 1) as 0 | 1;
@@ -168,7 +182,7 @@
 
 	$effect(() => {
 		if (!open) return;
-		const fallback = currentSlot();
+		const fallback = currentBlock();
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
