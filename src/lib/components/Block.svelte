@@ -12,6 +12,7 @@
 	const props = $props<{
 		title?: string;
 		status?: boolean | null;
+		showStatus?: boolean;
 		editable?: boolean;
 		onSelect?: () => void;
 		onCycleStatus?: () => void;
@@ -50,6 +51,7 @@
 	const isHabit = $derived(Boolean(props.habit));
 	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
 	const isFilled = $derived(displayTitle.length > 0);
+	const showStatusProp = $derived(props.showStatus);
 
 	const currentClass = $derived(isCurrentBlock ? 'bg-stone-200' : '');
 
@@ -64,14 +66,18 @@
 				}`
 	);
 
-	const showStatus = $derived(isFilled && !isHabit);
+	const showStatus = $derived(
+		showStatusProp === undefined ? isFilled && !isHabit : Boolean(showStatusProp)
+	);
+	const canToggleStatus = $derived(isFilled && !isHabit);
+
 	const canToggleHabit = $derived(isHabit);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleBlockClick() {
 		if (onPrimaryAction()) return;
-		if (showStatus || canToggleHabit) {
+		if (canToggleStatus || canToggleHabit) {
 			onCycleStatus();
 			return;
 		}

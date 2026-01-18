@@ -740,6 +740,52 @@
 		}
 		return maxCount;
 	}
+	function blockRunRange(user_id: string, h: number, half01: 0 | 1) {
+		const title = getTitle(user_id, h, half01).trim();
+		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
+		const hourIndex = getHourIndex(h);
+		if (!title || habitName.length > 0 || hourIndex === -1) {
+			const startIndex = hourIndex === -1 ? 0 : blockIndex(hourIndex, half01);
+			return { startIndex, endIndex: startIndex };
+		}
+		const totalBlocks = hours.length * 2;
+		const startIndex = blockIndex(hourIndex, half01);
+		const matches = (index: number) => {
+			const { hour, half } = blockFromIndex(index);
+			if (hour === undefined) return false;
+			const nextTitle = getTitle(user_id, hour, half).trim();
+			const nextHabit = (getHabitTitle(user_id, hour, half) ?? '').trim();
+			if (!nextTitle || nextHabit.length > 0) return false;
+			return nextTitle === title;
+		};
+		let first = startIndex;
+		while (first - 1 >= 0 && matches(first - 1)) {
+			first -= 1;
+		}
+		let last = startIndex;
+		while (last + 1 < totalBlocks && matches(last + 1)) {
+			last += 1;
+		}
+		return { startIndex: first, endIndex: last };
+	}
+	function blockRunInfo(user_id: string, h: number, half01: 0 | 1) {
+		const { startIndex, endIndex } = blockRunRange(user_id, h, half01);
+		const hourIndex = getHourIndex(h);
+		if (hourIndex === -1) return { length: 1, isLast: true };
+		const currentIndex = blockIndex(hourIndex, half01);
+		return { length: endIndex - startIndex + 1, isLast: currentIndex === endIndex };
+	}
+	function blockRunLength(user_id: string | null, h: number, half01: 0 | 1) {
+		if (!user_id) return 1;
+		return blockRunInfo(user_id, h, half01).length;
+	}
+	function blockShowsStatus(user_id: string, h: number, half01: 0 | 1) {
+		const habitName = (getHabitTitle(user_id, h, half01) ?? '').trim();
+		if (habitName.length > 0) return false;
+		const title = getTitle(user_id, h, half01).trim();
+		if (!title) return false;
+		return blockRunInfo(user_id, h, half01).isLast;
+	}
 
 	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
@@ -947,6 +993,7 @@
 			if (hour === undefined) continue;
 			const title = getTitle(user_id, hour, half);
 			const status = getStatus(user_id, hour, half);
+
 			const habitName = getHabitTitle(user_id, hour, half);
 			const hasHabit = (habitName ?? '').trim().length > 0;
 			const hasContent = getDisplayTitle(user_id, hour, half).length > 0;
@@ -975,14 +1022,12 @@
 		}
 		return lastFixed;
 	}
-	async function shiftSelection(direction: 1 | -1) {
+	async function shiftBlocksFromIndex(user_id: string, startIndex: number, direction: 1 | -1) {
 		if (isShiftSubmitting) return false;
-		if (!viewerUserId || !selectedBlock) return false;
-		const day_id = dayIdByUser[viewerUserId];
+		const day_id = dayIdByUser[user_id];
 		if (!day_id) return false;
 		const totalBlocks = hours.length * 2;
-		const startIndex = blockIndex(selectedBlock.hourIndex, selectedBlock.half);
-		const entries = collectShiftEntries(viewerUserId, startIndex);
+		const entries = collectShiftEntries(user_id, startIndex);
 		if (entries.length === 0) return false;
 		const includeHabits = false;
 		const movableEntries = entries.filter((entry) => includeHabits || !entry.hasHabit);
@@ -990,7 +1035,7 @@
 		const lockedHabits = new Set(
 			entries.filter((entry) => entry.hasHabit && !includeHabits).map((entry) => entry.index)
 		);
-		const lastFixed = maxFixedContentIndex(viewerUserId, startIndex);
+		const lastFixed = maxFixedContentIndex(user_id, startIndex);
 		const moves: ShiftMove[] = [];
 		const overflow: ShiftEntry[] = [];
 		const occupiedTargets = new Set<number>();
@@ -1027,8 +1072,8 @@
 		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
 		isShiftSubmitting = true;
 		for (const entry of clearEntries) {
-			setTitle(viewerUserId, entry.hour, entry.half, '', null);
-			if (entry.hasHabit) setHabitTitle(viewerUserId, entry.hour, entry.half, null);
+			setTitle(user_id, entry.hour, entry.half, '', null);
+			if (entry.hasHabit) setHabitTitle(user_id, entry.hour, entry.half, null);
 		}
 		for (const move of moves) {
 			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
@@ -1036,12 +1081,12 @@
 			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
 			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
-			setTitle(viewerUserId, toHour, toHalf, resolvedTitle, move.entry.status ?? null);
+			setTitle(user_id, toHour, toHalf, resolvedTitle, move.entry.status ?? null);
 			if (move.entry.hasHabit) {
-				setHabitTitle(viewerUserId, toHour, toHalf, habitName ?? null);
+				setHabitTitle(user_id, toHour, toHalf, habitName ?? null);
 			}
 		}
-		if (movedSelection) {
+		if (viewerUserId === user_id && movedSelection) {
 			const { hourIndex, half } = blockFromIndex(movedSelection.toIndex);
 			if (hourIndex >= 0 && hourIndex < hours.length) {
 				setSelectedBlock({ hourIndex, half });
@@ -1049,19 +1094,26 @@
 		}
 		const persistShift = async () => {
 			try {
+				if (clearEntries.length > 0) {
+					const deletions = await Promise.all(
+						clearEntries.map((entry) =>
+							supabase
+								.from('hours')
+								.delete()
+								.eq('day_id', day_id)
+								.eq('hour', entry.hour)
+								.eq('half', entry.half === 1)
+						)
+					);
+					const deleteErr = deletions.find((result) => result.error)?.error;
+					if (deleteErr) {
+						console.error('shift blocks delete error', deleteErr);
+					}
+				}
 				const updates = new Map<
 					string,
 					{ day_id: string; hour: number; half: boolean; title: string; status: boolean | null }
 				>();
-				for (const entry of clearEntries) {
-					updates.set(`${entry.hour}-${entry.half}`, {
-						day_id,
-						hour: entry.hour,
-						half: entry.half === 1,
-						title: '',
-						status: null
-					});
-				}
 				for (const move of moves) {
 					const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
 					if (toHour === undefined) continue;
@@ -1092,6 +1144,12 @@
 		};
 		void persistShift();
 		return true;
+	}
+
+	async function shiftSelection(direction: 1 | -1) {
+		if (!viewerUserId || !selectedBlock) return false;
+		const startIndex = blockIndex(selectedBlock.hourIndex, selectedBlock.half);
+		return shiftBlocksFromIndex(viewerUserId, startIndex, direction);
 	}
 	function handleBlockSelect(user_id: string, hour: number, half: 0 | 1, normal: boolean) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
@@ -1721,8 +1779,9 @@
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex === -1) return;
 		const totalBlocks = hours.length * 2;
+		const isNewBlock = (draft.title ?? '').trim().length === 0;
 		const maxCount = maxBlockCountFor(user_id, hour, half);
-		const desiredCount = Math.min(blockCount, maxCount);
+		const desiredCount = isNewBlock ? Math.min(blockCount, maxCount) : 1;
 		const targets: { hour: number; half: 0 | 1 }[] = [];
 		for (let offset = 0; offset < desiredCount; offset += 1) {
 			const nextIndex = blockIndex(hourIndex, half) + offset;
@@ -1797,21 +1856,40 @@
 		const title = (block.title ?? '').trim();
 		if (!title) return;
 		const nextStatus = block.status === null ? false : block.status === false ? true : null;
-		const { error } = await supabase.from('hours').upsert(
-			{
+		const hourIndex = getHourIndex(hour);
+		if (hourIndex === -1) return;
+		const { startIndex, endIndex } = blockRunRange(user_id, hour, half);
+		const updates = [] as {
+			day_id: string;
+			hour: number;
+			half: boolean;
+			title: string;
+			status: boolean | null;
+		}[];
+		for (let idx = startIndex; idx <= endIndex; idx += 1) {
+			const { hour: targetHour, half: targetHalf } = blockFromIndex(idx);
+			if (targetHour === undefined) break;
+			const targetTitle = getTitle(user_id, targetHour, targetHalf).trim();
+			if (targetTitle !== title) continue;
+			updates.push({
 				day_id,
-				hour,
-				half: half === 1,
-				title: block.title ?? '',
+				hour: targetHour,
+				half: targetHalf === 1,
+				title: targetTitle,
 				status: nextStatus
-			},
-			{ onConflict: 'day_id,hour,half' }
-		);
+			});
+		}
+		if (updates.length === 0) return;
+		const { error } = await supabase.from('hours').upsert(updates, {
+			onConflict: 'day_id,hour,half'
+		});
 		if (error) {
 			console.error('cycle status error', error);
 			return;
 		}
-		setStatus(user_id, hour, half, nextStatus);
+		for (const update of updates) {
+			setStatus(user_id, update.hour, update.half ? 1 : 0, nextStatus);
+		}
 	}
 
 	function cancelPendingMove() {
@@ -1989,6 +2067,10 @@
 		const { user_id, hour, half } = action;
 		if (viewerUserId !== user_id) return false;
 		const day_id = dayIdByUser[user_id];
+		const title = (getTitle(user_id, hour, half) ?? '').trim();
+		const status = getStatus(user_id, hour, half);
+		const hourIndex = getHourIndex(hour);
+		const totalBlocks = hours.length * 2;
 		if (day_id) {
 			const { error } = await supabase
 				.from('hours')
@@ -1999,6 +2081,38 @@
 			if (error) {
 				console.error('block delete error', error);
 				return false;
+			}
+			if (title && hourIndex !== -1) {
+				const currentIndex = blockIndex(hourIndex, half);
+				const prevIndex = currentIndex - 1;
+				const nextIndex = currentIndex + 1;
+				if (prevIndex >= 0 && nextIndex < totalBlocks) {
+					const prevBlock = blockFromIndex(prevIndex);
+					const nextBlock = blockFromIndex(nextIndex);
+					if (prevBlock.hour !== undefined && nextBlock.hour !== undefined) {
+						const prevTitle = (getTitle(user_id, prevBlock.hour, prevBlock.half) ?? '').trim();
+						const nextTitle = (getTitle(user_id, nextBlock.hour, nextBlock.half) ?? '').trim();
+						const isMiddleOfRun = prevTitle === title && nextTitle === title;
+
+						if (isMiddleOfRun) {
+							const { error: completeErr } = await supabase.from('hours').upsert(
+								{
+									day_id,
+									hour: prevBlock.hour,
+									half: prevBlock.half === 1,
+									title: prevTitle,
+									status: true
+								},
+								{ onConflict: 'day_id,hour,half' }
+							);
+							if (completeErr) {
+								console.error('block delete split error', completeErr);
+							} else {
+								setStatus(user_id, prevBlock.hour, prevBlock.half, true);
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -2018,9 +2132,6 @@
 		const half = currentHalf;
 
 		if (h < START_HOUR || h >= END_HOUR) return;
-
-		// If the current block already has *anything*, don't prompt
-		if (blockHasContent(viewerUserId, h, half)) return;
 
 		const key = blockKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
@@ -2062,6 +2173,8 @@
 				return;
 			}
 		}
+
+		if (blockHasContent(viewerUserId, h, half)) return;
 
 		// 2) Normal behavior: if current block is empty, open the editor
 		const t = getTitle(viewerUserId, h, half);
@@ -2139,6 +2252,21 @@
 					return;
 				}
 				setStatus(user_id, prevHour, prevHalf, null);
+			}
+
+			const currTitle = (getTitle(user_id, currHour, currHalf) ?? '').trim();
+			const currStatus = getStatus(user_id, currHour, currHalf);
+			const currHabit = (getHabitTitle(user_id, currHour, currHalf) ?? '').trim();
+			const hasCurrentContent = currTitle.length > 0 || currHabit.length > 0;
+			if (hasCurrentContent && currTitle.length > 0 && currHabit.length === 0) {
+				const currHourIndex = getHourIndex(currHour);
+				if (currHourIndex !== -1) {
+					const currIndex = blockIndex(currHourIndex, currHalf);
+					const shifted = await shiftBlocksFromIndex(user_id, currIndex, 1);
+					if (!shifted) {
+						return;
+					}
+				}
 			}
 
 			// 2) Copy into current block as in progress
@@ -2558,6 +2686,7 @@
 											<Block
 												title={getTitle(person.user_id, h, 0)}
 												status={getStatus(person.user_id, h, 0)}
+												showStatus={blockShowsStatus(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
@@ -2588,6 +2717,7 @@
 											<Block
 												title={getTitle(person.user_id, h, 1)}
 												status={getStatus(person.user_id, h, 1)}
+												showStatus={blockShowsStatus(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
@@ -2718,6 +2848,7 @@
 	initialStatus={draft.status}
 	habitStreaks={logModalHabitStreaks}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
+	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
 />
 
 {#if habitCheckPrompt}

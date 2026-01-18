@@ -17,7 +17,8 @@
 		initialTitle = '',
 		initialStatus = null,
 		habitStreaks = null,
-		maxBlockCountFor = null
+		maxBlockCountFor = null,
+		runLengthFor = null
 	} = $props<{
 		normal?: boolean;
 		open?: boolean;
@@ -35,6 +36,7 @@
 		initialStatus?: boolean | null;
 		habitStreaks?: Record<string, PlayerStreak | null> | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
+		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
@@ -82,16 +84,13 @@
 	let text = $state('');
 	let status = $state<boolean | null>(null);
 	let blockCount = $state(1);
+	let isNewBlock = $state(true);
+	let runLength = $state(1);
 	const statusLabel = $derived(
 		status === true ? 'Completed' : status === false ? 'In progress' : 'Planned'
 	);
-	const statusBorderClass = $derived(
-		status === true
-			? 'border-stone-800 bg-stone-800'
-			: status === false
-				? 'border-stone-700'
-				: 'border-stone-400 border-dashed'
-	);
+	const displayedBlockCount = $derived(isNewBlock ? blockCount : runLength);
+	const blockCountDisabled = $derived(!isNewBlock);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
@@ -127,10 +126,12 @@
 	}
 
 	function maxBlockCount() {
+		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
 	}
 
 	function cycleBlockCount() {
+		if (!isNewBlock) return;
 		const maxCount = maxBlockCount();
 		blockCount = blockCount >= maxCount ? 1 : blockCount + 1;
 	}
@@ -193,7 +194,8 @@
 
 		saving = true;
 		try {
-			await Promise.resolve(onSave(value, status, hour, half, blockCount));
+			const saveCount = isNewBlock ? blockCount : 1;
+			await Promise.resolve(onSave(value, status, hour, half, saveCount));
 			text = '';
 			status = null;
 			onClose();
@@ -219,11 +221,19 @@
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
-		blockCount = 1;
+		isNewBlock = (initialTitle ?? '').trim().length === 0;
+		runLength = !isNewBlock && runLengthFor ? runLengthFor(hour, half) : 1;
+		blockCount = isNewBlock ? 1 : runLength;
 	});
 
 	$effect(() => {
-		if (!open) return;
+		if (!open || isNewBlock) return;
+		runLength = runLengthFor ? runLengthFor(hour, half) : 1;
+		blockCount = runLength;
+	});
+
+	$effect(() => {
+		if (!open || !isNewBlock) return;
 		const maxCount = maxBlockCount();
 		if (blockCount > maxCount) {
 			blockCount = maxCount;
@@ -296,9 +306,31 @@
 					class="relative mr-5 grid h-3 w-3 rounded-full p-3"
 					onclick={cycleStatus}
 				>
-					<span
-						class={`pointer-events-none absolute inset-0 rounded-full border border-[1px] transition duration-200 ease-out ${statusBorderClass}`}
-					/>
+					{#if status === true}
+						<span class="pointer-events-none absolute inset-0 rounded-full bg-stone-800" />
+						<svg viewBox="0 0 24 24" class="relative z-10 h-4 w-4 text-stone-50" fill="none">
+							<path
+								d="M7 12.5 L10.25 15.75 L16.75 9.25"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+							/>
+						</svg>
+					{:else}
+						<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
+							<circle
+								cx="12"
+								cy="12"
+								r="9"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								class:status-ring-dashed={status === null}
+								class:status-ring-solid={status === false}
+							/>
+						</svg>
+					{/if}
 				</button>
 			</div>
 
@@ -328,11 +360,14 @@
 				<button
 					type="button"
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					class:opacity-50={blockCountDisabled}
+					class:cursor-not-allowed={blockCountDisabled}
 					onclick={cycleBlockCount}
+					disabled={blockCountDisabled}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
 						<span class="h-2 w-2 rounded-full border border-stone-400" />
-						{#if mode === 'normal'}
+						{#if mode === 'normal' && !blockCountDisabled}
 							<span
 								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
@@ -341,7 +376,7 @@
 							</span>
 						{/if}
 					</span>
-					{blockCount} block{blockCount === 1 ? '' : 's'}
+					{displayedBlockCount} block{displayedBlockCount === 1 ? '' : 's'}
 				</button>
 				<button
 					type="button"
@@ -349,7 +384,31 @@
 					onclick={cycleStatus}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						<span class={`h-2 w-2 rounded-full border ${statusBorderClass}`} />
+						{#if status === true}
+							<span class="absolute inset-0 rounded-full bg-stone-800" />
+							<svg viewBox="0 0 24 24" class="relative z-10 h-2.5 w-2.5 text-stone-50" fill="none">
+								<path
+									d="M7 12.5 L10.25 15.75 L16.75 9.25"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/>
+							</svg>
+						{:else}
+							<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-700" fill="none">
+								<circle
+									cx="12"
+									cy="12"
+									r="9"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									class:status-ring-dashed={status === null}
+									class:status-ring-solid={status === false}
+								/>
+							</svg>
+						{/if}
 					</span>
 					{statusLabel}
 				</button>
@@ -377,5 +436,13 @@
 	}
 	select.no-chevron::-ms-expand {
 		display: none;
+	}
+
+	.status-ring-dashed {
+		stroke-dasharray: 3 3;
+	}
+
+	.status-ring-solid {
+		stroke-dasharray: 0;
 	}
 </style>
