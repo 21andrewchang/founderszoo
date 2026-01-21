@@ -18,6 +18,7 @@
 		onCycleStatus?: () => void;
 		onPrimaryAction?: () => boolean;
 		selected?: boolean;
+		category?: string | null;
 		habit?: string | null;
 		isCurrent?: boolean;
 		habitStreak?: PlayerStreak | null;
@@ -32,6 +33,7 @@
 	const onPrimaryAction = $derived(props.onPrimaryAction ?? (() => false));
 	const selected = $derived(props.selected ?? false);
 	const habitPlaceholder = $derived((props.habit ?? '').trim());
+	const category = $derived((props.category ?? '').trim().toLowerCase());
 	const isCurrentBlock = $derived(Boolean(props.isCurrent));
 	const habitStreak = $derived(props.habitStreak ?? null);
 	const habitStreakLabel = $derived(() => {
@@ -49,6 +51,7 @@
 	const habitKey = $derived(habitPlaceholder.toLowerCase());
 	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
+	const showCategoryIcon = $derived(category.length > 0 && !isHabit);
 	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
 	const isFilled = $derived(displayTitle.length > 0);
 	const showStatusProp = $derived(props.showStatus);
@@ -201,6 +204,57 @@
 >
 	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
 		<div class="flex flex-row items-center gap-0.5">
+			{#if showCategoryIcon}
+				<span class="text-stone-300 mr-1">
+					{#if category === 'social'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-2.5 w-2.5"
+							fill="currentColor"
+							aria-hidden="true"
+						>
+							<path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6" />
+						</svg>
+					{:else if category === 'body'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-2.5 w-2.5"
+							fill="currentColor"
+							aria-hidden="true"
+						>
+							<path
+								d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+							/>
+						</svg>
+					{:else if category === 'work'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-2.5 w-2.5"
+							fill="currentColor"
+							aria-hidden="true"
+						>
+							<path
+								d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+							/>
+						</svg>
+					{:else if category === 'admin'}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-2.5 w-2.5"
+							fill="currentColor"
+							aria-hidden="true"
+						>
+							<path
+								d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+							/>
+						</svg>
+					{/if}
+				</span>
+			{/if}
 			{#if habitPreset}
 				<span class="text-xs leading-none">{habitPreset.icon}</span>
 			{/if}

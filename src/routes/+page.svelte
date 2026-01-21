@@ -193,7 +193,8 @@
 		);
 	}
 
-	type BlockValue = { title: string; status: boolean | null };
+	type BlockCategory = 'body' | 'social' | 'work' | 'admin' | null;
+	type BlockValue = { title: string; status: boolean | null; category: BlockCategory };
 	type BlockRow = { first: BlockValue; second: BlockValue };
 	type HabitBlockRow = { first: string | null; second: string | null };
 	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
@@ -223,6 +224,7 @@
 		half: 0 | 1;
 		title: string;
 		status: boolean | null;
+		category: BlockCategory | null;
 		habitName: string | null;
 		hasHabit: boolean;
 	};
@@ -237,6 +239,7 @@
 		half: boolean;
 		title: string | null;
 		status: boolean | null;
+		category?: BlockCategory | null;
 	};
 	type HoursRealtimeState = {
 		channel: RealtimeChannel;
@@ -248,7 +251,7 @@
 		selected_block_half: boolean | number | null;
 	};
 
-	const createEmptyBlock = (): BlockValue => ({ title: '', status: null });
+	const createEmptyBlock = (): BlockValue => ({ title: '', status: null, category: null });
 
 	function getDisplayTitle(user_id: string, h: number, half01: 0 | 1) {
 		const title = getTitle(user_id, h, half01).trim();
@@ -317,12 +320,14 @@
 		half: 0 | 1 | null;
 		title: string;
 		status: boolean | null;
+		category: BlockCategory | null;
 	}>({
 		user_id: null,
 		hour: null,
 		half: null,
 		title: '',
-		status: null
+		status: null,
+		category: null
 	});
 	let selectedBlock = $state<SelectedBlock | null>(null);
 	let hjklBlock = $state<SelectedBlock | null>(null);
@@ -436,15 +441,24 @@
 		h: number,
 		half01: 0 | 1,
 		text: string,
-		status?: boolean | null
+		status?: boolean | null,
+		category?: BlockCategory | null
 	) {
 		const row = ensureBlockRow(user_id, h);
 		if (half01 === 0) {
 			row.first.title = text;
 			if (status !== undefined) row.first.status = status;
+			if (category !== undefined) row.first.category = category;
+			if (category === undefined && text.trim().length === 0 && status === null) {
+				row.first.category = null;
+			}
 		} else {
 			row.second.title = text;
 			if (status !== undefined) row.second.status = status;
+			if (category !== undefined) row.second.category = category;
+			if (category === undefined && text.trim().length === 0 && status === null) {
+				row.second.category = null;
+			}
 		}
 	}
 
@@ -476,6 +490,16 @@
 
 	function getStatus(user_id: string, h: number, half01: 0 | 1) {
 		return getBlock(user_id, h, half01).status ?? null;
+	}
+
+	function setCategory(user_id: string, h: number, half01: 0 | 1, value: BlockCategory | null) {
+		const row = ensureBlockRow(user_id, h);
+		if (half01 === 0) row.first.category = value;
+		else row.second.category = value;
+	}
+
+	function getCategory(user_id: string, h: number, half01: 0 | 1) {
+		return getBlock(user_id, h, half01).category ?? null;
 	}
 
 	function ensureHabitRow(user_id: string, h: number): HabitBlockRow {
@@ -892,7 +916,11 @@
 			user_id,
 			hour,
 			half,
-			value: { title: sourceValue.title ?? '', status: sourceValue.status },
+			value: {
+				title: sourceValue.title ?? '',
+				status: sourceValue.status,
+				category: sourceValue.category ?? null
+			},
 			habitTitle: habitName.length > 0 ? habitName : null
 		};
 		const hourIndex = getHourIndex(hour);
@@ -1021,6 +1049,7 @@
 				half,
 				title: title ?? '',
 				status: status ?? null,
+				category: getCategory(user_id, hour, half),
 				habitName,
 				hasHabit
 			});
@@ -1091,7 +1120,7 @@
 		const clearEntries = [...overflow, ...moves.map((move) => move.entry)];
 		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
 		for (const entry of clearEntries) {
-			setTitle(user_id, entry.hour, entry.half, '', null);
+			setTitle(user_id, entry.hour, entry.half, '', null, null);
 			if (entry.hasHabit) setHabitTitle(user_id, entry.hour, entry.half, null);
 		}
 		for (const move of moves) {
@@ -1100,7 +1129,14 @@
 			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
 			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
-			setTitle(user_id, toHour, toHalf, resolvedTitle, move.entry.status ?? null);
+			setTitle(
+				user_id,
+				toHour,
+				toHalf,
+				resolvedTitle,
+				move.entry.status ?? null,
+				move.entry.category
+			);
 			if (move.entry.hasHabit) {
 				setHabitTitle(user_id, toHour, toHalf, habitName ?? null);
 			}
@@ -1129,7 +1165,14 @@
 		}
 		const updates = new Map<
 			string,
-			{ day_id: string; hour: number; half: boolean; title: string; status: boolean | null }
+			{
+				day_id: string;
+				hour: number;
+				half: boolean;
+				title: string;
+				status: boolean | null;
+				category: BlockCategory | null;
+			}
 		>();
 		for (const move of moves) {
 			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
@@ -1144,7 +1187,8 @@
 				hour: toHour,
 				half: toHalf === 1,
 				title: resolvedTitle,
-				status: move.entry.status
+				status: move.entry.status,
+				category: move.entry.category ?? null
 			});
 		}
 		if (updates.size > 0) {
@@ -1441,7 +1485,7 @@
 	async function loadHoursForDay(user_id: string, day_id: string) {
 		const { data, error } = await supabase
 			.from('hours')
-			.select('hour, half, title, status')
+			.select('hour, half, title, status, category')
 			.eq('day_id', day_id);
 		if (error) throw error;
 		const next: Record<number, BlockRow> = {};
@@ -1450,7 +1494,8 @@
 			const half01 = (r.half ? 1 : 0) as 0 | 1;
 			const blockValue: BlockValue = {
 				title: r.title ?? '',
-				status: r.status as boolean | null
+				status: r.status as boolean | null,
+				category: (r.category as BlockCategory | null) ?? null
 			};
 			next[h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
 			if (half01 === 0) next[h].first = blockValue;
@@ -1465,10 +1510,17 @@
 		value: BlockValue | null
 	) {
 		if (value === null) {
-			setTitle(user_id, hour, half01, '', null);
+			setTitle(user_id, hour, half01, '', null, null);
 			return;
 		}
-		setTitle(user_id, hour, half01, value.title ?? '', value.status ?? null);
+		setTitle(
+			user_id,
+			hour,
+			half01,
+			value.title ?? '',
+			value.status ?? null,
+			value.category ?? null
+		);
 	}
 	function handleHoursRealtimeChange(
 		user_id: string,
@@ -1534,7 +1586,8 @@
 
 		const blockValue: BlockValue = {
 			title: row.title ?? '',
-			status: (row.status as boolean | null) ?? null
+			status: (row.status as boolean | null) ?? null,
+			category: (row.category as BlockCategory | null) ?? null
 		};
 		applyRealtimeBlockValue(user_id, hour, half, blockValue);
 	}
@@ -1782,7 +1835,8 @@
 			hour: h,
 			half: half01,
 			title: block.title ?? '',
-			status: block.status ?? null
+			status: block.status ?? null,
+			category: block.category ?? null
 		};
 		editorMode = normal ?? editorMode;
 		logOpen = true;
@@ -1800,7 +1854,8 @@
 		status: boolean | null,
 		hour: number,
 		half: 0 | 1,
-		blockCount: number
+		blockCount: number,
+		category: BlockCategory | null
 	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
@@ -1829,7 +1884,8 @@
 			hour: target.hour,
 			half: target.half === 1,
 			title: text,
-			status
+			status,
+			category
 		}));
 		const { error } = await supabase
 			.from('hours')
@@ -1841,7 +1897,7 @@
 		}
 
 		for (const target of targets) {
-			setTitle(user_id, target.hour, target.half, text, status);
+			setTitle(user_id, target.hour, target.half, text, status, category);
 		}
 		if (viewerUserId && user_id === viewerUserId) {
 			if (hourIndex !== -1) {
@@ -1978,12 +2034,17 @@
 		const sourceBlock = getBlock(user_id, fromHour, fromHalf);
 		const sourceValue: BlockValue = {
 			title: sourceBlock.title ?? '',
-			status: sourceBlock.status
+			status: sourceBlock.status,
+			category: sourceBlock.category ?? null
 		};
 		const destinationHadEntry = blockHasContent(user_id, toHour, toHalf);
 		const destinationBlockValue = destinationHadEntry ? getBlock(user_id, toHour, toHalf) : null;
 		const destinationValue: BlockValue | null = destinationBlockValue
-			? { title: destinationBlockValue.title ?? '', status: destinationBlockValue.status }
+			? {
+					title: destinationBlockValue.title ?? '',
+					status: destinationBlockValue.status,
+					category: destinationBlockValue.category ?? null
+				}
 			: null;
 		const destinationHasHoursContent =
 			destinationValue !== null && (destinationValue.title ?? '').trim().length > 0;
@@ -2013,7 +2074,7 @@
 			return false;
 		}
 
-		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.status);
+		setTitle(user_id, toHour, toHalf, sourceValue.title, sourceValue.status, sourceValue.category);
 		if (destinationHasHoursContent && destinationValue) {
 			const { error: swapInsertErr } = await supabase.from('hours').upsert(
 				{
@@ -2021,16 +2082,24 @@
 					hour: fromHour,
 					half: fromHalf === 1,
 					title: destinationValue.title ?? '',
-					status: destinationValue.status
+					status: destinationValue.status,
+					category: destinationValue.category ?? null
 				},
 				{ onConflict: 'day_id,hour,half' }
 			);
 			if (swapInsertErr) {
 				console.error('block swap insert error', swapInsertErr);
 			}
-			setTitle(user_id, fromHour, fromHalf, destinationValue.title ?? '', destinationValue.status);
+			setTitle(
+				user_id,
+				fromHour,
+				fromHalf,
+				destinationValue.title ?? '',
+				destinationValue.status,
+				destinationValue.category ?? null
+			);
 		} else {
-			setTitle(user_id, fromHour, fromHalf, '', null);
+			setTitle(user_id, fromHour, fromHalf, '', null, null);
 		}
 
 		if (destinationHabitName.length > 0) {
@@ -2967,6 +3036,7 @@
 											<Block
 												title={getTitle(person.user_id, h, 0)}
 												status={getStatus(person.user_id, h, 0)}
+												category={getCategory(person.user_id, h, 0)}
 												showStatus={blockShowsStatus(person.user_id, h, 0)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
@@ -2998,6 +3068,7 @@
 											<Block
 												title={getTitle(person.user_id, h, 1)}
 												status={getStatus(person.user_id, h, 1)}
+												category={getCategory(person.user_id, h, 1)}
 												showStatus={blockShowsStatus(person.user_id, h, 1)}
 												editable={viewerUserId === person.user_id}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
@@ -3127,6 +3198,7 @@
 	initialHalf={draft.half}
 	initialTitle={draft.title}
 	initialStatus={draft.status}
+	initialCategory={draft.category}
 	habitStreaks={logModalHabitStreaks}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}

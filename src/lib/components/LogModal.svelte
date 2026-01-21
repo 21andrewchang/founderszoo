@@ -16,6 +16,7 @@
 		initialHalf = null,
 		initialTitle = '',
 		initialStatus = null,
+		initialCategory = null,
 		habitStreaks = null,
 		maxBlockCountFor = null,
 		runLengthFor = null
@@ -28,12 +29,14 @@
 			status: boolean | null,
 			hour: number,
 			half: 0 | 1,
-			blockCount: number
+			blockCount: number,
+			category: BlockCategory | null
 		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
 		initialStatus?: boolean | null;
+		initialCategory?: BlockCategory | null;
 		habitStreaks?: Record<string, PlayerStreak | null> | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
@@ -43,33 +46,19 @@
 
 	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
 	type HabitKey = (typeof HABIT_KEYS)[number];
-	type HabitPreset = {
+
+	type BlockCategory = 'body' | 'social' | 'work' | 'admin';
+	type CategoryPreset = {
 		label: string;
-		value: string;
-		colorClass: string;
+		value: BlockCategory;
 		key: string;
-		habitKey: HabitKey;
-		emoji: string;
 	};
 
-	const PRESETS: HabitPreset[] = [
-		{
-			label: 'Read',
-			value: 'Read',
-			colorClass: 'bg-blue-500',
-			key: '1',
-			habitKey: 'read',
-			emoji: '📖'
-		},
-		{
-			label: 'Bored',
-			value: 'Bored',
-			colorClass: 'bg-emerald-500',
-			key: '2',
-			habitKey: 'bored',
-			emoji: '😵‍💫'
-		},
-		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym', emoji: '🏋️' }
+	const CATEGORY_PRESETS: CategoryPreset[] = [
+		{ label: 'Body', value: 'body', key: '1' },
+		{ label: 'Social', value: 'social', key: '2' },
+		{ label: 'Work', value: 'work', key: '3' },
+		{ label: 'Admin', value: 'admin', key: '4' }
 	];
 
 	const streakArrowClassFor = (key: HabitKey) => {
@@ -83,6 +72,7 @@
 
 	let text = $state('');
 	let status = $state<boolean | null>(null);
+	let category = $state<BlockCategory | null>(null);
 	let blockCount = $state(1);
 	let isNewBlock = $state(true);
 	let runLength = $state(1);
@@ -161,12 +151,12 @@
 			return;
 		}
 
-		// normal-mode numeric habit shortcuts
+		// normal-mode numeric category shortcuts
 		if (mode === 'normal') {
-			const preset = PRESETS.find((p) => p.key === key);
+			const preset = CATEGORY_PRESETS.find((p) => p.key === key);
 			if (preset) {
 				e.preventDefault();
-				fillPreset(preset.value);
+				selectCategory(preset.value);
 				enterInsertMode();
 				return;
 			}
@@ -195,7 +185,7 @@
 		saving = true;
 		try {
 			const saveCount = isNewBlock ? blockCount : 1;
-			await Promise.resolve(onSave(value, status, hour, half, saveCount));
+			await Promise.resolve(onSave(value, status, hour, half, saveCount, category));
 			text = '';
 			status = null;
 			onClose();
@@ -221,6 +211,7 @@
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
+		category = initialCategory ?? null;
 		isNewBlock = (initialTitle ?? '').trim().length === 0;
 		runLength = !isNewBlock && runLengthFor ? runLengthFor(hour, half) : 1;
 		blockCount = isNewBlock ? 1 : runLength;
@@ -240,8 +231,8 @@
 		}
 	});
 
-	function fillPreset(s: string) {
-		text = s;
+	function selectCategory(next: BlockCategory) {
+		category = category === next ? null : next;
 		queueMicrotask(() => inputEl?.focus());
 	}
 </script>
@@ -260,7 +251,7 @@
 	>
 		<div
 			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-md rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+			class="w-full max-w-lg rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
 			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
 				<select
@@ -304,15 +295,59 @@
 			</div>
 
 			<div class="flex flex-row gap-1 px-4 pb-2">
-				{#each PRESETS as p}
+				{#each CATEGORY_PRESETS as p}
 					<button
 						type="button"
 						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-						onclick={() => fillPreset(p.value)}
+						class:bg-stone-100={category === p.value}
+						onclick={() => selectCategory(p.value)}
 					>
-						<span class="relative flex h-2 w-2 items-center justify-center">
-							<div class="text-[8px]">{p.emoji}</div>
-							<!-- flying key label in normal mode -->
+						<span class="relative flex h-3 w-3 items-center justify-center text-stone-600">
+							{#if p.value === 'social'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-3 w-3"
+									fill="currentColor"
+								>
+									<path
+										d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+									/>
+								</svg>
+							{:else if p.value === 'body'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-3 w-3"
+									fill="currentColor"
+								>
+									<path
+										d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+									/>
+								</svg>
+							{:else if p.value === 'work'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-3 w-3"
+									fill="currentColor"
+								>
+									<path
+										d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+									/>
+								</svg>
+							{:else if p.value === 'admin'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-3 w-3"
+									fill="currentColor"
+								>
+									<path
+										d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+									/>
+								</svg>
+							{/if}
 							{#if mode === 'normal'}
 								<span
 									class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
