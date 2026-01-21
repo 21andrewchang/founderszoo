@@ -10,8 +10,8 @@ first thing we can work on that is probably the most pain free is just the block
 then we can just make the goal page and wire up the navigation. then hardcode in the goals.
 
 ## improve existing system to match specs (low hanging fruit)
-- [ ] tags for block log menu: body, social, ops, work instead of "Read, Bored, Gym" add a new set of tags and make a new column in supabase for it.
-- [ ] visualize tags in the grid with an icon.
+- [x] tags for block log menu: body, social, ops, work instead of "Read, Bored, Gym" add a new set of tags and make a new column in supabase for it.
+- [x] visualize tags in the grid with an icon.
 - [ ] hardcode year, quarterly, monthly, weekly, daily goals
 - [ ] goal displayed at the top should cycle between the daily, weekly, monthly, quarterly, annual goal
 

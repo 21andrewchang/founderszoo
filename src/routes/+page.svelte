@@ -1869,6 +1869,20 @@
 		const maxCount = maxBlockCountFor(user_id, hour, half);
 		const desiredCount = isNewBlock ? Math.min(blockCount, maxCount) : 1;
 		const targets: { hour: number; half: 0 | 1 }[] = [];
+		const trimmedTitle = text.trim();
+		let resolvedCategory = category;
+		if (!resolvedCategory && trimmedTitle) {
+			const prevIndex = blockIndex(hourIndex, half) - 1;
+			if (prevIndex >= 0) {
+				const { hour: prevHour, half: prevHalf } = blockFromIndex(prevIndex);
+				if (prevHour !== undefined) {
+					const prevTitle = getTitle(user_id, prevHour, prevHalf).trim();
+					if (prevTitle === trimmedTitle) {
+						resolvedCategory = getCategory(user_id, prevHour, prevHalf);
+					}
+				}
+			}
+		}
 		for (let offset = 0; offset < desiredCount; offset += 1) {
 			const nextIndex = blockIndex(hourIndex, half) + offset;
 			if (nextIndex >= totalBlocks) break;
@@ -1885,7 +1899,7 @@
 			half: target.half === 1,
 			title: text,
 			status,
-			category
+			category: resolvedCategory
 		}));
 		const { error } = await supabase
 			.from('hours')
@@ -1897,7 +1911,7 @@
 		}
 
 		for (const target of targets) {
-			setTitle(user_id, target.hour, target.half, text, status, category);
+			setTitle(user_id, target.hour, target.half, text, status, resolvedCategory);
 		}
 		if (viewerUserId && user_id === viewerUserId) {
 			if (hourIndex !== -1) {
