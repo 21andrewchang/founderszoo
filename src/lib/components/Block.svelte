@@ -233,7 +233,7 @@
 
 	{#if showStatus}
 		<div
-			class="relative ml-3 grid aspect-square h-4 w-4 shrink-0 place-items-center rounded-full focus:outline-none"
+			class="relative ml-3 grid aspect-square h-3.5 w-3.5 shrink-0 place-items-center rounded-full focus:outline-none"
 			class:bg-stone-700={status === true}
 			class:status-pop-checked={statusAnim === 'check' || statusAnim === 'progress'}
 			class:status-pop-unchecked={statusAnim === 'uncheck'}
@@ -252,7 +252,7 @@
 					/>
 				</svg>
 			{:else}
-				<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
+				<svg viewBox="0 0 24 24" class="h-3.5 w-3.5 text-stone-700" fill="none">
 					<circle
 						cx="12"
 						cy="12"
