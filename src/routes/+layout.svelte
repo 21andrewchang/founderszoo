@@ -891,29 +891,8 @@
 			</div>
 			<div class="flex-1 overflow-y-auto px-6 py-6">
 				<div class="space-y-10">
-					<div class="flex w-full items-center gap-2">
-						<div
-							class="shrink-0 py-2 text-2xl font-semibold tracking-wide text-stone-500 uppercase"
-						>
-							2026
-						</div>
-						<input
-							class="w-full p-2 text-2xl text-stone-800 outline-none"
-							placeholder="Year goal"
-							value={yearGoalEntry.title}
-							oninput={(event) =>
-								updateGoalDraft(
-									yearGoalEntry.goal_key,
-									(event.currentTarget as HTMLInputElement).value
-								)}
-							onchange={() => void saveGoal(yearGoalEntry.goal_key)}
-							onkeydown={(event) => handleGoalKeydown(yearGoalEntry.goal_key, event)}
-							onblur={() => void saveGoal(yearGoalEntry.goal_key)}
-						/>
-					</div>
-
-					<div class="space-y-6">
-						<div class="flex flex-wrap gap-2">
+					<div class="flex w-full items-center justify-between gap-12">
+						<div class="flex items-center justify-end gap-2">
 							{#each QUARTERS as quarterLabel}
 								{@const quarterKey = quarterLabel.toLowerCase()}
 								<button
@@ -927,35 +906,60 @@
 								</button>
 							{/each}
 						</div>
+						<div class="flex w-full items-center gap-1">
+							<div
+								class="shrink-0 py-2 text-2xl font-semibold tracking-wide text-stone-400 uppercase"
+							>
+								2026
+							</div>
+							<input
+								class="w-full p-2 text-2xl text-stone-800 outline-none"
+								placeholder="Year goal"
+								value={yearGoalEntry.title}
+								oninput={(event) =>
+									updateGoalDraft(
+										yearGoalEntry.goal_key,
+										(event.currentTarget as HTMLInputElement).value
+									)}
+								onchange={() => void saveGoal(yearGoalEntry.goal_key)}
+								onkeydown={(event) => handleGoalKeydown(yearGoalEntry.goal_key, event)}
+								onblur={() => void saveGoal(yearGoalEntry.goal_key)}
+							/>
+						</div>
+					</div>
 
+					<div class="space-y-6">
 						{#each mergedQuarterStructure() as quarter}
 							{#if quarter.key === selectedQuarterKey}
 								<div class="space-y-4">
-									<input
-										class="w-full rounded-md p-2 text-2xl text-stone-800 outline-none"
-										placeholder={`${quarter.label} goal`}
-										value={quarter.goal.title}
-										oninput={(event) =>
-											updateGoalDraft(
-												quarter.goal.goal_key,
-												(event.currentTarget as HTMLInputElement).value
-											)}
-										onchange={() => void saveGoal(quarter.goal.goal_key)}
-										onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
-										onblur={() => void saveGoal(quarter.goal.goal_key)}
-									/>
+									<div class="flex items-center gap-1">
+										<div class="text-2xl pl-2 font-semibold tracking-wide text-stone-400 uppercase">
+											{quarter.label}
+										</div>
+										<input
+											class="w-full rounded-md p-2 text-2xl text-stone-800 outline-none"
+											placeholder={`${quarter.label} goal`}
+											value={quarter.goal.title}
+											oninput={(event) =>
+												updateGoalDraft(
+													quarter.goal.goal_key,
+													(event.currentTarget as HTMLInputElement).value
+												)}
+											onchange={() => void saveGoal(quarter.goal.goal_key)}
+											onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
+											onblur={() => void saveGoal(quarter.goal.goal_key)}
+										/>
+									</div>
 
 									<div class="grid gap-6 lg:grid-cols-3">
 										{#each quarter.months as month}
 											<div class="space-y-3 rounded-md p-3">
 												<div class="flex items-center gap-2">
-													<div
-														class="text-md font-semibold tracking-wide text-stone-500 uppercase"
-													>
+													<div class="text-md font-semibold tracking-wide text-stone-500 uppercase">
 														{month.label.slice(0, 3)}
 													</div>
 													<input
-														class="w-full rounded-md p-1 text-md text-stone-800 outline-none"
+														class="text-md w-full rounded-md p-1 text-stone-800 outline-none"
 														placeholder={`${month.label} goal`}
 														value={month.goal.title}
 														oninput={(event) =>
