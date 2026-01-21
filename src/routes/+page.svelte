@@ -18,6 +18,7 @@
 
 	let people = $state<Person[]>([]);
 	const session = getContext<Writable<Session>>('session');
+	const activeDayDateStore = getContext<Writable<string | null>>('activeDayDate');
 	let isDragging = $state(false);
 	let suppressNextClick = $state(false);
 
@@ -103,6 +104,20 @@
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
 	const STREAK_LOOKBACK_DAYS = 60;
 	const DAY_MS = 86_400_000;
+	const MONTHS = [
+		'January',
+		'February',
+		'March',
+		'April',
+		'May',
+		'June',
+		'July',
+		'August',
+		'September',
+		'October',
+		'November',
+		'December'
+	];
 	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored', 'wake'] as const;
 	type HabitKey = (typeof HABIT_STREAK_KEYS)[number];
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
@@ -440,6 +455,142 @@
 		return activeDayDate === yesterday;
 	};
 
+	function syncActiveDayDateStore(dateStr: string | null) {
+		activeDayDateStore?.set(dateStr ?? localToday());
+	}
+
+	async function setActiveDayDateForViewer(dateStr: string) {
+		if (!viewerUserId) return;
+		if (!dateStr) return;
+		const current = activeDayDateByUser[viewerUserId] ?? localToday();
+		if (current === dateStr) return;
+		activeDayDateByUser = { ...activeDayDateByUser, [viewerUserId]: dateStr };
+		syncActiveDayDateStore(dateStr);
+		const { error } = await supabase
+			.from('users')
+			.update({ active_day_date: dateStr })
+			.eq('id', viewerUserId);
+		if (error) {
+			console.error('active day update error', error);
+			return;
+		}
+		const dayId = await getDayIdForUser(viewerUserId, dateStr, true);
+		dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
+		if (dayId) {
+			await loadHoursForDay(viewerUserId, dayId);
+		} else {
+			blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
+		}
+	}
+
+	function weekKeyForDate(dateStr: string) {
+		const ms = parseHabitDate(dateStr);
+		if (ms === null) return null;
+		const date = new Date(ms);
+		const monthKey = (MONTHS[date.getMonth()] ?? MONTHS[0]).toLowerCase();
+		const weekIndex = Math.min(4, Math.max(1, Math.ceil(date.getDate() / 7)));
+		return `${monthKey}-week${weekIndex}`;
+	}
+
+	function isPlanningForTomorrow() {
+		if (!viewerUserId) return false;
+		const activeDayDate = activeDayDateByUser[viewerUserId];
+		if (!activeDayDate) return false;
+		return activeDayDate > localToday();
+	}
+
+	$effect(() => {
+		if (!viewerUserId) return;
+		const desiredDate = $activeDayDateStore;
+		if (!desiredDate) return;
+		const current = activeDayDateByUser[viewerUserId] ?? localToday();
+		if (desiredDate === current) return;
+		void setActiveDayDateForViewer(desiredDate);
+	});
+
+	async function weeklyHowForDate(dateStr: string) {
+		const weekKey = weekKeyForDate(dateStr);
+		if (!weekKey) return '';
+		try {
+			const { data, error } = await supabase
+				.from('goals')
+				.select('how')
+				.eq('goal_key', weekKey)
+				.maybeSingle();
+			if (error) throw error;
+			return (data?.how ?? '').toString().trim();
+		} catch (error) {
+			console.error('weekly how load error', error);
+			return '';
+		}
+	}
+
+	async function scheduleWeeklyHowSessions(user_id: string, dateStr: string, day_id: string) {
+		const how = (await weeklyHowForDate(dateStr)).trim();
+		if (!how) return;
+
+		const totalBlocks = hours.length * 2;
+		const reserved = new Set<number>();
+		for (let hourIndex = 0; hourIndex < hours.length; hourIndex += 1) {
+			for (const half of [0, 1] as const) {
+				if (!blockHasContent(user_id, hours[hourIndex], half)) continue;
+				reserved.add(blockIndex(hourIndex, half));
+			}
+		}
+
+		const sessions: number[] = [];
+		for (let idx = 0; idx <= totalBlocks - 3 && sessions.length < 2; idx += 1) {
+			const indices = [idx, idx + 1, idx + 2];
+			const isOpen = indices.every((runIndex) => {
+				if (runIndex >= totalBlocks) return false;
+				if (reserved.has(runIndex)) return false;
+				const { hour, half } = blockFromIndex(runIndex);
+				if (hour === undefined) return false;
+				return !blockHasContent(user_id, hour, half);
+			});
+			if (!isOpen) continue;
+			sessions.push(idx);
+			for (const runIndex of indices) reserved.add(runIndex);
+		}
+
+		if (sessions.length === 0) return;
+
+		const payload = [] as {
+			day_id: string;
+			hour: number;
+			half: boolean;
+			title: string;
+			status: boolean | null;
+			category: BlockCategory | null;
+		}[];
+		for (const startIndex of sessions) {
+			for (let offset = 0; offset < 3; offset += 1) {
+				const { hour, half } = blockFromIndex(startIndex + offset);
+				if (hour === undefined) continue;
+				payload.push({
+					day_id,
+					hour,
+					half: half === 1,
+					title: how,
+					status: null,
+					category: null
+				});
+			}
+		}
+		if (payload.length === 0) return;
+
+		const { error } = await supabase
+			.from('hours')
+			.upsert(payload, { onConflict: 'day_id,hour,half' });
+		if (error) {
+			console.error('weekly how schedule error', error);
+			return;
+		}
+		for (const entry of payload) {
+			setTitle(user_id, entry.hour, entry.half ? 1 : 0, how, null, null);
+		}
+	}
+
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
 		blocksByUser[user_id] ??= {};
 		blocksByUser[user_id][h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
@@ -647,10 +798,12 @@
 				.eq('id', viewerUserId);
 			if (error) throw error;
 			activeDayDateByUser = { ...activeDayDateByUser, [viewerUserId]: nextDate };
+			syncActiveDayDateStore(nextDate);
 			const dayId = await getDayIdForUser(viewerUserId, nextDate, true);
 			dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
 			if (dayId) {
 				await loadHoursForDay(viewerUserId, dayId);
+				await scheduleWeeklyHowSessions(viewerUserId, nextDate, dayId);
 			} else {
 				blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
 			}
@@ -2280,81 +2433,7 @@
 	}
 
 	function maybePromptForMissing() {
-		if (!viewerUserId || logOpen || carryoverPrompt || plannedPrompt || habitCheckPrompt) return;
-
-		const date = localToday();
-		const h = currentHour;
-		const half = currentHalf;
-
-		if (h < START_HOUR || h >= END_HOUR) return;
-
-		const key = blockKey(viewerUserId, date, h, half);
-		if (lastPromptKey === key) return;
-
-		const currentHabit = (getHabitTitle(viewerUserId, h, half) ?? '').trim();
-		if (currentHabit.length > 0) return;
-
-		// 1) Check if previous block is still in progress
-		const prev = previousBlock(h, half);
-		if (prev) {
-			const { hour: prevHour, half: prevHalf } = prev;
-			const prevStatus = getStatus(viewerUserId, prevHour, prevHalf);
-			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
-			const prevHabitName = (getHabitTitle(viewerUserId, prevHour, prevHalf) ?? '').trim();
-			const prevHabitKey = normalizeHabitName(prevHabitName);
-			const currStatus = getStatus(viewerUserId, h, half);
-			if (currStatus === false) return;
-
-			if (prevHabitKey && prevStatus === false) {
-				habitCheckPrompt = {
-					user_id: viewerUserId,
-					habitHour: prevHour,
-					habitHalf: prevHalf,
-					currHour: h,
-					currHalf: half,
-					habitName: prevHabitName || prevTitle,
-					habitKey: prevHabitKey
-				};
-				lastPromptKey = key;
-				return;
-			}
-
-			// Only prompt if previous block is still in progress (status === false)
-			if (prevStatus === false && prevTitle.length > 0) {
-				carryoverPrompt = {
-					user_id: viewerUserId,
-					prevHour,
-					prevHalf,
-					currHour: h,
-					currHalf: half,
-					title: prevTitle
-				};
-				lastPromptKey = key; // avoid re-prompting for this block
-				return;
-			}
-
-			if (prevStatus === null && prevTitle.length > 0) {
-				plannedPrompt = {
-					user_id: viewerUserId,
-					prevHour,
-					prevHalf,
-					currHour: h,
-					currHalf: half,
-					title: prevTitle
-				};
-				lastPromptKey = key;
-				return;
-			}
-		}
-
-		if (blockHasContent(viewerUserId, h, half)) return;
-
-		// 2) Normal behavior: if current block is empty, open the editor
-		const t = getTitle(viewerUserId, h, half);
-		if (!t || t.trim() === '') {
-			openEditor(viewerUserId, h, half, false);
-			lastPromptKey = key;
-		}
+		return;
 	}
 
 	async function markPreviousBlockCompleteAndOpenCurrent() {
@@ -2753,12 +2832,14 @@
 		if (!viewerUserId) return false;
 		const activeDayDate = activeDayDateByUser[viewerUserId];
 		if (activeDayDate === undefined || activeDayDate === null) return false;
-		const should = currentHour >= START_HOUR && activeDayDate !== localToday();
+		const yesterday = dateStringNDaysAgo(1);
+		const should = currentHour >= START_HOUR && activeDayDate === yesterday;
 		console.log('shouldAutoSwitchDay check', {
 			currentHour,
 			START_HOUR,
 			activeDayDate,
 			localToday: localToday(),
+			yesterday,
 			should,
 			viewerUserId: viewerUserId?.slice(0, 8)
 		});
@@ -2928,6 +3009,9 @@
 					.update({ active_day_date: today })
 					.eq('id', viewerUserId);
 				if (error) console.error('active day update error', error);
+			}
+			if (viewerUserId) {
+				syncActiveDayDateStore(activeDayDateByUser[viewerUserId] ?? localToday());
 			}
 
 			updateTrackedPlayersFromPeople(people);

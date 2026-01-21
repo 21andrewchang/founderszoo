@@ -49,6 +49,9 @@
 	const authSetStore: Writable<boolean | null> = writable(null);
 	setContext('authSet', authSetStore);
 
+	const activeDayDateStore: Writable<string | null> = writable(null);
+	setContext('activeDayDate', activeDayDateStore);
+
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
 	let store = $derived(useGlobalPresence(viewerId));
@@ -80,7 +83,13 @@
 	let heatmapLoading = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
 
-	type GoalEntry = { id: string | null; title: string; goal_key: string; due_date: string };
+	type GoalEntry = {
+		id: string | null;
+		title: string;
+		how: string;
+		goal_key: string;
+		due_date: string;
+	};
 	type GoalSection = { title: string; items: GoalEntry[] };
 
 	const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -122,6 +131,7 @@
 	const YEAR_ENTRY: GoalEntry = {
 		id: null,
 		title: '',
+		how: '',
 		goal_key: 'year',
 		due_date: `${CURRENT_YEAR}-12-31`
 	};
@@ -212,7 +222,12 @@
 		if (!parsed) return dateStr;
 		return parsed.toLocaleDateString(undefined, options);
 	};
-	const todayLabel = formatDisplayDate(localToday());
+	const activeDayDate = $derived($activeDayDateStore ?? localToday());
+	const activeDayLabel = $derived(
+		formatDisplayDate(activeDayDate, { weekday: 'short', month: 'short', day: 'numeric' })
+	);
+	const heatmapDateLabel = (dateStr: string) =>
+		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
 	const msPerDay = 24 * 60 * 60 * 1000;
 
 	function startOfDay(date: Date) {
@@ -292,11 +307,12 @@
 		const existing = goalsByKey[goalKey];
 		const due_date = goalDueDateForKey(goalKey);
 		if (!existing) {
-			return { id: null, title: '', goal_key: goalKey, due_date };
+			return { id: null, title: '', how: '', goal_key: goalKey, due_date };
 		}
 		return {
 			id: existing.id,
 			title: existing.title,
+			how: existing.how ?? '',
 			goal_key: goalKey,
 			due_date: existing.due_date ?? due_date
 		};
@@ -312,13 +328,16 @@
 
 	function buildHeatmapWeeks() {
 		const today = new Date();
-		const start = new Date(today);
-		start.setDate(start.getDate() - HEATMAP_LOOKBACK_DAYS + 1);
-		const dayOfWeek = start.getDay();
-		start.setDate(start.getDate() - dayOfWeek);
+		const year = today.getFullYear();
+		const start = new Date(year, 0, 1);
+		const end = new Date(year, 11, 31);
+		const startDay = start.getDay();
+		start.setDate(start.getDate() - startDay);
+		const endDay = end.getDay();
+		end.setDate(end.getDate() + (6 - endDay));
 		const weeks: { days: Date[] }[] = [];
 		let cursor = new Date(start);
-		while (cursor <= today) {
+		while (cursor <= end) {
 			const days: Date[] = [];
 			for (let i = 0; i < 7; i += 1) {
 				days.push(new Date(cursor));
@@ -374,6 +393,18 @@
 		};
 	}
 
+	function updateGoalHowDraft(goalKey: string, value: string) {
+		const existing = goalsByKey[goalKey] ?? mergeGoal(goalKey);
+		goalsByKey = {
+			...goalsByKey,
+			[goalKey]: {
+				...existing,
+				how: value,
+				goal_key: goalKey
+			}
+		};
+	}
+
 	function handleGoalKeydown(goalKey: string, event: KeyboardEvent) {
 		if (event.key !== 'Enter') return;
 		event.preventDefault();
@@ -383,7 +414,7 @@
 
 	async function saveGoal(goalKey: string) {
 		const entry = goalsByKey[goalKey] ?? mergeGoal(goalKey);
-		if (!entry.title.trim()) return;
+		if (!entry.title.trim() && !entry.how.trim()) return;
 		const dueDate = goalDueDateForKey(goalKey);
 		savingGoals = { ...savingGoals, [goalKey]: true };
 		try {
@@ -393,12 +424,13 @@
 					{
 						goal_key: goalKey,
 						title: entry.title.trim(),
+						how: entry.how?.trim() ?? '',
 						due_date: dueDate,
 						created_at: formatLocalTimestamp(new Date())
 					},
 					{ onConflict: 'goal_key' }
 				)
-				.select('id, title, goal_key, due_date')
+				.select('id, title, how, goal_key, due_date')
 				.single();
 			if (error) throw error;
 			if (data) {
@@ -407,6 +439,7 @@
 					[goalKey]: {
 						id: data.id as string,
 						title: (data.title ?? '').trim(),
+						how: (data.how ?? entry.how ?? '').toString(),
 						goal_key: (data.goal_key ?? goalKey).toString(),
 						due_date: (data.due_date as string | null) ?? dueDate
 					}
@@ -646,7 +679,9 @@
 
 	async function loadGoals() {
 		try {
-			const { data, error } = await supabase.from('goals').select('id, title, goal_key, due_date');
+			const { data, error } = await supabase
+				.from('goals')
+				.select('id, title, how, goal_key, due_date');
 			if (error) throw error;
 			const next: Record<string, GoalEntry> = {};
 			for (const row of data ?? []) {
@@ -656,6 +691,7 @@
 				next[goalKey] = {
 					id: row.id as string,
 					title: (row.title ?? '').trim(),
+					how: (row.how ?? '').toString(),
 					goal_key: goalKey,
 					due_date: (row.due_date as string | null) ?? goalDueDateForKey(goalKey)
 				};
@@ -823,7 +859,7 @@
 					}}
 					aria-expanded={heatmapOpen}
 				>
-					<span>{todayLabel}</span>
+					<span>{activeDayLabel}</span>
 					<div class="w-9 text-end text-xs font-semibold text-stone-800">
 						{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
 					</div>
@@ -933,7 +969,7 @@
 							{#if quarter.key === selectedQuarterKey}
 								<div class="space-y-4">
 									<div class="flex items-center gap-1">
-										<div class="text-2xl pl-2 font-semibold tracking-wide text-stone-400 uppercase">
+										<div class="pl-2 text-2xl font-semibold tracking-wide text-stone-400 uppercase">
 											{quarter.label}
 										</div>
 										<input
@@ -974,7 +1010,7 @@
 												</div>
 												<div class="space-y-2">
 													{#each month.weeks as week}
-														<div class="space-y-1">
+														<div class="space-y-2">
 															<div
 																class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
 															>
@@ -986,6 +1022,24 @@
 																value={week.goal.title}
 																oninput={(event) =>
 																	updateGoalDraft(
+																		week.goal.goal_key,
+																		(event.currentTarget as HTMLInputElement).value
+																	)}
+																onchange={() => void saveGoal(week.goal.goal_key)}
+																onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
+																onblur={() => void saveGoal(week.goal.goal_key)}
+															/>
+															<div
+																class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
+															>
+																How
+															</div>
+															<input
+																class="w-full rounded-md border border-stone-200 p-2 text-sm text-stone-600 outline-none"
+																placeholder="Daily how"
+																value={week.goal.how}
+																oninput={(event) =>
+																	updateGoalHowDraft(
 																		week.goal.goal_key,
 																		(event.currentTarget as HTMLInputElement).value
 																	)}
@@ -1029,9 +1083,9 @@
 					Close
 				</button>
 			</div>
-			<div class="flex-1 overflow-y-auto px-6 py-8">
+			<div class="flex items-center bg-red-400 justify-center px-6 py-8">
 				{#if heatmapLoading}
-					<div class="text-sm text-stone-500">Loading heatmap…</div>
+					<div class="text-sm text-stone-500"></div>
 				{:else}
 					<div class="flex flex-col gap-6">
 						<div class="flex items-start gap-4">
@@ -1054,11 +1108,22 @@
 										<div class="flex flex-col gap-1">
 											{#each week.days as day}
 												{@const dateKey = formatDateString(day)}
-												<div
-													class={`h-3 w-3 rounded-xs ${heatmapColorClass(
+												<button
+													type="button"
+													class={`group relative h-3 w-3 rounded-xs ${heatmapColorClass(
 														heatmapByDate[dateKey] ?? 0
 													)}`}
-												></div>
+													onclick={() => {
+														activeDayDateStore.set(dateKey);
+														heatmapOpen = false;
+													}}
+												>
+													<span
+														class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+													>
+														{heatmapDateLabel(dateKey)}
+													</span>
+												</button>
 											{/each}
 										</div>
 									{/each}
