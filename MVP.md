@@ -19,6 +19,7 @@ then we can just make the goal page and wire up the navigation. then hardcode in
 - [x] display or navigate to goal view when you click the goal displayed at the top
 - [x] lists 1-year, quarterly, monthly, weekly, daily goals
 - [x] changes to hardcoded goals update Supabase
+- [ ] GOALS AND HABITS ARE TIED TOGETHER. SET HABITS FOR EACH CATEGORY
 - [ ] show daily progression and completion metric for each goal
 - [ ] hardcoded hierarchy is AI context for daily review chats
 

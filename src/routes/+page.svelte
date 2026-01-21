@@ -149,10 +149,17 @@
 	let spectatorDate = $state<string | null>(null);
 	let isLoading = $state(true);
 
+	type ReviewCategoryBreakdown = {
+		key: 'body' | 'social' | 'work' | 'admin';
+		label: string;
+		percent: number;
+	};
 	type ReviewStats = {
 		planned: number;
 		completed: number;
 		productiveHours: number;
+		score: number;
+		categoryBreakdown: ReviewCategoryBreakdown[];
 	};
 	let reviewOpen = $state(false);
 	let reviewStats = $state<ReviewStats | null>(null);
@@ -428,7 +435,9 @@
 		if (!isNightWindow()) return false;
 		const activeDayDate = activeDayDateByUser[viewerUserId];
 		if (activeDayDate === undefined || activeDayDate === null) return false;
-		return activeDayDate === localToday();
+		const today = localToday();
+		const yesterday = dateStringNDaysAgo(1);
+		return activeDayDate === today || activeDayDate === yesterday;
 	};
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
@@ -561,24 +570,55 @@
 	function reviewStatsForUser(user_id: string): ReviewStats {
 		let planned = 0;
 		let completed = 0;
+		const categoryCounts = { body: 0, social: 0, work: 0, admin: 0 };
 		for (const hour of hours) {
 			for (const half of [0, 1] as const) {
 				const title = (getTitle(user_id, hour, half) ?? '').trim();
 				const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
 				if (title.length > 0 || habit.length > 0) planned += 1;
 				if (getStatus(user_id, hour, half) === true) completed += 1;
+				if (title.length > 0) {
+					const category = getCategory(user_id, hour, half);
+					if (category && category in categoryCounts) {
+						categoryCounts[category as keyof typeof categoryCounts] += 1;
+					}
+				}
 			}
 		}
+		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const categoryBreakdown: ReviewCategoryBreakdown[] = (
+			[
+				{ key: 'body', label: 'Body' },
+				{ key: 'social', label: 'Social' },
+				{ key: 'work', label: 'Work' },
+				{ key: 'admin', label: 'Admin' }
+			] as const
+		).map((entry) => ({
+			...entry,
+			percent:
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100)
+		}));
+
+		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
 		return {
 			planned,
 			completed,
-			productiveHours: completed / 2
+			productiveHours: completed / 2,
+			score,
+			categoryBreakdown
 		};
 	}
 
 	function formatProductiveHours(value: number) {
 		const rounded = Math.round(value * 10) / 10;
 		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function reviewScoreColor(score: number) {
+		if (score >= 75) return 'bg-emerald-700';
+		if (score >= 50) return 'bg-emerald-500';
+		if (score >= 25) return 'bg-emerald-300';
+		return 'bg-stone-500';
 	}
 
 	function openReviewDay(user_id: string) {
@@ -2971,7 +3011,7 @@
 </script>
 
 <div
-	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none"
+	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 select-none"
 	class:cursor-none={hideCursor}
 >
 	<div class="flex flex-row space-x-4">
@@ -3138,43 +3178,6 @@
 	{/if}
 </div>
 
-<div class="fixed bottom-2 left-2 z-50">
-	<div class="relative">
-		<button
-			class="rounded-md bg-white px-3 py-1 text-[10px] font-medium tracking-wide text-stone-700 uppercase hover:bg-stone-100"
-			onclick={() => (bugsOpen = !bugsOpen)}
-		>
-			Bugs
-		</button>
-		{#if bugsOpen}
-			<div
-				class="absolute bottom-full mb-2 w-64 rounded-lg border border-stone-200 bg-white shadow-lg"
-			>
-				<div
-					class="border-b border-stone-100 px-3 py-2 text-[10px] font-semibold tracking-wide text-stone-500 uppercase"
-				>
-					Bug checklist
-				</div>
-				<div class="space-y-2 px-3 py-2">
-					{#each bugChecklist as item}
-						<label class="flex items-start gap-2 text-xs text-stone-700">
-							<input
-								type="checkbox"
-								class="mt-0.5 h-3 w-3 rounded border-stone-300"
-								checked={item.done}
-								onchange={() => toggleBugChecklistItem(item.id)}
-							/>
-							<span class:line-through={item.done} class:text-stone-400={item.done}>
-								{item.label}
-							</span>
-						</label>
-					{/each}
-				</div>
-			</div>
-		{/if}
-	</div>
-</div>
-
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
 {/if}
@@ -3186,7 +3189,16 @@
 			{#if reviewDayDate}
 				<div class="mt-1 text-sm font-medium text-stone-900">{reviewDayDate}</div>
 			{/if}
-			<div class="mt-3 space-y-2 text-sm text-stone-700">
+			<div class="mt-3 flex items-center gap-3">
+				<div
+					class={`flex p-2 items-center justify-center rounded-md text-sm font-semibold text-white ${reviewScoreColor(
+						reviewStats?.score ?? 0
+					)}`}
+				>
+					{reviewStats?.score ?? 0}
+				</div>
+			</div>
+			<div class="mt-4 space-y-2 text-sm text-stone-700">
 				<div class="flex items-center justify-between">
 					<span>Tasks planned</span>
 					<span class="font-semibold text-stone-900">{reviewStats?.planned ?? 0}</span>
@@ -3200,6 +3212,19 @@
 					<span class="font-semibold text-stone-900">
 						{formatProductiveHours(reviewStats?.productiveHours ?? 0)}
 					</span>
+				</div>
+			</div>
+			<div class="mt-4">
+				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+					Category breakdown
+				</div>
+				<div class="mt-2 space-y-1 text-sm text-stone-700">
+					{#each reviewStats?.categoryBreakdown ?? [] as category}
+						<div class="flex items-center justify-between">
+							<span>{category.label}</span>
+							<span class="font-semibold text-stone-900">{category.percent}%</span>
+						</div>
+					{/each}
 				</div>
 			</div>
 			<div class="mt-4 flex justify-end gap-2">
