@@ -35,6 +35,7 @@
 	const TOTAL_BLOCKS_PER_DAY = (END_HOUR - START_HOUR) * 2;
 	const HISTORY_LOOKBACK_DAYS = 30;
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
+	const HEATMAP_LOOKBACK_DAYS = 365;
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -75,6 +76,9 @@
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
+	let heatmapOpen = $state(false);
+	let heatmapLoading = $state(false);
+	let heatmapByDate = $state<Record<string, number>>({});
 
 	type GoalEntry = { id: string | null; title: string; goal_key: string; due_date: string };
 	type GoalSection = { title: string; items: GoalEntry[] };
@@ -272,6 +276,43 @@
 			due_date: existing.due_date ?? due_date
 		};
 	}
+
+	function heatmapColorClass(pct: number | null) {
+		if (pct === null || Number.isNaN(pct)) return 'bg-stone-200';
+		if (pct >= 75) return 'bg-green-800';
+		if (pct >= 50) return 'bg-green-400';
+		if (pct >= 25) return 'bg-green-200';
+		return 'bg-stone-200';
+	}
+
+	function buildHeatmapWeeks() {
+		const today = new Date();
+		const start = new Date(today);
+		start.setDate(start.getDate() - HEATMAP_LOOKBACK_DAYS + 1);
+		const dayOfWeek = start.getDay();
+		start.setDate(start.getDate() - dayOfWeek);
+		const weeks: { days: Date[] }[] = [];
+		let cursor = new Date(start);
+		while (cursor <= today) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push({ days });
+		}
+		return weeks;
+	}
+
+	const heatmapWeeks = $derived(buildHeatmapWeeks());
+	const heatmapMonthLabels = $derived(
+		heatmapWeeks.map((week) => {
+			const firstDay = week.days[0];
+			return firstDay.getDate() <= 7
+				? firstDay.toLocaleDateString(undefined, { month: 'short' })
+				: '';
+		})
+	);
 
 	function mergedQuarterStructure() {
 		return QUARTER_STRUCTURE.map((quarter) => ({
@@ -600,6 +641,38 @@
 		}
 	}
 
+	async function loadHeatmap(userId: string | null) {
+		if (!userId) {
+			heatmapByDate = {};
+			return;
+		}
+		heatmapLoading = true;
+		const lookbackStart = dateStringNDaysAgo(HEATMAP_LOOKBACK_DAYS);
+		try {
+			const { data, error } = await supabase
+				.from('day_block_stats')
+				.select('date, filled_blocks')
+				.eq('user_id', userId)
+				.gte('date', lookbackStart)
+				.order('date', { ascending: true });
+			if (error) throw error;
+			const next: Record<string, number> = {};
+			for (const row of data ?? []) {
+				const date = (row.date as string | null) ?? null;
+				if (!date) continue;
+				const filled = Number(row.filled_blocks ?? 0);
+				const pct = Math.max(0, Math.min(100, Math.round((filled / TOTAL_BLOCKS_PER_DAY) * 100)));
+				next[date] = pct;
+			}
+			heatmapByDate = next;
+		} catch (error) {
+			console.error('heatmap load error', error);
+			heatmapByDate = {};
+		} finally {
+			heatmapLoading = false;
+		}
+	}
+
 	let presenceCounts = $state({ tabs: 0, unique: 0, connected: false });
 
 	$effect(() => {
@@ -635,6 +708,7 @@
 			}
 			if (!mounted) return;
 			await loadGoals();
+			await loadHeatmap(authUser?.id ?? null);
 			await refreshTrackedPlayers();
 		};
 
@@ -648,23 +722,15 @@
 			goalRotationIndex = (goalRotationIndex + 1) % GOAL_ROTATION.length;
 		}, 5000);
 
-		const handleDocumentClick = (event: MouseEvent) => {
-			if (!dayHistoryOpen || !dateMenuEl) return;
-			if (!dateMenuEl.contains(event.target as Node)) {
-				dayHistoryOpen = false;
-			}
-		};
 		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape' && dayHistoryOpen) {
-				dayHistoryOpen = false;
+			if (event.key === 'Escape' && heatmapOpen) {
+				heatmapOpen = false;
 			}
 		};
-		document.addEventListener('click', handleDocumentClick);
 		document.addEventListener('keydown', handleKeyDown);
 
 		return () => {
 			mounted = false;
-			document.removeEventListener('click', handleDocumentClick);
 			document.removeEventListener('keydown', handleKeyDown);
 			if (currentProgressInterval !== null) {
 				window.clearInterval(currentProgressInterval);
@@ -718,64 +784,39 @@
 	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
 		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<div
-			class="pointer-events-none fixed top-5 left-4 z-50 flex flex-col items-start"
+			class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start"
 			bind:this={dateMenuEl}
 		>
 			<div class="pointer-events-auto relative">
 				<button
 					type="button"
-					class="flex w-23 items-center justify-center gap-2 rounded-sm px-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
+					class="flex items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
 					onclick={() => {
-						dayHistoryOpen = !dayHistoryOpen;
+						heatmapOpen = true;
+						void loadHeatmap(viewerId);
 					}}
-					aria-expanded={dayHistoryOpen}
+					aria-expanded={heatmapOpen}
 				>
 					<span>{todayLabel}</span>
 					<div class="w-9 text-end text-xs font-semibold text-stone-800">
 						{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
 					</div>
 				</button>
-				{#if dayHistoryOpen}
-					<div
-						class="absolute top-full left-0 z-50 rounded-sm bg-white text-xs text-stone-700"
-						role="dialog"
-						aria-label="Previous days completion"
-					>
-						{#if dayHistoryRows.length === 0}
-							<div class="text-sm text-stone-500">No recent history yet.</div>
-						{:else}
-							<div class="flex flex-col overflow-y-auto">
-								{#each dayHistoryRows as row}
-									{@const jointPct = combinedPercent(row.values)}
-									<div
-										class="flex w-23 items-center justify-center gap-2 rounded-sm text-xs text-stone-700 transition hover:bg-stone-200/50"
-									>
-										<span>
-											{formatDisplayDate(row.date, {
-												month: 'short',
-												day: 'numeric'
-											})}
-										</span>
-										<div class="w-9 text-end text-xs font-semibold text-stone-800">
-											{jointPct ?? '—'}%
-										</div>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{/if}
 			</div>
 		</div>
 		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
 			{#if viewerId}
 				<button
 					type="button"
-					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition "
+					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition"
 					onclick={openGoalModal}
 				>
 					{#key currentGoalKey}
-						<span in:fly={{ y: 4, delay: 400, duration: 200 }} out:fade={{ duration: 160 }} class="gap-1 flex hover:bg-stone-100 px-2 py-1 rounded-md">
+						<span
+							in:fly={{ y: 4, delay: 400, duration: 200 }}
+							out:fade={{ duration: 160 }}
+							class="flex gap-1 rounded-md px-2 py-1 hover:bg-stone-100"
+						>
 							<span class="font-semibold tracking-wide text-stone-400">
 								{currentRangeLabel}
 							</span>
@@ -826,7 +867,6 @@
 					</button>
 				</div>
 			</div>
-
 			<div class="flex-1 overflow-y-auto px-6 py-6">
 				<div class="space-y-10">
 					<div class="space-y-3">
@@ -885,7 +925,6 @@
 												onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
 												onblur={() => void saveGoal(month.goal.goal_key)}
 											/>
-
 											<div class="space-y-2">
 												{#each month.weeks as week}
 													<div class="space-y-1">
@@ -917,6 +956,69 @@
 						{/each}
 					</div>
 				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if heatmapOpen}
+	<div
+		class="fixed inset-0 z-70 bg-white text-stone-800"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Daily completion heatmap"
+	>
+		<div class="flex h-full flex-col">
+			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
+				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+					Daily completion
+				</div>
+				<button
+					type="button"
+					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
+					onclick={() => (heatmapOpen = false)}
+				>
+					Close
+				</button>
+			</div>
+			<div class="flex-1 overflow-y-auto px-6 py-8">
+				{#if heatmapLoading}
+					<div class="text-sm text-stone-500">Loading heatmap…</div>
+				{:else}
+					<div class="flex flex-col gap-6">
+						<div class="flex items-start gap-4">
+							<div class="flex flex-col gap-1 pt-4 text-[10px] text-stone-400">
+								<div class="h-3"></div>
+								<div class="h-3">Mon</div>
+								<div class="h-3"></div>
+								<div class="h-3">Wed</div>
+								<div class="h-3"></div>
+								<div class="h-3">Fri</div>
+							</div>
+							<div class="flex flex-col gap-2">
+								<div class="flex gap-1 text-[10px] text-stone-400">
+									{#each heatmapMonthLabels as label}
+										<div class="w-3 text-center">{label}</div>
+									{/each}
+								</div>
+								<div class="flex gap-1">
+									{#each heatmapWeeks as week}
+										<div class="flex flex-col gap-1">
+											{#each week.days as day}
+												{@const dateKey = formatDateString(day)}
+												<div
+													class={`h-3 w-3 rounded-sm ${heatmapColorClass(
+														heatmapByDate[dateKey] ?? 0
+													)}`}
+												></div>
+											{/each}
+										</div>
+									{/each}
+								</div>
+							</div>
+						</div>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>

@@ -13,17 +13,18 @@ then we can just make the goal page and wire up the navigation. then hardcode in
 - [x] tags for block log menu: body, social, ops, work instead of "Read, Bored, Gym" add a new set of tags and make a new column in supabase for it.
 - [x] visualize tags in the grid with an icon.
 - [x] hardcode year, quarterly, monthly, weekly, daily goals
-- [ ] goal displayed at the top should cycle between the daily, weekly, monthly, quarterly, annual goal
+- [x] goal displayed at the top should cycle between the daily, weekly, monthly, quarterly, annual goal
 
 ## skeleton for goal system
-- [ ] display or navigate to goal view when you click the goal displayed at the top
-- [ ] goal setup page with a left goal tree and right chat panel
-- [ ] left side lists 1-year, quarterly, monthly, weekly, daily goals
-- [ ] changes to hardcoded goals update Supabase
-- [ ] hardcoded hierarchy is AI context for daily review chats
+- [x] display or navigate to goal view when you click the goal displayed at the top
+- [x] lists 1-year, quarterly, monthly, weekly, daily goals
+- [x] changes to hardcoded goals update Supabase
 - [ ] show daily progression and completion metric for each goal
+- [ ] hardcoded hierarchy is AI context for daily review chats
 
 ## integrate goals into daily ritual
+- [ ] repeating blocks for lifestyle stuff like wind down, supplements, etc.
+- [ ] button to display review even though its not in the review window.
 - [ ] days are scored based on what you did. hours are tallied up (if you have multiple blocks that say cold emails, it adds up those hours)
 - [ ] life pillars pie chart. and numeric score with rounded square background with the color that will show up in heat map.
 - [ ] goal page should display history of days in a github style heatmap. user can click each day to view
