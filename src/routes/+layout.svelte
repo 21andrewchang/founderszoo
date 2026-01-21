@@ -112,6 +112,9 @@
 	const MONTH_INDEX_BY_KEY = Object.fromEntries(
 		MONTHS.map((label, index) => [label.toLowerCase(), index])
 	);
+	const MONTH_ABBR_BY_KEY = Object.fromEntries(
+		MONTHS.map((label) => [label.toLowerCase().slice(0, 3), label.toLowerCase()])
+	);
 	const CURRENT_MONTH_KEY = MONTHS[CURRENT_MONTH_INDEX]?.toLowerCase() ?? 'january';
 	const CURRENT_QUARTER_INDEX = Math.floor(CURRENT_MONTH_INDEX / 3);
 	const CURRENT_QUARTER_KEY = QUARTERS[CURRENT_QUARTER_INDEX]?.toLowerCase() ?? 'q1';
@@ -145,8 +148,8 @@
 	let isGoalModalOpen = $state(false);
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
-	let selectedQuarterKey = $state('q1');
-	const GOAL_ROTATION = ['week', 'month', 'quarter', 'year'] as const;
+	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
+	const GOAL_ROTATION = ['year', 'quarter', 'month', 'week'] as const;
 	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
 	const yearGoalEntry = $derived(mergedYearEntry());
 	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
@@ -236,6 +239,27 @@
 
 	function endOfMonthDate(year: number, monthIndex: number) {
 		return new Date(year, monthIndex + 1, 0);
+	}
+
+	function normalizeGoalKey(goalKey: string): string {
+		const trimmed = goalKey.trim().toLowerCase();
+		if (!trimmed) return trimmed;
+		if (trimmed === 'year') return 'year';
+		if (QUARTERS.some((q) => q.toLowerCase() === trimmed)) return trimmed;
+		if (MONTH_INDEX_BY_KEY[trimmed] !== undefined) return trimmed;
+		const abbrMatch = MONTH_ABBR_BY_KEY[trimmed];
+		if (abbrMatch) return abbrMatch;
+		const weekMatch = trimmed.match(/^([a-z]{3,9})-?week(\d)$/);
+		if (weekMatch) {
+			const monthKey = weekMatch[1];
+			const weekIndex = weekMatch[2];
+			const fullMonth =
+				MONTH_INDEX_BY_KEY[monthKey] !== undefined ? monthKey : MONTH_ABBR_BY_KEY[monthKey];
+			if (fullMonth) {
+				return `${fullMonth}-week${weekIndex}`;
+			}
+		}
+		return trimmed;
 	}
 
 	function goalDueDateForKey(goalKey: string): string {
@@ -626,8 +650,9 @@
 			if (error) throw error;
 			const next: Record<string, GoalEntry> = {};
 			for (const row of data ?? []) {
-				const goalKey = (row.goal_key as string | null) ?? '';
-				if (!goalKey) continue;
+				const rawKey = (row.goal_key as string | null) ?? '';
+				if (!rawKey) continue;
+				const goalKey = normalizeGoalKey(rawKey);
 				next[goalKey] = {
 					id: row.id as string,
 					title: (row.title ?? '').trim(),
@@ -866,10 +891,14 @@
 			</div>
 			<div class="flex-1 overflow-y-auto px-6 py-6">
 				<div class="space-y-10">
-					<div class="space-y-3">
-						<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Year</div>
+					<div class="flex w-full items-center gap-2">
+						<div
+							class="shrink-0 py-2 text-2xl font-semibold tracking-wide text-stone-500 uppercase"
+						>
+							2026
+						</div>
 						<input
-							class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
+							class="w-full p-2 text-2xl text-stone-800 outline-none"
 							placeholder="Year goal"
 							value={yearGoalEntry.title}
 							oninput={(event) =>
@@ -903,7 +932,7 @@
 							{#if quarter.key === selectedQuarterKey}
 								<div class="space-y-4">
 									<input
-										class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
+										class="w-full rounded-md p-2 text-2xl text-stone-800 outline-none"
 										placeholder={`${quarter.label} goal`}
 										value={quarter.goal.title}
 										oninput={(event) =>
@@ -918,25 +947,27 @@
 
 									<div class="grid gap-6 lg:grid-cols-3">
 										{#each quarter.months as month}
-											<div class="space-y-3 rounded-md border border-stone-200 p-3">
-												<div
-													class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase"
-												>
-													{month.label}
+											<div class="space-y-3 rounded-md p-3">
+												<div class="flex items-center gap-2">
+													<div
+														class="text-md font-semibold tracking-wide text-stone-500 uppercase"
+													>
+														{month.label.slice(0, 3)}
+													</div>
+													<input
+														class="w-full rounded-md p-1 text-md text-stone-800 outline-none"
+														placeholder={`${month.label} goal`}
+														value={month.goal.title}
+														oninput={(event) =>
+															updateGoalDraft(
+																month.goal.goal_key,
+																(event.currentTarget as HTMLInputElement).value
+															)}
+														onchange={() => void saveGoal(month.goal.goal_key)}
+														onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
+														onblur={() => void saveGoal(month.goal.goal_key)}
+													/>
 												</div>
-												<input
-													class="w-full rounded-md border border-stone-200 p-2 text-xl text-stone-800 outline-none"
-													placeholder={`${month.label} goal`}
-													value={month.goal.title}
-													oninput={(event) =>
-														updateGoalDraft(
-															month.goal.goal_key,
-															(event.currentTarget as HTMLInputElement).value
-														)}
-													onchange={() => void saveGoal(month.goal.goal_key)}
-													onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
-													onblur={() => void saveGoal(month.goal.goal_key)}
-												/>
 												<div class="space-y-2">
 													{#each month.weeks as week}
 														<div class="space-y-1">
