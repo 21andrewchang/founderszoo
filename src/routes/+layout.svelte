@@ -775,11 +775,13 @@
 					onclick={openGoalModal}
 				>
 					{#key currentGoalKey}
-						<span in:fly={{ y: 10, delay: 1000, duration: 200 }} out:fade={{ duration: 160 }} class="gap-2">
+						<span in:fly={{ y: 4, delay: 1000, duration: 200 }} out:fade={{ duration: 160 }} class="gap-1 flex">
 							<span class="font-semibold tracking-wide text-stone-400">
 								{currentRangeLabel}
 							</span>
-							{currentGoalEntry.title || 'Goal'}
+							<span>
+								{currentGoalEntry.title || 'Goal'}
+							</span>
 						</span>
 					{/key}
 				</button>

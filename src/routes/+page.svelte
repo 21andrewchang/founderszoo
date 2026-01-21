@@ -2365,24 +2365,41 @@
 
 			const prevBlock = getBlock(user_id, prevHour, prevHalf);
 
-			// 1) Turn previous into a normal block (status = null, keep title)
+			// 1) Mark the entire run in progress (status = false)
 			{
-				const { error } = await supabase.from('hours').upsert(
-					{
+				const { startIndex, endIndex } = blockRunRange(user_id, prevHour, prevHalf);
+				const updates = [] as {
+					day_id: string;
+					hour: number;
+					half: boolean;
+					title: string;
+					status: boolean | null;
+				}[];
+				for (let idx = startIndex; idx <= endIndex; idx += 1) {
+					const { hour, half } = blockFromIndex(idx);
+					if (hour === undefined) break;
+					const nextTitle = getTitle(user_id, hour, half).trim();
+					if (nextTitle !== title) continue;
+					updates.push({
 						day_id,
-						hour: prevHour,
-						half: prevHalf === 1,
-						title: prevBlock.title ?? '',
-						status: null,
-						category: prevBlock.category ?? null
-					},
-					{ onConflict: 'day_id,hour,half' }
-				);
-				if (error) {
-					console.error('clear previous status error', error);
-					return;
+						hour,
+						half: half === 1,
+						title: nextTitle,
+						status: false
+					});
 				}
-				setStatus(user_id, prevHour, prevHalf, null);
+				if (updates.length > 0) {
+					const { error } = await supabase.from('hours').upsert(updates, {
+						onConflict: 'day_id,hour,half'
+					});
+					if (error) {
+						console.error('mark run in progress error', error);
+						return;
+					}
+					for (const update of updates) {
+						setStatus(user_id, update.hour, update.half ? 1 : 0, false);
+					}
+				}
 			}
 
 			const currTitle = (getTitle(user_id, currHour, currHalf) ?? '').trim();
