@@ -153,6 +153,7 @@
 		key: 'body' | 'social' | 'work' | 'admin';
 		label: string;
 		percent: number;
+		hours: number;
 	};
 	type ReviewStats = {
 		planned: number;
@@ -596,7 +597,8 @@
 		).map((entry) => ({
 			...entry,
 			percent:
-				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100)
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
+			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
 		}));
 
 		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
@@ -3185,17 +3187,21 @@
 {#if reviewOpen}
 	<div class="fixed inset-0 z-60 flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
-			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Day review</div>
-			{#if reviewDayDate}
-				<div class="mt-1 text-sm font-medium text-stone-900">{reviewDayDate}</div>
-			{/if}
-			<div class="mt-3 flex items-center gap-3">
-				<div
-					class={`flex p-2 items-center justify-center rounded-md text-sm font-semibold text-white ${reviewScoreColor(
-						reviewStats?.score ?? 0
-					)}`}
-				>
-					{reviewStats?.score ?? 0}
+			<div class="flex items-start justify-between">
+				<div>
+					<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Summary</div>
+					{#if reviewDayDate}
+						<div class="mt-1 text-sm font-medium text-stone-900">{reviewDayDate}</div>
+					{/if}
+				</div>
+				<div class="flex flex-col items-end gap-1">
+					<div
+						class={`flex p-2 items-center justify-center rounded-md text-xs font-medium text-white ${reviewScoreColor(
+							reviewStats?.score ?? 0
+						)}`}
+					>
+						{reviewStats?.score ?? 0}
+					</div>
 				</div>
 			</div>
 			<div class="mt-4 space-y-2 text-sm text-stone-700">
@@ -3222,7 +3228,9 @@
 					{#each reviewStats?.categoryBreakdown ?? [] as category}
 						<div class="flex items-center justify-between">
 							<span>{category.label}</span>
-							<span class="font-semibold text-stone-900">{category.percent}%</span>
+							<span class="font-semibold text-stone-900">
+								{category.percent}% · {formatProductiveHours(category.hours)}h
+							</span>
 						</div>
 					{/each}
 				</div>
