@@ -145,6 +145,7 @@
 	let isGoalModalOpen = $state(false);
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
+	let selectedQuarterKey = $state('q1');
 	const GOAL_ROTATION = ['week', 'month', 'quarter', 'year'] as const;
 	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
 	const yearGoalEntry = $derived(mergedYearEntry());
@@ -854,14 +855,10 @@
 					<button
 						type="button"
 						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
-						onclick={() => void saveAllGoals()}
-					>
-						Save all
-					</button>
-					<button
-						type="button"
-						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
-						onclick={closeGoalModal}
+						onclick={() => {
+							void saveAllGoals();
+							closeGoalModal();
+						}}
 					>
 						Close
 					</button>
@@ -886,73 +883,89 @@
 						/>
 					</div>
 
-					<div class="space-y-8">
-						{#each mergedQuarterStructure() as quarter}
-							<div class="space-y-4">
-								<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-									{quarter.label}
-								</div>
-								<input
-									class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
-									placeholder={`${quarter.label} goal`}
-									value={quarter.goal.title}
-									oninput={(event) =>
-										updateGoalDraft(
-											quarter.goal.goal_key,
-											(event.currentTarget as HTMLInputElement).value
-										)}
-									onchange={() => void saveGoal(quarter.goal.goal_key)}
-									onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
-									onblur={() => void saveGoal(quarter.goal.goal_key)}
-								/>
+					<div class="space-y-6">
+						<div class="flex flex-wrap gap-2">
+							{#each QUARTERS as quarterLabel}
+								{@const quarterKey = quarterLabel.toLowerCase()}
+								<button
+									type="button"
+									class="rounded-md border border-stone-200 px-3 py-1 text-xs font-semibold text-stone-600 transition"
+									class:bg-stone-900={selectedQuarterKey === quarterKey}
+									class:text-white={selectedQuarterKey === quarterKey}
+									onclick={() => (selectedQuarterKey = quarterKey)}
+								>
+									{quarterLabel}
+								</button>
+							{/each}
+						</div>
 
-								<div class="grid gap-6 lg:grid-cols-3">
-									{#each quarter.months as month}
-										<div class="space-y-3 rounded-md border border-stone-200 p-3">
-											<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-												{month.label}
-											</div>
-											<input
-												class="w-full rounded-md border border-stone-200 p-2 text-xl text-stone-800 outline-none"
-												placeholder={`${month.label} goal`}
-												value={month.goal.title}
-												oninput={(event) =>
-													updateGoalDraft(
-														month.goal.goal_key,
-														(event.currentTarget as HTMLInputElement).value
-													)}
-												onchange={() => void saveGoal(month.goal.goal_key)}
-												onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
-												onblur={() => void saveGoal(month.goal.goal_key)}
-											/>
-											<div class="space-y-2">
-												{#each month.weeks as week}
-													<div class="space-y-1">
-														<div
-															class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
-														>
-															{week.label}
+						{#each mergedQuarterStructure() as quarter}
+							{#if quarter.key === selectedQuarterKey}
+								<div class="space-y-4">
+									<input
+										class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
+										placeholder={`${quarter.label} goal`}
+										value={quarter.goal.title}
+										oninput={(event) =>
+											updateGoalDraft(
+												quarter.goal.goal_key,
+												(event.currentTarget as HTMLInputElement).value
+											)}
+										onchange={() => void saveGoal(quarter.goal.goal_key)}
+										onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
+										onblur={() => void saveGoal(quarter.goal.goal_key)}
+									/>
+
+									<div class="grid gap-6 lg:grid-cols-3">
+										{#each quarter.months as month}
+											<div class="space-y-3 rounded-md border border-stone-200 p-3">
+												<div
+													class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase"
+												>
+													{month.label}
+												</div>
+												<input
+													class="w-full rounded-md border border-stone-200 p-2 text-xl text-stone-800 outline-none"
+													placeholder={`${month.label} goal`}
+													value={month.goal.title}
+													oninput={(event) =>
+														updateGoalDraft(
+															month.goal.goal_key,
+															(event.currentTarget as HTMLInputElement).value
+														)}
+													onchange={() => void saveGoal(month.goal.goal_key)}
+													onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
+													onblur={() => void saveGoal(month.goal.goal_key)}
+												/>
+												<div class="space-y-2">
+													{#each month.weeks as week}
+														<div class="space-y-1">
+															<div
+																class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
+															>
+																{week.label}
+															</div>
+															<input
+																class="w-full rounded-md border border-stone-200 p-2 text-base text-stone-700 outline-none"
+																placeholder={`${week.label} goal`}
+																value={week.goal.title}
+																oninput={(event) =>
+																	updateGoalDraft(
+																		week.goal.goal_key,
+																		(event.currentTarget as HTMLInputElement).value
+																	)}
+																onchange={() => void saveGoal(week.goal.goal_key)}
+																onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
+																onblur={() => void saveGoal(week.goal.goal_key)}
+															/>
 														</div>
-														<input
-															class="w-full rounded-md border border-stone-200 p-2 text-base text-stone-700 outline-none"
-															placeholder={`${week.label} goal`}
-															value={week.goal.title}
-															oninput={(event) =>
-																updateGoalDraft(
-																	week.goal.goal_key,
-																	(event.currentTarget as HTMLInputElement).value
-																)}
-															onchange={() => void saveGoal(week.goal.goal_key)}
-															onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
-															onblur={() => void saveGoal(week.goal.goal_key)}
-														/>
-													</div>
-												{/each}
+													{/each}
+												</div>
 											</div>
-										</div>
-									{/each}
+										{/each}
+									</div>
 								</div>
-							</div>
+							{/if}
 						{/each}
 					</div>
 				</div>

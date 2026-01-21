@@ -22,9 +22,9 @@ need testing for 1 full day without having to wait for each hour. need to test r
 - [x] display or navigate to goal view when you click the goal displayed at the top
 - [x] lists 1-year, quarterly, monthly, weekly, daily goals
 - [x] changes to hardcoded goals update Supabase
-- [ ] GOALS AND HABITS ARE TIED TOGETHER? SET HABITS FOR EACH CATEGORY
+- [ ] goal page i want the year goal to be at the top and then tabs for quarters.
 - [ ] show daily progression and completion metric for each goal
-- [ ] hardcoded hierarchy is AI context for daily review chats
+- [ ] GOALS AND HABITS ARE TIED TOGETHER? SET HABITS FOR EACH CATEGORY
 
 ## integrate goals into daily ritual
 - [ ] repeating blocks for lifestyle stuff like wind down, supplements, etc.
@@ -33,10 +33,11 @@ need testing for 1 full day without having to wait for each hour. need to test r
 - [ ] life pillars pie chart. and numeric score with rounded square background with the color that will show up in heat map.
 - [ ] goal page should display history of days in a github style heatmap. user can click each day to view
 - [ ] daily review + performance updates milestones and trajectory over time. summary of today
-- [ ] user can add a journal entry to surface new insights for the ai agent
-- [ ] AI chat gives daily alignment summary and improvement suggestion for tomorrow with context of the game structure 
-(1 more block of cold emails, 1 more cold email sent, switch phases on goal completed, etc.)
 
 # Future Features
 - [ ] future: AI adjusts daily targets and growth rate to keep user on track
 - [ ] help me improve the numbers. slowly increase block sizes. progressive overload but for brain. can do it like a suggestion popup
+- [ ] hardcoded hierarchy is AI context for daily review chats
+- [ ] user can add a journal entry to surface new insights for the ai agent
+- [ ] AI chat gives daily alignment summary and improvement suggestion for tomorrow with context of the game structure 
+(1 more block of cold emails, 1 more cold email sent, switch phases on goal completed, etc.)
