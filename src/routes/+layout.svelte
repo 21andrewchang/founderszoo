@@ -158,7 +158,7 @@
 
 	function rangeLabelForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
 		if (goalKey === 'week') {
-			return `This Week`;
+			return `Now`;
 		}
 		if (goalKey === 'month') {
 			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
@@ -166,7 +166,7 @@
 		if (goalKey === 'quarter') {
 			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
 		}
-		return 'Year';
+		return '2026';
 	}
 
 	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
@@ -767,15 +767,15 @@
 				{/if}
 			</div>
 		</div>
-		<div class="pointer-events-none fixed top-5 left-1/2 z-40 -translate-x-1/2">
+		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
 			{#if viewerId}
 				<button
 					type="button"
-					class="pointer-events-auto flex flex-col items-center gap-0.5 rounded-md px-2 py-1 text-xs font-semibold tracking-wide text-stone-800 uppercase transition hover:bg-stone-100"
+					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition "
 					onclick={openGoalModal}
 				>
 					{#key currentGoalKey}
-						<span in:fly={{ y: 4, delay: 1000, duration: 200 }} out:fade={{ duration: 160 }} class="gap-1 flex">
+						<span in:fly={{ y: 4, delay: 400, duration: 200 }} out:fade={{ duration: 160 }} class="gap-1 flex hover:bg-stone-100 px-2 py-1 rounded-md">
 							<span class="font-semibold tracking-wide text-stone-400">
 								{currentRangeLabel}
 							</span>

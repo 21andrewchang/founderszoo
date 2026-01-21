@@ -2261,6 +2261,8 @@
 			const prevTitle = getTitle(viewerUserId, prevHour, prevHalf).trim();
 			const prevHabitName = (getHabitTitle(viewerUserId, prevHour, prevHalf) ?? '').trim();
 			const prevHabitKey = normalizeHabitName(prevHabitName);
+			const currStatus = getStatus(viewerUserId, h, half);
+			if (currStatus === false) return;
 
 			if (prevHabitKey && prevStatus === false) {
 				habitCheckPrompt = {
