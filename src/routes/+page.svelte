@@ -436,9 +436,8 @@
 		if (!isNightWindow()) return false;
 		const activeDayDate = activeDayDateByUser[viewerUserId];
 		if (activeDayDate === undefined || activeDayDate === null) return false;
-		const today = localToday();
 		const yesterday = dateStringNDaysAgo(1);
-		return activeDayDate === today || activeDayDate === yesterday;
+		return activeDayDate === yesterday;
 	};
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
@@ -3196,7 +3195,7 @@
 				</div>
 				<div class="flex flex-col items-end gap-1">
 					<div
-						class={`flex p-2 items-center justify-center rounded-md text-xs font-medium text-white ${reviewScoreColor(
+						class={`flex items-center justify-center rounded-md p-2 text-xs font-medium text-white ${reviewScoreColor(
 							reviewStats?.score ?? 0
 						)}`}
 					>

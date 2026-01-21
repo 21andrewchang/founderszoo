@@ -8,6 +8,9 @@ you know exactly how much lp you need to rank up and how many games that's going
 # Finalized MVP Specs
 first thing we can work on that is probably the most pain free is just the block categorization (for log modal and block display)
 then we can just make the goal page and wire up the navigation. then hardcode in the goals.
+maybe cut ai for this version?
+
+need testing for 1 full day without having to wait for each hour. need to test review. need to test auto blocks
 
 ## improve existing system to match specs (low hanging fruit)
 - [x] tags for block log menu: body, social, ops, work instead of "Read, Bored, Gym" add a new set of tags and make a new column in supabase for it.
@@ -19,7 +22,7 @@ then we can just make the goal page and wire up the navigation. then hardcode in
 - [x] display or navigate to goal view when you click the goal displayed at the top
 - [x] lists 1-year, quarterly, monthly, weekly, daily goals
 - [x] changes to hardcoded goals update Supabase
-- [ ] GOALS AND HABITS ARE TIED TOGETHER. SET HABITS FOR EACH CATEGORY
+- [ ] GOALS AND HABITS ARE TIED TOGETHER? SET HABITS FOR EACH CATEGORY
 - [ ] show daily progression and completion metric for each goal
 - [ ] hardcoded hierarchy is AI context for daily review chats
 

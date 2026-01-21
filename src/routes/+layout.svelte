@@ -280,7 +280,7 @@
 	function heatmapColorClass(pct: number | null) {
 		if (pct === null || Number.isNaN(pct)) return 'bg-stone-200';
 		if (pct >= 75) return 'bg-green-800';
-		if (pct >= 50) return 'bg-green-400';
+		if (pct >= 50) return 'bg-green-500';
 		if (pct >= 25) return 'bg-green-200';
 		return 'bg-stone-200';
 	}
@@ -1007,7 +1007,7 @@
 											{#each week.days as day}
 												{@const dateKey = formatDateString(day)}
 												<div
-													class={`h-3 w-3 rounded-sm ${heatmapColorClass(
+													class={`h-3 w-3 rounded-xs ${heatmapColorClass(
 														heatmapByDate[dateKey] ?? 0
 													)}`}
 												></div>
