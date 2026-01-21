@@ -1072,9 +1072,6 @@
 	>
 		<div class="flex h-full flex-col">
 			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
-				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-					Daily completion
-				</div>
 				<button
 					type="button"
 					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
@@ -1083,22 +1080,23 @@
 					Close
 				</button>
 			</div>
-			<div class="flex items-center bg-red-400 justify-center px-6 py-8">
+			<div class="flex items-center justify-center px-6 py-8">
 				{#if heatmapLoading}
 					<div class="text-sm text-stone-500"></div>
 				{:else}
 					<div class="flex flex-col gap-6">
 						<div class="flex items-start gap-4">
-							<div class="flex flex-col gap-1 pt-4 text-[10px] text-stone-400">
+							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
 								<div class="h-3"></div>
 								<div class="h-3">Mon</div>
 								<div class="h-3"></div>
 								<div class="h-3">Wed</div>
 								<div class="h-3"></div>
 								<div class="h-3">Fri</div>
+								<div class="h-3"></div>
 							</div>
 							<div class="flex flex-col gap-2">
-								<div class="flex gap-1 text-[10px] text-stone-400">
+								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
 									{#each heatmapMonthLabels as label}
 										<div class="w-3 text-center">{label}</div>
 									{/each}
