@@ -301,37 +301,6 @@
 					bind:value={text}
 					autocomplete="off"
 				/>
-				<button
-					type="button"
-					class="relative mr-5 grid h-3 w-3 rounded-full p-3"
-					onclick={cycleStatus}
-				>
-					{#if status === true}
-						<span class="pointer-events-none absolute inset-0 rounded-full bg-stone-800" />
-						<svg viewBox="0 0 24 24" class="relative z-10 h-4 w-4 text-stone-50" fill="none">
-							<path
-								d="M7 12.5 L10.25 15.75 L16.75 9.25"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							/>
-						</svg>
-					{:else}
-						<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
-							<circle
-								cx="12"
-								cy="12"
-								r="9"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								class:status-ring-dashed={status === null}
-								class:status-ring-solid={status === false}
-							/>
-						</svg>
-					{/if}
-				</button>
 			</div>
 
 			<div class="flex flex-row gap-1 px-4 pb-2">

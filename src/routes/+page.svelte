@@ -2167,6 +2167,9 @@
 		const key = blockKey(viewerUserId, date, h, half);
 		if (lastPromptKey === key) return;
 
+		const currentHabit = (getHabitTitle(viewerUserId, h, half) ?? '').trim();
+		if (currentHabit.length > 0) return;
+
 		// 1) Check if previous block is still in progress
 		const prev = previousBlock(h, half);
 		if (prev) {
@@ -2445,30 +2448,34 @@
 			}
 
 			const currHasContent = blockHasContent(user_id, currHour, currHalf);
-			if (currHasContent) {
-				const currHourIndex = getHourIndex(currHour);
+			const currHourIndex = getHourIndex(currHour);
+			const currentIndex = currHourIndex === -1 ? -1 : blockIndex(currHourIndex, currHalf);
+			const isCurrentInRun = currentIndex >= startIndex && currentIndex <= endIndex;
+			const isCurrentPlannedBlock = currHour === prevHour && currHalf === prevHalf;
+			if (currHasContent && !isCurrentPlannedBlock && !isCurrentInRun) {
 				if (currHourIndex !== -1) {
-					const currIndex = blockIndex(currHourIndex, currHalf);
-					const shifted = await shiftBlocksFromIndex(user_id, currIndex, 1, 1);
+					const shifted = await shiftBlocksFromIndex(user_id, currentIndex, 1, 1);
 					if (!shifted) return;
 				}
 			}
 
-			const { error: currentErr } = await supabase.from('hours').upsert(
-				{
-					day_id,
-					hour: currHour,
-					half: currHalf === 1,
-					title,
-					status: false
-				},
-				{ onConflict: 'day_id,hour,half' }
-			);
-			if (currentErr) {
-				console.error('planned continue error', currentErr);
-				return;
+			if (!isCurrentInRun) {
+				const { error: currentErr } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: currHour,
+						half: currHalf === 1,
+						title,
+						status: false
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (currentErr) {
+					console.error('planned continue error', currentErr);
+					return;
+				}
+				setTitle(user_id, currHour, currHalf, title, false);
 			}
-			setTitle(user_id, currHour, currHalf, title, false);
 
 			plannedPrompt = null;
 		} finally {
@@ -2597,11 +2604,36 @@
 		await Promise.all(perUserLoads);
 	}
 
+	function shouldAutoSwitchDay() {
+		if (!viewerUserId) return false;
+		const activeDayDate = activeDayDateByUser[viewerUserId];
+		if (activeDayDate === undefined || activeDayDate === null) return false;
+		const should = currentHour >= START_HOUR && activeDayDate !== localToday();
+		console.log('shouldAutoSwitchDay check', {
+			currentHour,
+			START_HOUR,
+			activeDayDate,
+			localToday: localToday(),
+			should,
+			viewerUserId: viewerUserId?.slice(0, 8)
+		});
+		return should;
+	}
+
+	async function autoSwitchDayIfNeeded() {
+		const should = shouldAutoSwitchDay();
+		console.log('autoSwitchDayIfNeeded', { should, reviewOpen });
+		if (!should) return;
+		if (reviewOpen) return;
+		await startNextDayPlanning();
+	}
+
 	function updateCurrentTime() {
 		const now = getNow();
 		currentHour = now.getHours();
 		currentMinute = now.getMinutes();
 		currentHalf = now.getMinutes() < 30 ? 0 : 1;
+		void autoSwitchDayIfNeeded();
 		maybePromptForMissing();
 		if (!viewerUserId) {
 			const today = localToday();
@@ -2778,6 +2810,8 @@
 
 			await Promise.all([...perUserLoads, ...historyLoads]);
 
+			updateCurrentTime();
+			void autoSwitchDayIfNeeded();
 			maybePromptForMissing();
 			startHalfHourNotifier();
 		} catch (e) {
@@ -2998,10 +3032,10 @@
 	{/if}
 </div>
 
-<div class="fixed bottom-4 left-4 z-50">
+<div class="fixed bottom-2 left-2 z-50">
 	<div class="relative">
 		<button
-			class="rounded-full border border-stone-300 bg-white px-3 py-1 text-[10px] font-semibold tracking-wide text-stone-700 uppercase shadow-sm hover:bg-stone-100"
+			class="rounded-md bg-white px-3 py-1 text-[10px] font-medium tracking-wide text-stone-700 uppercase hover:bg-stone-100"
 			onclick={() => (bugsOpen = !bugsOpen)}
 		>
 			Bugs
