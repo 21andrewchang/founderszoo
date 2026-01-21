@@ -1,7 +1,7 @@
 <script lang="ts">
 	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { onMount, setContext } from 'svelte';
-	import { fly, blur, scale } from 'svelte/transition';
+	import { fly, blur, scale, fade } from 'svelte/transition';
 	import '../app.css';
 	import { writable, type Writable } from 'svelte/store';
 	import { browser } from '$app/environment';
@@ -14,7 +14,7 @@
 	import { useGlobalPresence } from '$lib/presence';
 
 	type Person = { label: string; user_id: string };
-	type Goal = { id: string; title: string; due_date: string };
+	type Goal = { id: string; title: string; goal_key: string | null };
 	type PlayerDisplay = { label: string; user_id: string | null };
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
@@ -36,6 +36,11 @@
 	const HISTORY_LOOKBACK_DAYS = 30;
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
 
+	const formatDateString = (date: Date) =>
+		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+			date.getDate()
+		).padStart(2, '0')}`;
+
 	// session + auth context
 	const session: Writable<Session> = writable({ user: null, name: '', loading: true });
 	setContext('session', session);
@@ -55,9 +60,8 @@
 		});
 		viewerId = u?.id ?? null;
 		if (!viewerId) {
-			activeGoal = null;
-			newGoalTitle = '';
-			newGoalDueDate = '';
+			goalsByKey = {};
+			isGoalModalOpen = false;
 		}
 	};
 
@@ -71,19 +75,103 @@
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
-	let activeGoal = $state<Goal | null>(null);
-	let newGoalTitle = $state('');
-	let newGoalDueDate = $state('');
-	let isCreatingGoal = $state(false);
-	let isEditingGoal = $state(false);
-	let editGoalTitle = $state('');
-	let editGoalDueDate = $state('');
-	let isSavingGoal = $state(false);
 
-	const formatDateString = (date: Date) =>
-		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-			date.getDate()
-		).padStart(2, '0')}`;
+	type GoalEntry = { id: string | null; title: string; goal_key: string; due_date: string };
+	type GoalSection = { title: string; items: GoalEntry[] };
+
+	const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
+	const MONTHS = [
+		'January',
+		'February',
+		'March',
+		'April',
+		'May',
+		'June',
+		'July',
+		'August',
+		'September',
+		'October',
+		'November',
+		'December'
+	];
+	const WEEKS = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
+	const QUARTER_MONTHS = [
+		MONTHS.slice(0, 3),
+		MONTHS.slice(3, 6),
+		MONTHS.slice(6, 9),
+		MONTHS.slice(9, 12)
+	];
+	const NOW = new Date();
+	const CURRENT_YEAR = NOW.getFullYear();
+	const CURRENT_MONTH_INDEX = NOW.getMonth();
+	const CURRENT_WEEK_INDEX = Math.min(4, Math.max(1, Math.ceil(NOW.getDate() / 7)));
+	const MONTH_INDEX_BY_KEY = Object.fromEntries(
+		MONTHS.map((label, index) => [label.toLowerCase(), index])
+	);
+	const CURRENT_MONTH_KEY = MONTHS[CURRENT_MONTH_INDEX]?.toLowerCase() ?? 'january';
+	const CURRENT_QUARTER_INDEX = Math.floor(CURRENT_MONTH_INDEX / 3);
+	const CURRENT_QUARTER_KEY = QUARTERS[CURRENT_QUARTER_INDEX]?.toLowerCase() ?? 'q1';
+	const CURRENT_WEEK_KEY = `${CURRENT_MONTH_KEY}-week${CURRENT_WEEK_INDEX}`;
+	const YEAR_ENTRY: GoalEntry = {
+		id: null,
+		title: '',
+		goal_key: 'year',
+		due_date: `${CURRENT_YEAR}-12-31`
+	};
+	const QUARTER_STRUCTURE = QUARTERS.map((quarter, quarterIndex) => {
+		const months = QUARTER_MONTHS[quarterIndex].map((month) => {
+			const monthKey = month.toLowerCase();
+			return {
+				label: month,
+				key: monthKey,
+				weeks: WEEKS.map((week, weekIndex) => ({
+					label: week,
+					key: `${monthKey}-week${weekIndex + 1}`
+				}))
+			};
+		});
+		return {
+			label: quarter,
+			key: quarter.toLowerCase(),
+			months
+		};
+	});
+
+	let goalsByKey = $state<Record<string, GoalEntry>>({});
+	let isGoalModalOpen = $state(false);
+	let savingGoals = $state<Record<string, boolean>>({});
+	let goalRotationIndex = $state(0);
+	const GOAL_ROTATION = ['week', 'month', 'quarter', 'year'] as const;
+	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
+	const yearGoalEntry = $derived(mergedYearEntry());
+	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
+	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
+	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
+	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+
+	function entryForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
+		if (goalKey === 'week') return currentWeekEntry;
+		if (goalKey === 'month') return currentMonthEntry;
+		if (goalKey === 'quarter') return currentQuarterEntry;
+		return yearGoalEntry;
+	}
+
+	function rangeLabelForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
+		if (goalKey === 'week') {
+			return `This Week`;
+		}
+		if (goalKey === 'month') {
+			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
+		}
+		if (goalKey === 'quarter') {
+			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
+		}
+		return 'Year';
+	}
+
+	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
+	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
+
 	const localToday = () => formatDateString(new Date());
 	const dateStringNDaysAgo = (days: number) => {
 		const d = new Date();
@@ -141,82 +229,134 @@
 		return `${Math.abs(days)} days overdue`;
 	}
 
-	async function handleCreateGoal(event?: Event) {
-		event?.preventDefault();
-		if (!viewerId) return;
-		const title = newGoalTitle.trim();
-		if (!title || !newGoalDueDate) return;
-		isCreatingGoal = true;
+	function endOfMonthDate(year: number, monthIndex: number) {
+		return new Date(year, monthIndex + 1, 0);
+	}
+
+	function goalDueDateForKey(goalKey: string): string {
+		if (goalKey === 'year') return formatDateString(new Date(CURRENT_YEAR, 11, 31));
+		const quarterIndex = QUARTERS.findIndex((q) => q.toLowerCase() === goalKey);
+		if (quarterIndex !== -1) {
+			const monthIndex = (quarterIndex + 1) * 3 - 1;
+			return formatDateString(endOfMonthDate(CURRENT_YEAR, monthIndex));
+		}
+		const monthIndex = MONTH_INDEX_BY_KEY[goalKey];
+		if (typeof monthIndex === 'number') {
+			return formatDateString(endOfMonthDate(CURRENT_YEAR, monthIndex));
+		}
+		const [monthKey, weekKey] = goalKey.split('-week');
+		const weekIndex = weekKey ? Number(weekKey) : Number.NaN;
+		const weekMonthIndex = MONTH_INDEX_BY_KEY[monthKey];
+		if (typeof weekMonthIndex === 'number' && Number.isFinite(weekIndex)) {
+			const lastDay = endOfMonthDate(CURRENT_YEAR, weekMonthIndex).getDate();
+			const day = weekIndex >= 4 ? lastDay : Math.min(lastDay, weekIndex * 7);
+			return formatDateString(new Date(CURRENT_YEAR, weekMonthIndex, day));
+		}
+		return formatDateString(new Date(CURRENT_YEAR, 11, 31));
+	}
+
+	function mergedYearEntry() {
+		return { ...YEAR_ENTRY, ...(goalsByKey.year ?? {}) };
+	}
+
+	function mergeGoal(goalKey: string): GoalEntry {
+		const existing = goalsByKey[goalKey];
+		const due_date = goalDueDateForKey(goalKey);
+		if (!existing) {
+			return { id: null, title: '', goal_key: goalKey, due_date };
+		}
+		return {
+			id: existing.id,
+			title: existing.title,
+			goal_key: goalKey,
+			due_date: existing.due_date ?? due_date
+		};
+	}
+
+	function mergedQuarterStructure() {
+		return QUARTER_STRUCTURE.map((quarter) => ({
+			...quarter,
+			goal: mergeGoal(quarter.key),
+			months: quarter.months.map((month) => ({
+				...month,
+				goal: mergeGoal(month.key),
+				weeks: month.weeks.map((week) => ({
+					...week,
+					goal: mergeGoal(week.key)
+				}))
+			}))
+		}));
+	}
+
+	function openGoalModal() {
+		isGoalModalOpen = true;
+	}
+
+	function closeGoalModal() {
+		isGoalModalOpen = false;
+	}
+
+	function updateGoalDraft(goalKey: string, value: string) {
+		const existing = goalsByKey[goalKey] ?? mergeGoal(goalKey);
+		goalsByKey = {
+			...goalsByKey,
+			[goalKey]: {
+				...existing,
+				title: value,
+				goal_key: goalKey
+			}
+		};
+	}
+
+	function handleGoalKeydown(goalKey: string, event: KeyboardEvent) {
+		if (event.key !== 'Enter') return;
+		event.preventDefault();
+		void saveGoal(goalKey);
+		(event.currentTarget as HTMLInputElement).blur();
+	}
+
+	async function saveGoal(goalKey: string) {
+		const entry = goalsByKey[goalKey] ?? mergeGoal(goalKey);
+		if (!entry.title.trim()) return;
+		const dueDate = goalDueDateForKey(goalKey);
+		savingGoals = { ...savingGoals, [goalKey]: true };
 		try {
 			const { data, error } = await supabase
 				.from('goals')
-				.insert({
-					user_id: viewerId,
-					title,
-					due_date: newGoalDueDate,
-					created_at: formatLocalTimestamp(new Date())
-				})
-				.select('id, title, due_date')
+				.upsert(
+					{
+						goal_key: goalKey,
+						title: entry.title.trim(),
+						due_date: dueDate,
+						created_at: formatLocalTimestamp(new Date())
+					},
+					{ onConflict: 'goal_key' }
+				)
+				.select('id, title, goal_key, due_date')
 				.single();
 			if (error) throw error;
-			activeGoal = {
-				id: data.id as string,
-				title: (data.title ?? title).trim(),
-				due_date: data.due_date as string
-			};
-			newGoalTitle = '';
-			newGoalDueDate = '';
+			if (data) {
+				goalsByKey = {
+					...goalsByKey,
+					[goalKey]: {
+						id: data.id as string,
+						title: (data.title ?? '').trim(),
+						goal_key: (data.goal_key ?? goalKey).toString(),
+						due_date: (data.due_date as string | null) ?? dueDate
+					}
+				};
+			}
 		} catch (error) {
-			console.error('goal create error', error);
+			console.error('goal save error', error);
 		} finally {
-			isCreatingGoal = false;
+			savingGoals = { ...savingGoals, [goalKey]: false };
 		}
 	}
 
-	function startGoalEdit() {
-		if (!viewerId || !activeGoal) return;
-		editGoalTitle = activeGoal.title ?? '';
-		editGoalDueDate = activeGoal.due_date ?? '';
-		isEditingGoal = true;
-	}
-
-	function cancelGoalEdit() {
-		if (isSavingGoal) return;
-		isEditingGoal = false;
-		editGoalTitle = '';
-		editGoalDueDate = '';
-	}
-
-	function handleGoalBackdropClick(event: MouseEvent) {
-		if (event.target !== event.currentTarget) return;
-		cancelGoalEdit();
-	}
-
-	async function saveGoalEdit(event?: Event) {
-		event?.preventDefault();
-		if (!viewerId || !activeGoal || isSavingGoal) return;
-		const title = editGoalTitle.trim();
-		if (!title || !editGoalDueDate) return;
-		isSavingGoal = true;
-		try {
-			const { data, error } = await supabase
-				.from('goals')
-				.update({ title, due_date: editGoalDueDate })
-				.eq('id', activeGoal.id)
-				.select('id, title, due_date')
-				.single();
-			if (error) throw error;
-			activeGoal = {
-				id: data.id as string,
-				title: (data.title ?? title).trim(),
-				due_date: data.due_date as string
-			};
-			isEditingGoal = false;
-		} catch (error) {
-			console.error('goal update error', error);
-		} finally {
-			isSavingGoal = false;
-		}
+	async function saveAllGoals() {
+		const keys = Object.keys(goalsByKey);
+		if (keys.length === 0) return;
+		await Promise.all(keys.map((key) => saveGoal(key)));
 	}
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
@@ -438,39 +578,25 @@
 		}
 	}
 
-	async function loadActiveGoal(userId: string | null) {
-		if (!userId) {
-			activeGoal = null;
-			isEditingGoal = false;
-			return;
-		}
+	async function loadGoals() {
 		try {
-			const { data, error } = await supabase
-				.from('goals')
-				.select('id, title, due_date')
-				.order('due_date', { ascending: true })
-				.limit(1)
-				.maybeSingle();
-			if (error) {
-				if (error.code === 'PGRST116') {
-					activeGoal = null;
-					return;
-				}
-				throw error;
+			const { data, error } = await supabase.from('goals').select('id, title, goal_key, due_date');
+			if (error) throw error;
+			const next: Record<string, GoalEntry> = {};
+			for (const row of data ?? []) {
+				const goalKey = (row.goal_key as string | null) ?? '';
+				if (!goalKey) continue;
+				next[goalKey] = {
+					id: row.id as string,
+					title: (row.title ?? '').trim(),
+					goal_key: goalKey,
+					due_date: (row.due_date as string | null) ?? goalDueDateForKey(goalKey)
+				};
 			}
-			activeGoal = data
-				? {
-						id: data.id as string,
-						title: (data.title ?? '').trim(),
-						due_date: data.due_date as string
-					}
-				: null;
-			if (!data) {
-				isEditingGoal = false;
-			}
+			goalsByKey = next;
 		} catch (error) {
 			console.error('goal load error', error);
-			activeGoal = null;
+			goalsByKey = {};
 		}
 	}
 
@@ -508,7 +634,7 @@
 				authUser = null;
 			}
 			if (!mounted) return;
-			await loadActiveGoal(authUser?.id ?? null);
+			await loadGoals();
 			await refreshTrackedPlayers();
 		};
 
@@ -517,6 +643,10 @@
 		currentProgressInterval = window.setInterval(() => {
 			void refreshCurrentCombined();
 		}, CURRENT_PROGRESS_POLL_MS);
+
+		const goalRotationInterval = window.setInterval(() => {
+			goalRotationIndex = (goalRotationIndex + 1) % GOAL_ROTATION.length;
+		}, 5000);
 
 		const handleDocumentClick = (event: MouseEvent) => {
 			if (!dayHistoryOpen || !dateMenuEl) return;
@@ -540,6 +670,7 @@
 				window.clearInterval(currentProgressInterval);
 				currentProgressInterval = null;
 			}
+			window.clearInterval(goalRotationInterval);
 		};
 	});
 	$inspect(authSet);
@@ -636,91 +767,155 @@
 				{/if}
 			</div>
 		</div>
-		{#if activeGoal}
-			{@const daysRemaining = daysUntilDue(activeGoal.due_date)}
-			{@const dueLabel = formatDaysUntilText(daysRemaining)}
-			<div class="pointer-events-none fixed top-5 left-1/2 z-40 -translate-x-1/2">
-				{#if viewerId}
-					<button
-						type="button"
-						class="pointer-events-auto flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold tracking-wide text-stone-800 uppercase transition hover:bg-stone-100"
-						onclick={startGoalEdit}
-					>
-						<span>{activeGoal.title || 'Goal'}</span>
-						{#if dueLabel}
-							<span class="text-xs font-semibold tracking-wide text-stone-500">
-								{dueLabel}
+		<div class="pointer-events-none fixed top-5 left-1/2 z-40 -translate-x-1/2">
+			{#if viewerId}
+				<button
+					type="button"
+					class="pointer-events-auto flex flex-col items-center gap-0.5 rounded-md px-2 py-1 text-xs font-semibold tracking-wide text-stone-800 uppercase transition hover:bg-stone-100"
+					onclick={openGoalModal}
+				>
+					{#key currentGoalKey}
+						<span in:fly={{ y: 10, delay: 1000, duration: 200 }} out:fade={{ duration: 160 }} class="gap-2">
+							<span class="font-semibold tracking-wide text-stone-400">
+								{currentRangeLabel}
 							</span>
-						{/if}
-					</button>
-				{:else}
-					<div
-						class="pointer-events-auto flex items-center gap-2 text-xs font-semibold tracking-wide text-stone-800 uppercase"
-					>
-						<span>{activeGoal.title || 'Goal'}</span>
-						{#if dueLabel}
-							<span class="text-xs font-semibold tracking-wide text-stone-500">
-								{dueLabel}
-							</span>
-						{/if}
-					</div>
-				{/if}
-			</div>
-		{/if}
+							{currentGoalEntry.title || 'Goal'}
+						</span>
+					{/key}
+				</button>
+			{:else}
+				<div
+					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase"
+				>
+					<span>{yearGoalTitle}</span>
+					<span class="text-[10px] font-semibold tracking-wide text-stone-400">
+						{currentRangeLabel}
+					</span>
+				</div>
+			{/if}
+		</div>
 	</div>
 {/if}
 
-{#if isEditingGoal}
+{#if isGoalModalOpen}
 	<div
-		class="fixed inset-0 z-70 flex items-center justify-center bg-black/40"
+		class="fixed inset-0 z-70 bg-white text-stone-800"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Edit goal"
-		onclick={handleGoalBackdropClick}
+		aria-label="Goals"
 	>
-		<div
-			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-md rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
-		>
-			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
-				<div class="rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase">
-					Edit goal
-				</div>
-			</div>
-			<form class="px-4 pt-3 pb-4" onsubmit={saveGoalEdit}>
-				<div class="flex w-full flex-row items-center">
-					<input
-						class="w-full p-2 text-2xl text-stone-800 transition outline-none"
-						placeholder="Goal"
-						bind:value={editGoalTitle}
-					/>
-				</div>
-				<div class="mt-3 flex w-full flex-row items-center">
-					<input
-						class="w-full rounded-md border border-stone-200 px-3 py-2 text-sm text-stone-700 outline-none"
-						placeholder="YYYY-MM-DD"
-						type="text"
-						bind:value={editGoalDueDate}
-					/>
-				</div>
-				<div class="mt-4 flex justify-end gap-2">
+		<div class="flex h-full flex-col">
+			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
+				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Goals</div>
+				<div class="flex items-center gap-2">
 					<button
 						type="button"
-						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600 disabled:opacity-60"
-						onclick={cancelGoalEdit}
-						disabled={isSavingGoal}
+						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
+						onclick={() => void saveAllGoals()}
 					>
-						Cancel
+						Save all
 					</button>
 					<button
-						type="submit"
-						class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
-						disabled={isSavingGoal}
+						type="button"
+						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
+						onclick={closeGoalModal}
 					>
-						Save
+						Close
 					</button>
 				</div>
-			</form>
+			</div>
+
+			<div class="flex-1 overflow-y-auto px-6 py-6">
+				<div class="space-y-10">
+					<div class="space-y-3">
+						<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Year</div>
+						<input
+							class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
+							placeholder="Year goal"
+							value={yearGoalEntry.title}
+							oninput={(event) =>
+								updateGoalDraft(
+									yearGoalEntry.goal_key,
+									(event.currentTarget as HTMLInputElement).value
+								)}
+							onchange={() => void saveGoal(yearGoalEntry.goal_key)}
+							onkeydown={(event) => handleGoalKeydown(yearGoalEntry.goal_key, event)}
+							onblur={() => void saveGoal(yearGoalEntry.goal_key)}
+						/>
+					</div>
+
+					<div class="space-y-8">
+						{#each mergedQuarterStructure() as quarter}
+							<div class="space-y-4">
+								<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+									{quarter.label}
+								</div>
+								<input
+									class="w-full rounded-md border border-stone-200 p-2 text-2xl text-stone-800 outline-none"
+									placeholder={`${quarter.label} goal`}
+									value={quarter.goal.title}
+									oninput={(event) =>
+										updateGoalDraft(
+											quarter.goal.goal_key,
+											(event.currentTarget as HTMLInputElement).value
+										)}
+									onchange={() => void saveGoal(quarter.goal.goal_key)}
+									onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
+									onblur={() => void saveGoal(quarter.goal.goal_key)}
+								/>
+
+								<div class="grid gap-6 lg:grid-cols-3">
+									{#each quarter.months as month}
+										<div class="space-y-3 rounded-md border border-stone-200 p-3">
+											<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+												{month.label}
+											</div>
+											<input
+												class="w-full rounded-md border border-stone-200 p-2 text-xl text-stone-800 outline-none"
+												placeholder={`${month.label} goal`}
+												value={month.goal.title}
+												oninput={(event) =>
+													updateGoalDraft(
+														month.goal.goal_key,
+														(event.currentTarget as HTMLInputElement).value
+													)}
+												onchange={() => void saveGoal(month.goal.goal_key)}
+												onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
+												onblur={() => void saveGoal(month.goal.goal_key)}
+											/>
+
+											<div class="space-y-2">
+												{#each month.weeks as week}
+													<div class="space-y-1">
+														<div
+															class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
+														>
+															{week.label}
+														</div>
+														<input
+															class="w-full rounded-md border border-stone-200 p-2 text-base text-stone-700 outline-none"
+															placeholder={`${week.label} goal`}
+															value={week.goal.title}
+															oninput={(event) =>
+																updateGoalDraft(
+																	week.goal.goal_key,
+																	(event.currentTarget as HTMLInputElement).value
+																)}
+															onchange={() => void saveGoal(week.goal.goal_key)}
+															onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
+															onblur={() => void saveGoal(week.goal.goal_key)}
+														/>
+													</div>
+												{/each}
+											</div>
+										</div>
+									{/each}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

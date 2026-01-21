@@ -2373,7 +2373,8 @@
 						hour: prevHour,
 						half: prevHalf === 1,
 						title: prevBlock.title ?? '',
-						status: null
+						status: null,
+						category: prevBlock.category ?? null
 					},
 					{ onConflict: 'day_id,hour,half' }
 				);
@@ -2407,7 +2408,8 @@
 						hour: currHour,
 						half: currHalf === 1,
 						title,
-						status: false
+						status: false,
+						category: prevBlock.category ?? null
 					},
 					{ onConflict: 'day_id,hour,half' }
 				);
@@ -2415,7 +2417,7 @@
 					console.error('create continued status in current block error', error);
 					return;
 				}
-				setTitle(user_id, currHour, currHalf, title, false);
+				setTitle(user_id, currHour, currHalf, title, false, prevBlock.category ?? null);
 			}
 
 			carryoverPrompt = null;
