@@ -842,7 +842,7 @@
 
 {#if isGoalModalOpen}
 	<div
-		class="fixed inset-0 z-70 bg-white text-stone-800"
+		class="fixed inset-0 z-[1800] bg-white text-stone-800"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Goals"
@@ -963,7 +963,7 @@
 
 {#if heatmapOpen}
 	<div
-		class="fixed inset-0 z-70 bg-white text-stone-800"
+		class="fixed inset-0 z-[1800] bg-white text-stone-800"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Daily completion heatmap"

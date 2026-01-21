@@ -240,8 +240,8 @@
 {#if open}
 	<div
 		bind:this={modalEl}
-		in:fade={{ duration: 150 }}
-		class="fixed inset-0 z-[130] flex items-center justify-center focus:ring-0 focus:outline-0"
+		in:fade={{ duration: 100 }}
+		class="fixed inset-0 z-[2000] bg-black/40 flex items-center justify-center focus:ring-0 focus:outline-0"
 		role="dialog"
 		aria-modal="true"
 		aria-label="New log"

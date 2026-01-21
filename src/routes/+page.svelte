@@ -3184,7 +3184,7 @@
 {/if}
 
 {#if reviewOpen}
-	<div class="fixed inset-0 z-60 flex items-center justify-center">
+	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="flex items-start justify-between">
 				<div>
@@ -3272,7 +3272,7 @@
 />
 
 {#if habitCheckPrompt}
-	<div class="fixed inset-0 z-60 flex items-center justify-center">
+	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Habit check</div>
 			<div class="mt-1 text-sm font-medium text-stone-900">
@@ -3302,7 +3302,7 @@
 {/if}
 
 {#if carryoverPrompt}
-	<div class="fixed inset-0 z-60 flex items-center justify-center">
+	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">
 				Previous block in progress
@@ -3343,7 +3343,7 @@
 	</div>
 {/if}
 {#if plannedPrompt}
-	<div class="fixed inset-0 z-60 flex items-center justify-center">
+	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
 		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
 			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Planned block</div>
 			<div class="mt-1 text-sm font-medium text-stone-900">Did you start this?</div>
