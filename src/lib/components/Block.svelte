@@ -72,13 +72,14 @@
 	const showStatus = $derived(
 		showStatusProp === undefined ? isFilled && !isHabit : Boolean(showStatusProp)
 	);
-	const canToggleStatus = $derived(isFilled && !isHabit);
+	const canToggleStatus = $derived(editable && isFilled && !isHabit);
 
-	const canToggleHabit = $derived(isHabit);
+	const canToggleHabit = $derived(editable && isHabit);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleBlockClick() {
+		if (!editable) return;
 		if (onPrimaryAction()) return;
 		if (canToggleStatus || canToggleHabit) {
 			onCycleStatus();

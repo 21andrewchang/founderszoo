@@ -460,7 +460,7 @@
 	};
 	const canEditDayForUser = (user_id: string) => {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
-		return displayDateForUser(user_id) === localToday();
+		return displayDateForUser(user_id) >= localToday();
 	};
 	const canShowReviewDayButton = () => {
 		if (!viewerUserId) return false;
@@ -1081,7 +1081,7 @@
 	}
 
 	function canDragBlock(user_id: string, h: number, half01: 0 | 1) {
-		if (!viewerUserId || viewerUserId !== user_id) return false;
+		if (!canEditDayForUser(user_id)) return false;
 		if (isCutSource(user_id, h, half01)) return false;
 		return blockHasContent(user_id, h, half01);
 	}
@@ -2151,6 +2151,9 @@
 		const targets: { hour: number; half: 0 | 1 }[] = [];
 		const trimmedTitle = text.trim();
 		let resolvedCategory = category;
+		const currentCategory = getBlock(user_id, hour, half).category ?? null;
+		const shouldUpdateRunCategory = !isNewBlock && resolvedCategory !== currentCategory;
+		const runTargets: { hour: number; half: 0 | 1 }[] = [];
 		if (!resolvedCategory && trimmedTitle) {
 			const prevIndex = blockIndex(hourIndex, half) - 1;
 			if (prevIndex >= 0) {
@@ -2173,6 +2176,17 @@
 		}
 		if (targets.length === 0) return;
 
+		if (shouldUpdateRunCategory) {
+			const { startIndex, endIndex } = blockRunRange(user_id, hour, half);
+			for (let idx = startIndex; idx <= endIndex; idx += 1) {
+				const { hour: targetHour, half: targetHalf } = blockFromIndex(idx);
+				if (targetHour === undefined) break;
+				const targetTitle = getTitle(user_id, targetHour, targetHalf).trim();
+				if (!targetTitle) continue;
+				runTargets.push({ hour: targetHour, half: targetHalf });
+			}
+		}
+
 		const payload = targets.map((target) => ({
 			day_id,
 			hour: target.hour,
@@ -2192,6 +2206,38 @@
 
 		for (const target of targets) {
 			setTitle(user_id, target.hour, target.half, text, status, resolvedCategory);
+		}
+
+		if (shouldUpdateRunCategory && runTargets.length > 0) {
+			const categoryPayload = runTargets.map((target) => {
+				const block = getBlock(user_id, target.hour, target.half);
+				return {
+					day_id,
+					hour: target.hour,
+					half: target.half === 1,
+					title: block.title ?? '',
+					status: block.status,
+					category: resolvedCategory
+				};
+			});
+			const { error: categoryError } = await supabase
+				.from('hours')
+				.upsert(categoryPayload, { onConflict: 'day_id,hour,half' });
+			if (categoryError) {
+				console.error('save category error', categoryError);
+				return;
+			}
+			for (const target of runTargets) {
+				const block = getBlock(user_id, target.hour, target.half);
+				setTitle(
+					user_id,
+					target.hour,
+					target.half,
+					block.title ?? '',
+					block.status,
+					resolvedCategory
+				);
+			}
 		}
 		if (viewerUserId && user_id === viewerUserId) {
 			if (hourIndex !== -1) {
