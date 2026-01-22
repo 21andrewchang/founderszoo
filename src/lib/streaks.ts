@@ -1,5 +1,5 @@
 const DAY_MS = 86_400_000;
-export const MAX_MISSES_FOR_POSITIVE = 2;
+export const MIN_COMPLETION_FOR_STREAK = 0.75;
 
 export type PlayerStreakKind = 'positive' | 'negative';
 export type PlayerStreak = {
@@ -10,7 +10,7 @@ export type PlayerStreak = {
 
 export type DayCompletionSummary = {
 	date: string;
-	missingBlocks: number;
+	completionPct: number;
 };
 
 function parseDateToUtcMs(dateStr: string): number | null {
@@ -34,8 +34,8 @@ function parseDateToUtcMs(dateStr: string): number | null {
 	return Date.UTC(year, month - 1, day);
 }
 
-function classifyDay(missingBlocks: number): PlayerStreakKind {
-	return missingBlocks <= MAX_MISSES_FOR_POSITIVE ? 'positive' : 'negative';
+function qualifiesForStreak(completionPct: number): boolean {
+	return completionPct >= MIN_COMPLETION_FOR_STREAK;
 }
 
 export function calculateStreak(summaries: DayCompletionSummary[]): PlayerStreak | null {
@@ -51,13 +51,13 @@ export function calculateStreak(summaries: DayCompletionSummary[]): PlayerStreak
 	if (normalized.length === 0) return null;
 
 	const first = normalized[0];
-	const targetKind = classifyDay(first.missingBlocks);
+	if (!qualifiesForStreak(first.completionPct)) return null;
+
 	let streakLength = 0;
 	let previousUtcMs: number | null = null;
 
 	for (const entry of normalized) {
-		const currentKind = classifyDay(entry.missingBlocks);
-		if (currentKind !== targetKind) break;
+		if (!qualifiesForStreak(entry.completionPct)) break;
 
 		if (previousUtcMs !== null) {
 			const diffDays = (previousUtcMs - entry.utcMs) / DAY_MS;
@@ -69,8 +69,8 @@ export function calculateStreak(summaries: DayCompletionSummary[]): PlayerStreak
 	}
 
 	return {
-		kind: targetKind,
+		kind: 'positive',
 		length: streakLength,
-		missesOnLatest: first.missingBlocks
+		missesOnLatest: 0
 	};
 }

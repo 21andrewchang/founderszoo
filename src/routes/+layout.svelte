@@ -81,6 +81,7 @@
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
 	let heatmapOpen = $state(false);
 	let heatmapLoading = $state(false);
+	let heatmapAnimated = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
 
 	type GoalEntry = {
@@ -226,9 +227,22 @@
 	const activeDayLabel = $derived(
 		formatDisplayDate(activeDayDate, { weekday: 'short', month: 'short', day: 'numeric' })
 	);
+	const isActiveDayToday = $derived(activeDayDate === localToday());
 	const heatmapDateLabel = (dateStr: string) =>
 		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
 	const msPerDay = 24 * 60 * 60 * 1000;
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (heatmapLoading) {
+			heatmapAnimated = false;
+			return;
+		}
+		heatmapAnimated = false;
+		requestAnimationFrame(() => {
+			heatmapAnimated = true;
+		});
+	});
 
 	function startOfDay(date: Date) {
 		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -849,7 +863,30 @@
 			class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start"
 			bind:this={dateMenuEl}
 		>
-			<div class="pointer-events-auto relative">
+			<div class="pointer-events-auto relative flex items-center">
+				<button
+					type="button"
+					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
+					class:opacity-40={isActiveDayToday}
+					disabled={isActiveDayToday}
+					aria-label="Jump to today"
+					onclick={() => {
+						activeDayDateStore.set(localToday());
+					}}
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="10"
+						height="10"
+						fill="currentColor"
+						class="bi bi-calendar-fill"
+						viewBox="0 0 16 16"
+					>
+						<path
+							d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5h16V4H0V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5"
+						/>
+					</svg>
+				</button>
 				<button
 					type="button"
 					class="flex items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
@@ -860,12 +897,13 @@
 					aria-expanded={heatmapOpen}
 				>
 					<span>{activeDayLabel}</span>
-					<div class="w-9 text-end text-xs font-semibold text-stone-800">
+					<div class="text-end text-xs font-semibold text-stone-800">
 						{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
 					</div>
 				</button>
 			</div>
 		</div>
+
 		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
 			{#if viewerId}
 				<button
@@ -1081,58 +1119,91 @@
 				</button>
 			</div>
 			<div class="flex items-center justify-center px-6 py-8">
-				{#if heatmapLoading}
-					<div class="text-sm text-stone-500"></div>
-				{:else}
-					<div class="flex flex-col gap-6">
-						<div class="flex items-start gap-4">
-							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-								<div class="h-3"></div>
-								<div class="h-3">Mon</div>
-								<div class="h-3"></div>
-								<div class="h-3">Wed</div>
-								<div class="h-3"></div>
-								<div class="h-3">Fri</div>
-								<div class="h-3"></div>
+				<div class="flex flex-col gap-6">
+					<div class="flex items-start gap-4">
+						<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
+							<div class="h-3"></div>
+							<div class="h-3">Mon</div>
+							<div class="h-3"></div>
+							<div class="h-3">Wed</div>
+							<div class="h-3"></div>
+							<div class="h-3">Fri</div>
+							<div class="h-3"></div>
+						</div>
+						<div class="flex flex-col gap-2">
+							<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
+								{#each heatmapMonthLabels as label}
+									<div class="w-3 text-center">{label}</div>
+								{/each}
 							</div>
-							<div class="flex flex-col gap-2">
-								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
-									{#each heatmapMonthLabels as label}
-										<div class="w-3 text-center">{label}</div>
-									{/each}
-								</div>
+							<div class="relative overflow-hidden">
 								<div class="flex gap-1">
-									{#each heatmapWeeks as week}
+									{#each heatmapWeeks as week, weekIndex}
 										<div class="flex flex-col gap-1">
 											{#each week.days as day}
 												{@const dateKey = formatDateString(day)}
 												<button
 													type="button"
-													class={`group relative h-3 w-3 rounded-xs ${heatmapColorClass(
-														heatmapByDate[dateKey] ?? 0
-													)}`}
+													class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
+														heatmapLoading
+															? 'bg-stone-200'
+															: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
+													} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''}`}
+													style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
+													disabled={heatmapLoading}
 													onclick={() => {
 														activeDayDateStore.set(dateKey);
 														heatmapOpen = false;
 													}}
 												>
-													<span
-														class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-													>
-														{heatmapDateLabel(dateKey)}
-													</span>
+													{#if !heatmapLoading}
+														<span
+															class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+														>
+															{heatmapDateLabel(dateKey)}
+														</span>
+													{/if}
 												</button>
 											{/each}
 										</div>
 									{/each}
 								</div>
+								{#if heatmapLoading}
+									<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
+								{/if}
 							</div>
 						</div>
 					</div>
-				{/if}
+				</div>
 			</div>
 		</div>
 	</div>
 {/if}
 
 {@render children()}
+
+<style>
+	.heatmap-sheen {
+		overflow: hidden;
+	}
+
+	.heatmap-sheen::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(
+			120deg,
+			transparent 0%,
+			rgba(255, 255, 255, 0.65) 50%,
+			transparent 100%
+		);
+		transform: translateX(-100%);
+		animation: block-sheen 0.5s linear infinite;
+	}
+
+	@keyframes block-sheen {
+		100% {
+			transform: translateX(100%);
+		}
+	}
+</style>

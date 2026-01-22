@@ -41,11 +41,7 @@
 		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
 		return `${base} ${color} ${rotation}`;
 	});
-	const streakDescription = $derived(
-		streak
-			? `${streak.length}-day ${streak.kind === 'positive' ? 'positive' : 'negative'} streak`
-			: null
-	);
+	const streakDescription = $derived(streak ? `${streak.length}-day 75%+ completion streak` : null);
 	const baseAria = $derived(label ? `${label} is ${statusText}` : statusText);
 	const aria = $derived(streakDescription ? `${baseAria}, ${streakDescription}` : baseAria);
 </script>

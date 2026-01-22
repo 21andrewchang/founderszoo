@@ -5,7 +5,7 @@
 	import Block from '$lib/components/Block.svelte';
 	import { scale, fly } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
-	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
+	import type { PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
@@ -103,6 +103,8 @@
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
 	const STREAK_LOOKBACK_DAYS = 60;
+	const COMPLETION_STREAK_LOOKBACK_DAYS = 365;
+	const COMPLETION_STREAK_THRESHOLD = 0.75;
 	const DAY_MS = 86_400_000;
 	const MONTHS = [
 		'January',
@@ -272,6 +274,8 @@
 		id: string;
 		selected_block_hour: number | null;
 		selected_block_half: boolean | number | null;
+		current_streak?: number | null;
+		best_streak?: number | null;
 	};
 
 	const createEmptyBlock = (): BlockValue => ({ title: '', status: null, category: null });
@@ -771,6 +775,49 @@
 		if (score >= 50) return 'bg-emerald-500';
 		if (score >= 25) return 'bg-emerald-300';
 		return 'bg-stone-500';
+	}
+
+	function parseStreakValue(value: unknown): number | null {
+		if (value === null || value === undefined) return null;
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) return null;
+		return parsed;
+	}
+
+	function streakFromValues(
+		currentValue: number | string | null | undefined,
+		bestValue: number | string | null | undefined
+	): PlayerStreak | null {
+		const currentParsed = parseStreakValue(currentValue);
+		if (currentParsed !== null) {
+			if (currentParsed <= 0) return null;
+			return { kind: 'positive', length: currentParsed, missesOnLatest: 0 };
+		}
+		const bestParsed = parseStreakValue(bestValue);
+		if (bestParsed !== null && bestParsed > 0) {
+			return { kind: 'positive', length: bestParsed, missesOnLatest: 0 };
+		}
+		return null;
+	}
+
+	function completionPctFromBlocks(value: unknown): number | null {
+		const filled = Number(value ?? 0);
+		if (!Number.isFinite(filled)) return null;
+		if (!TOTAL_BLOCKS_PER_DAY) return 0;
+		return Math.max(0, Math.min(1, filled / TOTAL_BLOCKS_PER_DAY));
+	}
+
+	function computeCompletionStreak(days: Map<string, number>): number {
+		const yesterday = dateStringNDaysAgo(1);
+		let streakLength = 0;
+		let cursor = yesterday;
+		for (let offset = 0; offset < COMPLETION_STREAK_LOOKBACK_DAYS; offset += 1) {
+			const pct = days.get(cursor);
+			if (pct === undefined || pct < COMPLETION_STREAK_THRESHOLD) break;
+			streakLength += 1;
+			cursor = addDaysToDateString(cursor, -1);
+		}
+		return streakLength;
 	}
 
 	function openReviewDay(user_id: string) {
@@ -1844,6 +1891,12 @@
 		const row = (payload.new ?? payload.old) as SelectedBlockRowPayload | null;
 		if (!row || row.id !== user_id) return;
 		applyRemoteSelectionFromDb(user_id, row.selected_block_hour, row.selected_block_half);
+		if (row.current_streak !== undefined || row.best_streak !== undefined) {
+			streakByUser = {
+				...streakByUser,
+				[user_id]: streakFromValues(row.current_streak, row.best_streak)
+			};
+		}
 	}
 	function ensureSelectedBlockRealtime(user_id: string) {
 		const existing = selectedBlockRealtimeByUser[user_id];
@@ -1979,41 +2032,62 @@
 			};
 		}
 	}
-	function blockHasElapsed(hour: number, half: 0 | 1) {
-		if (currentHour < 0) return false;
-		if (currentHour > hour) return true;
-		if (currentHour === hour && currentHalf > half) return true;
-		return false;
-	}
 
-	async function loadPlayerHistoryForUser(user_id: string) {
-		const today = localToday();
-		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
+	async function loadCompletionStreakForUser(
+		user_id: string,
+		currentValue: number | null,
+		bestValue: number | null
+	) {
+		const lookbackStart = dateStringNDaysAgo(COMPLETION_STREAK_LOOKBACK_DAYS);
 		try {
-			const { data: dayStats, error: dayErr } = await supabase
+			const { data, error } = await supabase
 				.from('day_block_stats')
 				.select('date, filled_blocks')
 				.eq('user_id', user_id)
 				.gte('date', lookbackStart)
 				.order('date', { ascending: true });
-			if (dayErr) throw dayErr;
+			if (error) throw error;
 
-			const summaries: DayCompletionSummary[] = [];
-			for (const stat of dayStats ?? []) {
-				const date = (stat.date as string | null) ?? null;
+			const today = localToday();
+			const days = new Map<string, number>();
+			for (const row of data ?? []) {
+				const date = (row.date as string | null) ?? null;
 				if (!date || date === today) continue;
-				const filled = Number(stat.filled_blocks ?? 0);
-				if (Number.isNaN(filled)) continue;
-				const missingBlocks = Math.max(0, TOTAL_BLOCKS_PER_DAY - filled);
-				summaries.push({ date, missingBlocks });
+				const pct = completionPctFromBlocks(row.filled_blocks);
+				if (pct === null) continue;
+				days.set(date, pct);
 			}
 
-			const streak = calculateStreak(summaries);
-			streakByUser = { ...streakByUser, [user_id]: streak };
+			const streakLength = computeCompletionStreak(days);
+			const current = currentValue ?? 0;
+			const best = bestValue ?? 0;
+			const nextBest = Math.max(best, streakLength);
+			const shouldUpdate = current !== streakLength || best !== nextBest;
+			if (shouldUpdate) {
+				const { error: updateError } = await supabase
+					.from('users')
+					.update({
+						current_streak: streakLength > 0 ? streakLength : null,
+						best_streak: nextBest > 0 ? nextBest : null
+					})
+					.eq('id', user_id);
+				if (updateError) throw updateError;
+			}
+
+			streakByUser = {
+				...streakByUser,
+				[user_id]:
+					streakLength > 0 ? { kind: 'positive', length: streakLength, missesOnLatest: 0 } : null
+			};
 		} catch (error) {
-			console.error('load player history error', { user_id, error });
-			streakByUser = { ...streakByUser, [user_id]: null };
+			console.error('load completion streak error', { user_id, error });
 		}
+	}
+	function blockHasElapsed(hour: number, half: 0 | 1) {
+		if (currentHour < 0) return false;
+		if (currentHour > hour) return true;
+		if (currentHour === hour && currentHalf > half) return true;
+		return false;
 	}
 
 	let editorMode = $state(false);
@@ -2985,21 +3059,30 @@
 		try {
 			const { data: rows, error: uerr } = await supabase
 				.from('users')
-				.select('id, display_name, selected_block_hour, selected_block_half, active_day_date')
+				.select(
+					'id, display_name, selected_block_hour, selected_block_half, active_day_date, current_streak, best_streak'
+				)
 				.order('display_name', { ascending: true });
 			if (uerr) throw uerr;
 
 			const nextActiveDayDates: Record<string, string | null> = {};
+			const nextStreaks: Record<string, PlayerStreak | null> = {};
+			const currentStreakValues: Record<string, number | null> = {};
+			const bestStreakValues: Record<string, number | null> = {};
 			people = (rows ?? []).map((r) => {
 				const user_id = r.id as string;
 				applyRemoteSelectionFromDb(user_id, r.selected_block_hour, r.selected_block_half);
 				nextActiveDayDates[user_id] = (r.active_day_date as string | null) ?? null;
+				currentStreakValues[user_id] = parseStreakValue(r.current_streak);
+				bestStreakValues[user_id] = parseStreakValue(r.best_streak);
+				nextStreaks[user_id] = streakFromValues(r.current_streak, r.best_streak);
 				return {
 					label: r.display_name as string,
 					user_id
 				};
 			});
 			activeDayDateByUser = nextActiveDayDates;
+			streakByUser = nextStreaks;
 			if (viewerUserId && !nextActiveDayDates[viewerUserId]) {
 				const today = localToday();
 				nextActiveDayDates[viewerUserId] = today;
@@ -3028,16 +3111,19 @@
 				dayIdByUser[user_id] = dayId;
 				const tasks: Promise<void>[] = [
 					loadHabitsForUser(user_id),
-					loadHabitStreaksForUser(user_id)
+					loadHabitStreaksForUser(user_id),
+					loadCompletionStreakForUser(
+						user_id,
+						currentStreakValues[user_id] ?? null,
+						bestStreakValues[user_id] ?? null
+					)
 				];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				ensureHoursRealtime(user_id, dayId);
 			});
 
-			const historyLoads = people.map(({ user_id }) => loadPlayerHistoryForUser(user_id));
-
-			await Promise.all([...perUserLoads, ...historyLoads]);
+			await Promise.all(perUserLoads);
 
 			updateCurrentTime();
 			void autoSwitchDayIfNeeded();
