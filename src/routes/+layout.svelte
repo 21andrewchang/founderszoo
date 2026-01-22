@@ -725,19 +725,48 @@
 		heatmapLoading = true;
 		const lookbackStart = dateStringNDaysAgo(HEATMAP_LOOKBACK_DAYS);
 		try {
-			const { data, error } = await supabase
-				.from('day_block_stats')
-				.select('date, filled_blocks')
+			const { data: daysData, error: daysError } = await supabase
+				.from('days')
+				.select('id, date')
 				.eq('user_id', userId)
 				.gte('date', lookbackStart)
 				.order('date', { ascending: true });
-			if (error) throw error;
-			const next: Record<string, number> = {};
-			for (const row of data ?? []) {
+			if (daysError) throw daysError;
+			const dayIdByDate = new Map<string, string>();
+			for (const row of daysData ?? []) {
 				const date = (row.date as string | null) ?? null;
-				if (!date) continue;
-				const filled = Number(row.filled_blocks ?? 0);
-				const pct = Math.max(0, Math.min(100, Math.round((filled / TOTAL_BLOCKS_PER_DAY) * 100)));
+				const id = (row.id as string | null) ?? null;
+				if (!date || !id) continue;
+				dayIdByDate.set(id, date);
+			}
+
+			if (dayIdByDate.size === 0) {
+				heatmapByDate = {};
+				return;
+			}
+
+			const dayIds = Array.from(dayIdByDate.keys());
+			const { data: hoursData, error: hoursError } = await supabase
+				.from('hours')
+				.select('day_id, status')
+				.in('day_id', dayIds)
+				.eq('status', true);
+			if (hoursError) throw hoursError;
+
+			const completedCounts = new Map<string, number>();
+			for (const row of hoursData ?? []) {
+				const dayId = (row.day_id as string | null) ?? null;
+				if (!dayId) continue;
+				completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+			}
+
+			const next: Record<string, number> = {};
+			for (const [dayId, date] of dayIdByDate.entries()) {
+				const completed = completedCounts.get(dayId) ?? 0;
+				const pct = Math.max(
+					0,
+					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+				);
 				next[date] = pct;
 			}
 			heatmapByDate = next;

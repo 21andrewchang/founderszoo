@@ -47,7 +47,7 @@
 	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
 	type HabitKey = (typeof HABIT_KEYS)[number];
 
-	type BlockCategory = 'body' | 'social' | 'work' | 'admin';
+	type BlockCategory = 'body' | 'rest' | 'work' | 'admin';
 	type CategoryPreset = {
 		label: string;
 		value: BlockCategory;
@@ -56,7 +56,7 @@
 
 	const CATEGORY_PRESETS: CategoryPreset[] = [
 		{ label: 'Body', value: 'body', key: '1' },
-		{ label: 'Social', value: 'social', key: '2' },
+		{ label: 'Rest', value: 'rest', key: '2' },
 		{ label: 'Work', value: 'work', key: '3' },
 		{ label: 'Admin', value: 'admin', key: '4' }
 	];
@@ -241,7 +241,7 @@
 	<div
 		bind:this={modalEl}
 		in:fade={{ duration: 100 }}
-		class="fixed inset-0 z-[2000] bg-black/40 flex items-center justify-center focus:ring-0 focus:outline-0"
+		class="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 focus:ring-0 focus:outline-0"
 		role="dialog"
 		aria-modal="true"
 		aria-label="New log"
@@ -302,8 +302,18 @@
 						class:bg-stone-100={category === p.value}
 						onclick={() => selectCategory(p.value)}
 					>
-						<span class="relative flex h-3 w-3 items-center justify-center text-stone-600">
-							{#if p.value === 'social'}
+						<span
+							class={`relative flex h-3 w-3 items-center justify-center ${
+								p.value === 'admin'
+									? 'text-amber-900/30'
+									: p.value === 'body'
+										? 'text-rose-300'
+										: p.value === 'work'
+											? 'text-slate-300'
+											: 'text-violet-300'
+							}`}
+						>
+							{#if p.value === 'rest'}
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"

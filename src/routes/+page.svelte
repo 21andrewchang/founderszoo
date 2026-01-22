@@ -167,7 +167,7 @@
 	let isLoading = $state(true);
 
 	type ReviewCategoryBreakdown = {
-		key: 'body' | 'social' | 'work' | 'admin';
+		key: 'body' | 'rest' | 'work' | 'admin';
 		label: string;
 		percent: number;
 		hours: number;
@@ -218,12 +218,20 @@
 		);
 	}
 
-	type BlockCategory = 'body' | 'social' | 'work' | 'admin' | null;
+	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | null;
 	type BlockValue = { title: string; status: boolean | null; category: BlockCategory };
 	type BlockRow = { first: BlockValue; second: BlockValue };
 	type HabitBlockRow = { first: string | null; second: string | null };
 	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
 	type DraggingBlock = { user_id: string; hour: number; half: 0 | 1 };
+
+	const normalizeBlockCategory = (value: unknown): BlockCategory | null => {
+		if (value === 'social') return 'rest';
+		if (value === 'body' || value === 'rest' || value === 'work' || value === 'admin') {
+			return value;
+		}
+		return null;
+	};
 	type PendingMove = {
 		user_id: string;
 		fromHour: number;
@@ -729,7 +737,7 @@
 	function reviewStatsForUser(user_id: string): ReviewStats {
 		let planned = 0;
 		let completed = 0;
-		const categoryCounts = { body: 0, social: 0, work: 0, admin: 0 };
+		const categoryCounts = { body: 0, rest: 0, work: 0, admin: 0 };
 		for (const hour of hours) {
 			for (const half of [0, 1] as const) {
 				const title = (getTitle(user_id, hour, half) ?? '').trim();
@@ -748,7 +756,7 @@
 		const categoryBreakdown: ReviewCategoryBreakdown[] = (
 			[
 				{ key: 'body', label: 'Body' },
-				{ key: 'social', label: 'Social' },
+				{ key: 'rest', label: 'Rest' },
 				{ key: 'work', label: 'Work' },
 				{ key: 'admin', label: 'Admin' }
 			] as const
@@ -1740,7 +1748,7 @@
 			const blockValue: BlockValue = {
 				title: r.title ?? '',
 				status: r.status as boolean | null,
-				category: (r.category as BlockCategory | null) ?? null
+				category: normalizeBlockCategory(r.category)
 			};
 			next[h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
 			if (half01 === 0) next[h].first = blockValue;
@@ -1832,7 +1840,7 @@
 		const blockValue: BlockValue = {
 			title: row.title ?? '',
 			status: (row.status as boolean | null) ?? null,
-			category: (row.category as BlockCategory | null) ?? null
+			category: normalizeBlockCategory(row.category)
 		};
 		applyRealtimeBlockValue(user_id, hour, half, blockValue);
 	}

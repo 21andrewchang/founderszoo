@@ -26,6 +26,7 @@ need testing for 1 full day without having to wait for each hour. need to test r
 - [ ] Set big event dates. so i want to set YC DUE DATE, end of week, end of month, quarter, etc. and then a Days until countdown
 
 ## integrate goals into daily ritual
+- [ ] I WANT TO MAKE SOMETHING WHERE I CAN TRACK BAD THINGS
 - [ ] need to create a repeatable workout system
 - [ ] really need long term scheduled items. like vitamin d2 every week on thursday. or yc due feb 9
 - [ ] create structure with auto-repeating blocks for lifestyle stuff like wind down, supplements, etc.

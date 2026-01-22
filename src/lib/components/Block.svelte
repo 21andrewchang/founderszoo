@@ -205,8 +205,18 @@
 	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
 		<div class="flex flex-row items-center gap-0.5">
 			{#if showCategoryIcon}
-				<span class="text-stone-300 mr-1">
-					{#if category === 'social'}
+				<span
+					class={`mr-1 ${
+						category === 'admin'
+							? 'text-amber-900/30'
+							: category === 'body'
+								? 'text-rose-300'
+								: category === 'work'
+									? 'text-slate-300'
+									: 'text-violet-300'
+					}`}
+				>
+					{#if category === 'rest'}
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
