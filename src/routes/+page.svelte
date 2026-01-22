@@ -450,6 +450,10 @@
 		if (!viewerUserId) return localToday();
 		return activeDayDateByUser[user_id] ?? localToday();
 	};
+	const canEditDayForUser = (user_id: string) => {
+		if (!viewerUserId || viewerUserId !== user_id) return false;
+		return displayDateForUser(user_id) === localToday();
+	};
 	const canShowReviewDayButton = () => {
 		if (!viewerUserId) return false;
 		if (!isNightWindow()) return false;
@@ -3284,7 +3288,7 @@
 												status={getStatus(person.user_id, h, 0)}
 												category={getCategory(person.user_id, h, 0)}
 												showStatus={blockShowsStatus(person.user_id, h, 0)}
-												editable={viewerUserId === person.user_id}
+												editable={canEditDayForUser(person.user_id)}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
 												onCycleStatus={() => handleBlockCycle(person.user_id, h, 0)}
@@ -3316,7 +3320,7 @@
 												status={getStatus(person.user_id, h, 1)}
 												category={getCategory(person.user_id, h, 1)}
 												showStatus={blockShowsStatus(person.user_id, h, 1)}
-												editable={viewerUserId === person.user_id}
+												editable={canEditDayForUser(person.user_id)}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
 												onCycleStatus={() => handleBlockCycle(person.user_id, h, 1)}
