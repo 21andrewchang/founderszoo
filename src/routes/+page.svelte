@@ -1295,7 +1295,10 @@
 			const hasHabit = (habitName ?? '').trim().length > 0;
 			const hasContent = getDisplayTitle(user_id, hour, half).length > 0;
 
-			if (!hasContent) continue;
+			if (!hasContent) {
+				if (idx === startIndex) return [];
+				break;
+			}
 			entries.push({
 				index: idx,
 				hour,
