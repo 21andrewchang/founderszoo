@@ -24,6 +24,7 @@
 		habitStreak?: PlayerStreak | null;
 		isCut?: boolean;
 		isCopied?: boolean;
+		badShakeNonce?: number;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -58,6 +59,7 @@
 	const isFilled = $derived(displayTitle.length > 0);
 	const showStatusProp = $derived(props.showStatus);
 	const isCopied = $derived(Boolean(props.isCopied));
+	const badShakeNonce = $derived(props.badShakeNonce ?? 0);
 
 	const currentClass = $derived(isCurrentBlock ? 'bg-stone-200' : '');
 
@@ -84,6 +86,9 @@
 	function handleBlockClick() {
 		if (!editable) return;
 		if (onPrimaryAction()) return;
+		if (isBadCategory && showStatus) {
+			triggerBadStatusShake();
+		}
 		if (canToggleStatus || canToggleHabit) {
 			onCycleStatus();
 			return;
@@ -154,6 +159,8 @@
 
 	let statusAnim = $state<'none' | 'check' | 'uncheck' | 'progress'>('none');
 	let lastStatus = $state<boolean | null>(null);
+	let badStatusAnim = $state<'none' | 'shake'>('none');
+	let lastBadShakeNonce = $state(0);
 
 	function triggerStatusAnim(kind: 'check' | 'uncheck' | 'progress') {
 		if (typeof window === 'undefined') return;
@@ -162,6 +169,17 @@
 			statusAnim = kind;
 			window.setTimeout(() => {
 				statusAnim = 'none';
+			}, 220);
+		});
+	}
+
+	function triggerBadStatusShake() {
+		if (typeof window === 'undefined') return;
+		badStatusAnim = 'none';
+		requestAnimationFrame(() => {
+			badStatusAnim = 'shake';
+			window.setTimeout(() => {
+				badStatusAnim = 'none';
 			}, 220);
 		});
 	}
@@ -192,6 +210,18 @@
 		}
 
 		lastStatus = status;
+	});
+
+	$effect(() => {
+		if (!isBadCategory) {
+			lastBadShakeNonce = badShakeNonce;
+			badStatusAnim = 'none';
+			return;
+		}
+		if (badShakeNonce && badShakeNonce !== lastBadShakeNonce) {
+			triggerBadStatusShake();
+		}
+		lastBadShakeNonce = badShakeNonce;
 	});
 </script>
 
@@ -312,6 +342,7 @@
 					xmlns="http://www.w3.org/2000/svg"
 					viewBox="0 0 16 16"
 					class="relative z-10 h-3.5 w-3.5 text-rose-500"
+					class:status-bad-shake={badStatusAnim === 'shake'}
 					fill="currentColor"
 				>
 					<path
@@ -395,6 +426,10 @@
 		animation: status-pop-unchecked 0.18s ease-in;
 	}
 
+	.status-bad-shake {
+		animation: status-bad-shake 0.22s ease-in-out;
+	}
+
 	.status-ring-dashed {
 		stroke-dasharray: 3 3;
 	}
@@ -434,6 +469,24 @@
 		}
 		100% {
 			transform: scale(1);
+		}
+	}
+
+	@keyframes status-bad-shake {
+		0% {
+			transform: translateX(0);
+		}
+		20% {
+			transform: translateX(-1px);
+		}
+		45% {
+			transform: translateX(1px);
+		}
+		70% {
+			transform: translateX(-1px);
+		}
+		100% {
+			transform: translateX(0);
 		}
 	}
 

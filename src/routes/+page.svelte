@@ -394,6 +394,12 @@
 	});
 	let selectedBlock = $state<SelectedBlock | null>(null);
 	let hjklBlock = $state<SelectedBlock | null>(null);
+	let badStatusShake = $state<{
+		user_id: string;
+		hour: number;
+		half: 0 | 1;
+		nonce: number;
+	} | null>(null);
 	let draggingBlock = $state<DraggingBlock | null>(null);
 	let dragHoverBlock = $state<SelectedBlock | null>(null);
 	let hoverBlock = $state<SelectedBlock | null>(null);
@@ -1444,6 +1450,11 @@
 		return true;
 	}
 
+	function triggerBadStatusShake(user_id: string, hour: number, half: 0 | 1) {
+		const prevNonce = badStatusShake?.nonce ?? 0;
+		badStatusShake = { user_id, hour, half, nonce: prevNonce + 1 };
+	}
+
 	function activateSelectedBlockFromKeyboard() {
 		if (!viewerUserId || !selectedBlock) return false;
 		const hour = hours[selectedBlock.hourIndex];
@@ -1452,6 +1463,10 @@
 		const habitName = (getHabitTitle(viewerUserId, hour, selectedBlock.half) ?? '').trim();
 		const title = getTitle(viewerUserId, hour, selectedBlock.half).trim();
 		if (!title && !habitName) return true;
+		if (getCategory(viewerUserId, hour, selectedBlock.half) === 'bad') {
+			triggerBadStatusShake(viewerUserId, hour, selectedBlock.half);
+			return true;
+		}
 		void cycleStatus(viewerUserId, hour, selectedBlock.half);
 		return true;
 	}
@@ -1684,6 +1699,10 @@
 	}
 	function handleBlockCycle(user_id: string, hour: number, half: 0 | 1) {
 		if (maybeHandlePaste(user_id, hour, half)) return;
+		if (getCategory(user_id, hour, half) === 'bad') {
+			triggerBadStatusShake(user_id, hour, half);
+			return;
+		}
 		void cycleStatus(user_id, hour, half);
 	}
 
@@ -2212,6 +2231,38 @@
 		}
 		return true;
 	}
+	function optimisticUpdateHabitStreak(user_id: string, habitName: string, completed: boolean) {
+		const key = normalizeHabitName(habitName);
+		if (!key) return;
+		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
+		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
+		const base = fallbackRecord[key] ?? null;
+		let updated: PlayerStreak | null = null;
+		if (completed) {
+			const baseLen = base && base.kind === 'positive' ? base.length : 0;
+			updated = {
+				kind: 'positive',
+				length: Math.max(1, baseLen + 1),
+				missesOnLatest: 0
+			};
+		} else {
+			const baseLen = base && base.kind === 'negative' ? base.length : 0;
+			updated = {
+				kind: 'negative',
+				length: Math.max(1, baseLen + 1),
+				missesOnLatest: 1
+			};
+		}
+		const hasToday = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
+		habitStreaksByUser = {
+			...habitStreaksByUser,
+			[user_id]: { ...record, [key]: updated }
+		};
+		habitHasTodayEntryByUser = {
+			...habitHasTodayEntryByUser,
+			[user_id]: { ...hasToday, [key]: true }
+		};
+	}
 	async function loadHabitStreaksForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
 		try {
@@ -2618,8 +2669,8 @@
 				console.error('cycle habit status error', error);
 				return;
 			}
-			const didUpdate = await upsertHabitDayStatus(user_id, habitName, nextStatus);
-			if (!didUpdate) return;
+			void upsertHabitDayStatus(user_id, habitName, nextStatus);
+			optimisticUpdateHabitStreak(user_id, habitName, nextStatus);
 			setTitle(user_id, hour, half, resolvedTitle, nextStatus);
 			void loadHabitStreaksForUser(user_id);
 			return;
@@ -3376,8 +3427,8 @@
 				console.error('habit prompt update error', error);
 				return;
 			}
-			const didUpdate = await upsertHabitDayStatus(user_id, habitName, completed);
-			if (!didUpdate) return;
+			void upsertHabitDayStatus(user_id, habitName, completed);
+			optimisticUpdateHabitStreak(user_id, habitName, completed);
 			setTitle(user_id, habitHour, habitHalf, resolvedTitle, completed);
 			habitCheckPrompt = null;
 			void loadHabitStreaksForUser(user_id);
@@ -3789,6 +3840,12 @@
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
 												onCycleStatus={() => handleBlockCycle(person.user_id, h, 0)}
+												badShakeNonce={badStatusShake &&
+												badStatusShake.user_id === person.user_id &&
+												badStatusShake.hour === h &&
+												badStatusShake.half === 0
+													? badStatusShake.nonce
+													: 0}
 												habit={getHabitTitle(person.user_id, h, 0)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 0)}
 												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
@@ -3822,6 +3879,12 @@
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
 												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
 												onCycleStatus={() => handleBlockCycle(person.user_id, h, 1)}
+												badShakeNonce={badStatusShake &&
+												badStatusShake.user_id === person.user_id &&
+												badStatusShake.hour === h &&
+												badStatusShake.half === 1
+													? badStatusShake.nonce
+													: 0}
 												habit={getHabitTitle(person.user_id, h, 1)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 1)}
 												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
