@@ -312,6 +312,16 @@
 		day: string;
 		completed: boolean;
 	};
+	type HabitRowPayload = {
+		id: string;
+		user_id: string;
+		hour: number;
+		half: boolean;
+		name: string | null;
+		repeat_days: number[] | null;
+		category: string | null;
+		created_at: string | null;
+	};
 	type HoursRealtimeState = {
 		channel: RealtimeChannel;
 		day_id: string;
@@ -360,6 +370,7 @@
 	let isCarryoverSubmitting = $state(false);
 	let isPlannedSubmitting = $state(false);
 	const hoursRealtimeByUser: Record<string, HoursRealtimeState | null> = {};
+	const habitsRealtimeByUser: Record<string, RealtimeChannel | null> = {};
 	const habitStatusRealtimeByUser: Record<string, RealtimeChannel | null> = {};
 	let remoteSelectedBlocks = $state<Record<string, SelectedBlock | null>>({});
 	const selectedBlockRealtimeByUser: Record<string, RealtimeChannel | null> = {};
@@ -2080,11 +2091,51 @@
 			[user_id]: { ...userRecords, [habitId]: nextRecords }
 		};
 	}
+	function habitEntryFromRow(row: HabitRowPayload): HabitEntry {
+		const createdAt = row.created_at ? new Date(row.created_at) : new Date();
+		const createdAtMs = Number.isNaN(createdAt.getTime()) ? Date.now() : createdAt.getTime();
+		return {
+			id: row.id,
+			name: row.name ?? '',
+			repeatDays: row.repeat_days ?? [0, 1, 2, 3, 4, 5, 6],
+			category: normalizeBlockCategory(row.category),
+			createdAtMs
+		};
+	}
+	function handleHabitsRealtime(
+		user_id: string,
+		payload: RealtimePostgresChangesPayload<HabitRowPayload>
+	) {
+		const row = (payload.new ?? payload.old) as HabitRowPayload | null;
+		if (!row || row.user_id !== user_id) return;
+		const half01 = row.half ? 1 : 0;
+		if (payload.eventType === 'DELETE') {
+			setHabitEntry(user_id, row.hour, half01, null);
+			clearHabitStatusById(user_id, row.id);
+			return;
+		}
+		const entry = habitEntryFromRow(row);
+		if (payload.eventType === 'UPDATE' && payload.old) {
+			const oldRow = payload.old as HabitRowPayload;
+			const oldHour = Number(oldRow.hour);
+			const oldHalf = oldRow.half ? 1 : 0;
+			if (oldHour !== row.hour || oldHalf !== half01) {
+				setHabitEntry(user_id, oldHour, oldHalf, null);
+			}
+		}
+		setHabitEntry(user_id, row.hour, half01, entry);
+	}
 	function teardownHoursRealtime(user_id: string) {
 		const current = hoursRealtimeByUser[user_id];
 		if (!current) return;
 		current.channel.unsubscribe();
 		hoursRealtimeByUser[user_id] = null;
+	}
+	function teardownHabitsRealtime(user_id: string) {
+		const current = habitsRealtimeByUser[user_id];
+		if (!current) return;
+		current.unsubscribe();
+		habitsRealtimeByUser[user_id] = null;
 	}
 	function teardownHabitStatusRealtime(user_id: string) {
 		const current = habitStatusRealtimeByUser[user_id];
@@ -2114,6 +2165,20 @@
 		);
 		channel.subscribe();
 		hoursRealtimeByUser[user_id] = { channel, day_id };
+	}
+	function ensureHabitsRealtime(user_id: string) {
+		const existing = habitsRealtimeByUser[user_id];
+		if (viewerUserId && user_id === viewerUserId) {
+			if (existing) teardownHabitsRealtime(user_id);
+			return;
+		}
+		if (existing) return;
+		const channel = supabase.channel(`habits:${user_id}`);
+		channel.on('postgres_changes', { event: '*', schema: 'public', table: 'habits' }, (payload) =>
+			handleHabitsRealtime(user_id, payload as RealtimePostgresChangesPayload<HabitRowPayload>)
+		);
+		channel.subscribe();
+		habitsRealtimeByUser[user_id] = channel;
 	}
 	function ensureHabitStatusRealtime(user_id: string) {
 		const existing = habitStatusRealtimeByUser[user_id];
@@ -2215,6 +2280,9 @@
 	function teardownAllRealtime() {
 		for (const userId of Object.keys(hoursRealtimeByUser)) {
 			teardownHoursRealtime(userId);
+		}
+		for (const userId of Object.keys(habitsRealtimeByUser)) {
+			teardownHabitsRealtime(userId);
 		}
 		for (const userId of Object.keys(selectedBlockRealtimeByUser)) {
 			teardownSelectedBlockRealtime(userId);
@@ -3682,6 +3750,7 @@
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				ensureHoursRealtime(user_id, dayId);
+				ensureHabitsRealtime(user_id);
 				ensureHabitStatusRealtime(user_id);
 			});
 
