@@ -164,22 +164,6 @@
 	let spectatorDate = $state<string | null>(null);
 	let isLoading = $state(true);
 
-	type ReviewCategoryBreakdown = {
-		key: 'body' | 'rest' | 'work' | 'admin';
-		label: string;
-		percent: number;
-		hours: number;
-	};
-	type ReviewStats = {
-		planned: number;
-		completed: number;
-		productiveHours: number;
-		score: number;
-		categoryBreakdown: ReviewCategoryBreakdown[];
-	};
-	let reviewOpen = $state(false);
-	let reviewStats = $state<ReviewStats | null>(null);
-	let reviewDayDate = $state<string | null>(null);
 	let reviewSubmitting = $state(false);
 	let hideCursor = $state(false);
 	let lastPointerX = 0;
@@ -485,8 +469,7 @@
 				plannedPrompt ||
 				pendingMove ||
 				pendingCopy ||
-				pendingDelete ||
-				reviewOpen
+				pendingDelete
 		)
 	);
 
@@ -589,20 +572,23 @@
 		if (current === dateStr) return;
 		activeDayDateByUser = { ...activeDayDateByUser, [viewerUserId]: dateStr };
 		syncActiveDayDateStore(dateStr);
-		const { error } = await supabase
+		dayIdByUser = { ...dayIdByUser, [viewerUserId]: null };
+		blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
+
+		void supabase
 			.from('users')
 			.update({ active_day_date: dateStr })
-			.eq('id', viewerUserId);
-		if (error) {
-			console.error('active day update error', error);
-			return;
-		}
+			.eq('id', viewerUserId)
+			.then(({ error }) => {
+				if (error) {
+					console.error('active day update error', error);
+				}
+			});
+
 		const dayId = await getDayIdForUser(viewerUserId, dateStr, true);
 		dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
 		if (dayId) {
 			await loadHoursForDay(viewerUserId, dayId);
-		} else {
-			blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
 		}
 	}
 
@@ -944,62 +930,6 @@
 		return date.getTime();
 	}
 
-	function reviewStatsForUser(user_id: string): ReviewStats {
-		let planned = 0;
-		let completed = 0;
-		const categoryCounts = { body: 0, rest: 0, work: 0, admin: 0 };
-		for (const hour of hours) {
-			for (const half of [0, 1] as const) {
-				const title = (getTitle(user_id, hour, half) ?? '').trim();
-				const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
-				const category = getCategory(user_id, hour, half);
-				const isBad = category === 'bad';
-				if (!isBad) {
-					if (title.length > 0 || habit.length > 0) planned += 1;
-					if (getStatus(user_id, hour, half) === true) completed += 1;
-				}
-				if (title.length > 0 && category && category in categoryCounts) {
-					categoryCounts[category as keyof typeof categoryCounts] += 1;
-				}
-			}
-		}
-		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
-		const categoryBreakdown: ReviewCategoryBreakdown[] = (
-			[
-				{ key: 'body', label: 'Body' },
-				{ key: 'rest', label: 'Rest' },
-				{ key: 'work', label: 'Work' },
-				{ key: 'admin', label: 'Admin' }
-			] as const
-		).map((entry) => ({
-			...entry,
-			percent:
-				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
-			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
-		}));
-
-		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
-		return {
-			planned,
-			completed,
-			productiveHours: completed / 2,
-			score,
-			categoryBreakdown
-		};
-	}
-
-	function formatProductiveHours(value: number) {
-		const rounded = Math.round(value * 10) / 10;
-		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
-	}
-
-	function reviewScoreColor(score: number) {
-		if (score >= 75) return 'bg-emerald-700';
-		if (score >= 50) return 'bg-emerald-500';
-		if (score >= 25) return 'bg-emerald-300';
-		return 'bg-stone-500';
-	}
-
 	function parseStreakValue(value: unknown): number | null {
 		if (value === null || value === undefined) return null;
 		const parsed = Number(value);
@@ -1043,19 +973,6 @@
 		return streakLength;
 	}
 
-	function openReviewDay(user_id: string) {
-		if (!viewerUserId || viewerUserId !== user_id) return;
-		reviewStats = reviewStatsForUser(user_id);
-		reviewDayDate = displayDateForUser(user_id);
-		reviewOpen = true;
-	}
-
-	function closeReviewDay() {
-		reviewOpen = false;
-		reviewStats = null;
-		reviewDayDate = null;
-	}
-
 	async function startNextDayPlanning() {
 		if (!viewerUserId || reviewSubmitting) return;
 		reviewSubmitting = true;
@@ -1077,7 +994,6 @@
 			} else {
 				blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
 			}
-			closeReviewDay();
 		} catch (error) {
 			console.error('start next day error', error);
 		} finally {
@@ -1815,10 +1731,12 @@
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (!viewerUserId || logOpen) return;
-		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		if (isTypingTarget(event.target)) return;
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
+		const allowWithModifier =
+			(event.metaKey || event.ctrlKey) && (normalized === 'n' || normalized === 'p');
+		if ((event.metaKey || event.ctrlKey || event.altKey) && !allowWithModifier) return;
 		if (normalized === 'Escape') {
 			if (cutBlock) {
 				cancelCutBlock();
@@ -1831,6 +1749,19 @@
 				return;
 			}
 			return;
+		}
+		if ((normalized === 'n' || normalized === 'p') && !modalOverlayActive) {
+			if (!(event.metaKey || event.ctrlKey)) {
+				// allow normal n/p behavior
+			} else if (normalized === 'p' && (cutBlock || copyBlock)) {
+				// allow paste handling
+			} else {
+				const currentDate = displayDateForUser(viewerUserId);
+				const nextDate = addDaysToDateString(currentDate, normalized === 'n' ? 1 : -1);
+				activeDayDateStore?.set(nextDate);
+				event.preventDefault();
+				return;
+			}
 		}
 		if (normalized === 'u') {
 			void undoLastAction();
@@ -3551,9 +3482,8 @@
 
 	async function autoSwitchDayIfNeeded() {
 		const should = shouldAutoSwitchDay();
-		console.log('autoSwitchDayIfNeeded', { should, reviewOpen });
+		console.log('autoSwitchDayIfNeeded', { should });
 		if (!should) return;
-		if (reviewOpen) return;
 		await startNextDayPlanning();
 	}
 
@@ -3983,95 +3913,12 @@
 			</div>
 		</div>
 	</div>
-	{#if canShowReviewDayButton()}
-		<div class="pointer-events-none absolute bottom-6 left-0 flex w-full justify-center">
-			<button
-				in:fly={{ y: 12, duration: 220 }}
-				class="pointer-events-auto rounded-full border border-stone-300 px-4 py-2 text-[10px] font-semibold tracking-wide text-stone-700 uppercase hover:bg-stone-100"
-				onclick={() => viewerUserId && openReviewDay(viewerUserId)}
-			>
-				Review day
-			</button>
-		</div>
-	{/if}
 </div>
 
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
 {/if}
 
-{#if reviewOpen}
-	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
-		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
-			<div class="flex items-start justify-between">
-				<div>
-					<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Summary</div>
-					{#if reviewDayDate}
-						<div class="mt-1 text-sm font-medium text-stone-900">{reviewDayDate}</div>
-					{/if}
-				</div>
-				<div class="flex flex-col items-end gap-1">
-					<div
-						class={`flex items-center justify-center rounded-md p-2 text-xs font-medium text-white ${reviewScoreColor(
-							reviewStats?.score ?? 0
-						)}`}
-					>
-						{reviewStats?.score ?? 0}
-					</div>
-				</div>
-			</div>
-			<div class="mt-4 space-y-2 text-sm text-stone-700">
-				<div class="flex items-center justify-between">
-					<span>Tasks planned</span>
-					<span class="font-semibold text-stone-900">{reviewStats?.planned ?? 0}</span>
-				</div>
-				<div class="flex items-center justify-between">
-					<span>Tasks completed</span>
-					<span class="font-semibold text-stone-900">{reviewStats?.completed ?? 0}</span>
-				</div>
-				<div class="flex items-center justify-between">
-					<span>Productive hours</span>
-					<span class="font-semibold text-stone-900">
-						{formatProductiveHours(reviewStats?.productiveHours ?? 0)}
-					</span>
-				</div>
-			</div>
-			<div class="mt-4">
-				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-					Category breakdown
-				</div>
-				<div class="mt-2 space-y-1 text-sm text-stone-700">
-					{#each reviewStats?.categoryBreakdown ?? [] as category}
-						<div class="flex items-center justify-between">
-							<span>{category.label}</span>
-							<span class="font-semibold text-stone-900">
-								{category.percent}% · {formatProductiveHours(category.hours)}h
-							</span>
-						</div>
-					{/each}
-				</div>
-			</div>
-			<div class="mt-4 flex justify-end gap-2">
-				<button
-					type="button"
-					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-60"
-					onclick={closeReviewDay}
-					disabled={reviewSubmitting}
-				>
-					Close
-				</button>
-				<button
-					type="button"
-					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
-					onclick={() => void startNextDayPlanning()}
-					disabled={reviewSubmitting}
-				>
-					Start next day
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
 
 <LogModal
 	normal={editorMode}

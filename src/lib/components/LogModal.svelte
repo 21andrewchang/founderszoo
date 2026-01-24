@@ -231,7 +231,7 @@
 			return;
 		}
 
-		if (mode === 'normal' && key === 't') {
+		if (mode === 'normal' && key === 'b') {
 			e.preventDefault();
 			cycleBlockCount();
 			return;
@@ -514,7 +514,7 @@
 								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
-								t
+								b
 							</span>
 						{/if}
 					</span>

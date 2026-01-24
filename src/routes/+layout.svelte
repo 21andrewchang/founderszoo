@@ -79,10 +79,33 @@
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
+	type SummaryCategory = {
+		key: 'body' | 'rest' | 'work' | 'admin';
+		label: string;
+		percent: number;
+		hours: number;
+	};
+	type SummaryStats = {
+		planned: number;
+		completed: number;
+		productiveHours: number;
+		score: number;
+		categoryBreakdown: SummaryCategory[];
+	};
+
 	let heatmapOpen = $state(false);
 	let heatmapLoading = $state(false);
 	let heatmapAnimated = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
+	let calendarLockedDate = $state<string | null>(null);
+	let calendarHoverDate = $state<string | null>(null);
+	let calendarMonthIndex = $state<number>(new Date().getMonth());
+	let calendarYear = $state<number>(new Date().getFullYear());
+	let calendarSummary = $state<SummaryStats | null>(null);
+	let calendarSummaryDate = $state<string | null>(null);
+	let calendarSummaryLabel = $state<string | null>(null);
+	let calendarSummaryLoading = $state(false);
+	let calendarSummaryRequestId = 0;
 
 	type GoalEntry = {
 		id: string | null;
@@ -230,6 +253,10 @@
 	const isActiveDayToday = $derived(activeDayDate === localToday());
 	const heatmapDateLabel = (dateStr: string) =>
 		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
+	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? calendarHoverDate ?? activeDayDate);
+	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
+	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
 	const msPerDay = 24 * 60 * 60 * 1000;
 
 	$effect(() => {
@@ -242,6 +269,22 @@
 		requestAnimationFrame(() => {
 			heatmapAnimated = true;
 		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		calendarHoverDate = null;
+		if (!calendarLockedDate) {
+			setCalendarMonthFromDate(activeDayDate);
+		}
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!viewerId) return;
+		if (!calendarPreviewDate) return;
+		if (calendarPreviewDate === calendarSummaryDate && calendarSummary) return;
+		void loadCalendarSummary(calendarPreviewDate);
 	});
 
 	function startOfDay(date: Date) {
@@ -338,6 +381,176 @@
 		if (pct >= 50) return 'bg-green-500';
 		if (pct >= 25) return 'bg-green-200';
 		return 'bg-stone-200';
+	}
+
+	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+
+	function formatProductiveHours(value: number) {
+		const rounded = Math.round(value * 10) / 10;
+		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function summaryScoreColor(score: number) {
+		if (score >= 75) return 'bg-emerald-700';
+		if (score >= 50) return 'bg-emerald-500';
+		if (score >= 25) return 'bg-emerald-300';
+		return 'bg-stone-500';
+	}
+
+	function computeSummaryStats(
+		hours: { title: string | null; status: boolean | null; category: string | null }[]
+	): SummaryStats {
+		let planned = 0;
+		let completed = 0;
+		const categoryCounts = { body: 0, rest: 0, work: 0, admin: 0 };
+		for (const row of hours) {
+			const title = (row.title ?? '').trim();
+			const category = row.category as SummaryCategory['key'] | 'bad' | null;
+			const isBad = category === 'bad';
+			if (!isBad) {
+				if (title.length > 0) planned += 1;
+				if (row.status === true) completed += 1;
+			}
+			if (title.length > 0 && category && category in categoryCounts) {
+				categoryCounts[category as keyof typeof categoryCounts] += 1;
+			}
+		}
+		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const categoryBreakdown: SummaryCategory[] = (
+			[
+				{ key: 'body', label: 'Body' },
+				{ key: 'rest', label: 'Rest' },
+				{ key: 'work', label: 'Work' },
+				{ key: 'admin', label: 'Admin' }
+			] as const
+		).map((entry) => ({
+			...entry,
+			percent:
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
+			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
+		}));
+		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
+		return {
+			planned,
+			completed,
+			productiveHours: completed / 2,
+			score,
+			categoryBreakdown
+		};
+	}
+
+	function buildCalendarWeeks(year: number, monthIndex: number) {
+		const firstDay = new Date(year, monthIndex, 1);
+		const lastDay = new Date(year, monthIndex + 1, 0);
+		const firstWeekday = (firstDay.getDay() + 6) % 7;
+		const start = new Date(firstDay);
+		start.setDate(firstDay.getDate() - firstWeekday);
+		const lastWeekday = (lastDay.getDay() + 6) % 7;
+		const end = new Date(lastDay);
+		end.setDate(lastDay.getDate() + (6 - lastWeekday));
+		const weeks: Date[][] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push(days);
+		}
+		return weeks;
+	}
+
+	function addDaysToDateString(dateStr: string, days: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		parsed.setDate(parsed.getDate() + days);
+		return formatDateString(parsed);
+	}
+
+	function addMonthsToDateString(dateStr: string, months: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		const day = parsed.getDate();
+		parsed.setMonth(parsed.getMonth() + months);
+		if (parsed.getDate() !== day) {
+			parsed.setDate(0);
+		}
+		return formatDateString(parsed);
+	}
+
+	function setCalendarMonthFromDate(dateStr: string) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return;
+		calendarMonthIndex = parsed.getMonth();
+		calendarYear = parsed.getFullYear();
+	}
+
+	async function loadCalendarSummary(dateStr: string) {
+		if (!viewerId) return;
+		const requestId = (calendarSummaryRequestId += 1);
+		calendarSummaryLoading = true;
+		calendarSummaryDate = dateStr;
+		calendarSummaryLabel = heatmapDateLabel(dateStr);
+		try {
+			const { data: dayRow, error: dayError } = await supabase
+				.from('days')
+				.select('id')
+				.eq('user_id', viewerId)
+				.eq('date', dateStr)
+				.maybeSingle();
+			if (dayError) throw dayError;
+			let rows: { title: string | null; status: boolean | null; category: string | null }[] = [];
+			if (dayRow?.id) {
+				const { data: hoursRows, error: hoursError } = await supabase
+					.from('hours')
+					.select('title, status, category')
+					.eq('day_id', dayRow.id as string);
+				if (hoursError) throw hoursError;
+				rows = (hoursRows ?? []) as typeof rows;
+			}
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats(rows);
+		} catch (error) {
+			console.error('calendar summary load error', error);
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats([]);
+		} finally {
+			if (requestId === calendarSummaryRequestId) {
+				calendarSummaryLoading = false;
+			}
+		}
+	}
+
+	function handleCalendarHover(dateStr: string) {
+		if (calendarLockedDate) return;
+		calendarHoverDate = dateStr;
+	}
+
+	function clearCalendarHover() {
+		if (calendarLockedDate) return;
+		calendarHoverDate = null;
+	}
+
+	function handleCalendarSelect(dateStr: string) {
+		calendarLockedDate = dateStr;
+		calendarHoverDate = null;
+		setCalendarMonthFromDate(dateStr);
+		activeDayDateStore.set(dateStr);
+	}
+
+	function moveSelectedByDays(days: number) {
+		const baseDate = calendarLockedDate ?? activeDayDate;
+		handleCalendarSelect(addDaysToDateString(baseDate, days));
+	}
+
+	function moveSelectedByWeeks(weeks: number) {
+		moveSelectedByDays(weeks * 7);
+	}
+
+	function moveSelectedByMonths(months: number) {
+		const baseDate = calendarLockedDate ?? activeDayDate;
+		handleCalendarSelect(addMonthsToDateString(baseDate, months));
 	}
 
 	function buildHeatmapWeeks() {
@@ -830,8 +1043,52 @@
 		}, 5000);
 
 		const handleKeyDown = (event: KeyboardEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				const tag = target.tagName?.toLowerCase();
+				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
+			}
+			const normalized = event.key.toLowerCase();
+			if (normalized === 't' && !heatmapOpen) {
+				heatmapOpen = true;
+				void loadHeatmap(viewerId);
+				event.preventDefault();
+				return;
+			}
 			if (event.key === 'Escape' && heatmapOpen) {
 				heatmapOpen = false;
+				return;
+			}
+			if (!heatmapOpen) return;
+			let handled = true;
+			switch (normalized) {
+				case 'h':
+					moveSelectedByDays(-1);
+					break;
+				case 'l':
+					moveSelectedByDays(1);
+					break;
+				case 'j':
+					moveSelectedByWeeks(1);
+					break;
+				case 'k':
+					moveSelectedByWeeks(-1);
+					break;
+				case 'n':
+					moveSelectedByMonths(1);
+					break;
+				case 'p':
+					moveSelectedByMonths(-1);
+					break;
+				case 'enter':
+					heatmapOpen = false;
+					activeDayDateStore.set(calendarSelectedDate);
+					break;
+				default:
+					handled = false;
+			}
+			if (handled) {
+				event.preventDefault();
 			}
 		};
 		document.addEventListener('keydown', handleKeyDown);
@@ -898,11 +1155,10 @@
 				<button
 					type="button"
 					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
-					class:opacity-40={isActiveDayToday}
-					disabled={isActiveDayToday}
-					aria-label="Jump to today"
+					aria-label="Open timeline"
 					onclick={() => {
-						activeDayDateStore.set(localToday());
+						heatmapOpen = true;
+						void loadHeatmap(viewerId);
 					}}
 				>
 					<svg
@@ -918,17 +1174,64 @@
 						/>
 					</svg>
 				</button>
-				<button
-					type="button"
-					class="flex items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
-					onclick={() => {
-						heatmapOpen = true;
-						void loadHeatmap(viewerId);
-					}}
-					aria-expanded={heatmapOpen}
-				>
-					<span>{activeDayLabel}</span>
-				</button>
+				<div class="flex items-center">
+					<button
+						type="button"
+						class="flex w-24 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
+						class:opacity-40={isActiveDayToday}
+						disabled={isActiveDayToday}
+						onclick={() => {
+							activeDayDateStore.set(localToday());
+						}}
+						aria-label="Jump to today"
+					>
+						<span>{activeDayLabel}</span>
+					</button>
+					<div class="flex items-center">
+					<button
+						type="button"
+						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+						aria-label="Previous day"
+						onclick={() =>
+							activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="10"
+							height="10"
+							fill="currentColor"
+							class="bi bi-chevron-left"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
+							/>
+						</svg>
+					</button>
+					<button
+						type="button"
+						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+						aria-label="Next day"
+						onclick={() =>
+							activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="10"
+							height="10"
+							fill="currentColor"
+							class="bi bi-chevron-right"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
+							/>
+						</svg>
+					</button>
+					</div>
+				</div>
 			</div>
 		</div>
 
@@ -1134,10 +1437,11 @@
 		class="fixed inset-0 z-[1800] bg-white text-stone-800"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Daily completion heatmap"
+		aria-label="Timeline"
 	>
 		<div class="flex h-full flex-col">
 			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
+				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Timeline</div>
 				<button
 					type="button"
 					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
@@ -1146,60 +1450,197 @@
 					Close
 				</button>
 			</div>
-			<div class="flex items-center justify-center px-6 py-8">
-				<div class="flex flex-col gap-6">
-					<div class="flex items-start gap-4">
-						<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-							<div class="h-3"></div>
-							<div class="h-3">Mon</div>
-							<div class="h-3"></div>
-							<div class="h-3">Wed</div>
-							<div class="h-3"></div>
-							<div class="h-3">Fri</div>
-							<div class="h-3"></div>
-						</div>
-						<div class="flex flex-col gap-2">
-							<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
-								{#each heatmapMonthLabels as label}
-									<div class="w-3 text-center">{label}</div>
-								{/each}
+			<div class="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
+				<div class="flex justify-center">
+					<div class="flex flex-col gap-6">
+						<div class="flex items-start gap-4">
+							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
+								<div class="h-3"></div>
+								<div class="h-3">Mon</div>
+								<div class="h-3"></div>
+								<div class="h-3">Wed</div>
+								<div class="h-3"></div>
+								<div class="h-3">Fri</div>
+								<div class="h-3"></div>
 							</div>
-							<div class="relative overflow-visible">
-								<div class="flex gap-1">
-									{#each heatmapWeeks as week, weekIndex}
-										<div class="flex flex-col gap-1">
-											{#each week.days as day}
-												{@const dateKey = formatDateString(day)}
-												<button
-													type="button"
-													class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
-														heatmapLoading
-															? 'bg-stone-200'
-															: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
-													} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''}`}
-													style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
-													disabled={heatmapLoading}
-													onclick={() => {
-														activeDayDateStore.set(dateKey);
-														heatmapOpen = false;
-													}}
-												>
-													{#if !heatmapLoading}
-														<span
-															class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-														>
-															{heatmapDateLabel(dateKey)}
-														</span>
-													{/if}
-												</button>
-											{/each}
-										</div>
+							<div class="flex flex-col gap-2">
+								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
+									{#each heatmapMonthLabels as label}
+										<div class="w-3 text-center">{label}</div>
 									{/each}
 								</div>
-								{#if heatmapLoading}
-									<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
-								{/if}
+								<div class="relative overflow-visible">
+									<div class="flex gap-1">
+										{#each heatmapWeeks as week, weekIndex}
+											<div class="flex flex-col gap-1">
+												{#each week.days as day}
+													{@const dateKey = formatDateString(day)}
+													<button
+														type="button"
+														class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
+															heatmapLoading
+																? 'bg-stone-200'
+																: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
+														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''}`}
+														style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
+														disabled={heatmapLoading}
+														onmouseenter={() => handleCalendarHover(dateKey)}
+														onmouseleave={clearCalendarHover}
+														onclick={() => handleCalendarSelect(dateKey)}
+													>
+														{#if !heatmapLoading}
+															<span
+																class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+															>
+																{heatmapDateLabel(dateKey)}
+															</span>
+														{/if}
+													</button>
+												{/each}
+											</div>
+										{/each}
+									</div>
+									{#if heatmapLoading}
+										<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
+									{/if}
+								</div>
 							</div>
+						</div>
+					</div>
+				</div>
+				<div class="flex justify-center">
+					<div class="grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+						<div class="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+							<div class="flex items-center justify-between">
+								<div class="text-sm font-semibold text-stone-900">{calendarMonthLabel}</div>
+								<button
+									type="button"
+									class="rounded-md border border-stone-200 px-2 py-1 text-[10px] font-semibold text-stone-600 hover:bg-stone-100"
+									onclick={() => handleCalendarSelect(localToday())}
+								>
+									Today
+								</button>
+							</div>
+							<div class="mt-4 grid grid-cols-[32px_repeat(7,minmax(0,1fr))] gap-1 text-xs">
+								<div class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400">
+									W
+								</div>
+								{#each CALENDAR_WEEKDAYS as label}
+									<div class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400">
+										{label}
+									</div>
+								{/each}
+								{#each calendarWeeks as week, weekIndex}
+									<div class="flex h-9 items-center justify-center text-[10px] font-semibold text-stone-400">
+										{weekIndex + 1}
+									</div>
+									{#each week as day}
+										{@const dateKey = formatDateString(day)}
+										{@const isCurrentMonth = day.getMonth() === calendarMonthIndex}
+										{@const isSelected = dateKey === calendarSelectedDate}
+										{@const isHovered = dateKey === calendarHoverDate}
+										{@const isToday = dateKey === localToday()}
+										<button
+											type="button"
+											class={`group flex h-9 w-full flex-col items-center justify-center rounded-md border border-transparent text-xs transition ${
+												isSelected
+													? 'bg-stone-900 text-white'
+													: isHovered
+														? 'bg-stone-100'
+														: 'hover:bg-stone-100'
+											} ${
+												isSelected ? '' : isCurrentMonth ? 'text-stone-800' : 'text-stone-400'
+											} ${!isSelected && isToday ? 'ring-1 ring-stone-300' : ''}`}
+											onmouseenter={() => handleCalendarHover(dateKey)}
+											onmouseleave={clearCalendarHover}
+											onclick={() => handleCalendarSelect(dateKey)}
+										>
+											<span class="leading-none">{day.getDate()}</span>
+											<span
+												class={`mt-1 h-1 w-1 rounded-full ${heatmapColorClass(heatmapByDate[dateKey] ?? 0)}`}
+											></span>
+										</button>
+									{/each}
+								{/each}
+							</div>
+						</div>
+						<div class="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+							<div class="flex items-start justify-between">
+								<div>
+									<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Summary</div>
+									<div class="mt-1 text-sm font-medium text-stone-900">
+										{calendarSummaryLabel ?? '—'}
+									</div>
+								</div>
+								<div class="flex flex-col items-end gap-2">
+									<div
+										class={`flex items-center justify-center rounded-md p-2 text-xs font-medium text-white ${summaryScoreColor(
+											calendarSummary?.score ?? 0
+										)}`}
+									>
+										{calendarSummary?.score ?? 0}
+									</div>
+								<div class="flex items-center gap-2 text-[10px]">
+									<div class="flex items-center gap-1">
+											<button
+												type="button"
+												class="flex h-6 w-6 items-center justify-center rounded-md border border-stone-200 text-xs text-stone-600 hover:bg-stone-100"
+												aria-label="Previous day"
+												onclick={() => moveSelectedByDays(-1)}
+											>
+												‹
+											</button>
+											<button
+												type="button"
+												class="flex h-6 w-6 items-center justify-center rounded-md border border-stone-200 text-xs text-stone-600 hover:bg-stone-100"
+												aria-label="Next day"
+												onclick={() => moveSelectedByDays(1)}
+											>
+												›
+											</button>
+										</div>
+									</div>
+								</div>
+							</div>
+							{#if calendarSummaryLoading}
+								<div class="mt-4 text-xs text-stone-400">Loading summary...</div>
+							{:else}
+								<div class="mt-4 space-y-2 text-sm text-stone-700">
+									<div class="flex items-center justify-between">
+										<span>Tasks planned</span>
+										<span class="font-semibold text-stone-900">
+											{calendarSummary?.planned ?? 0}
+										</span>
+									</div>
+									<div class="flex items-center justify-between">
+										<span>Tasks completed</span>
+										<span class="font-semibold text-stone-900">
+											{calendarSummary?.completed ?? 0}
+										</span>
+									</div>
+									<div class="flex items-center justify-between">
+										<span>Productive hours</span>
+										<span class="font-semibold text-stone-900">
+											{formatProductiveHours(calendarSummary?.productiveHours ?? 0)}
+										</span>
+									</div>
+								</div>
+								<div class="mt-4">
+									<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
+										Category breakdown
+									</div>
+									<div class="mt-2 space-y-1 text-sm text-stone-700">
+										{#each calendarSummary?.categoryBreakdown ?? [] as category}
+											<div class="flex items-center justify-between">
+												<span>{category.label}</span>
+												<span class="font-semibold text-stone-900">
+													{category.percent}% · {formatProductiveHours(category.hours)}h
+												</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/if}
 						</div>
 					</div>
 				</div>
