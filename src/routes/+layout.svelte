@@ -926,9 +926,6 @@
 					aria-expanded={heatmapOpen}
 				>
 					<span>{activeDayLabel}</span>
-					<div class="text-end text-xs font-semibold text-stone-800">
-						{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
-					</div>
 				</button>
 			</div>
 		</div>
@@ -1165,7 +1162,7 @@
 									<div class="w-3 text-center">{label}</div>
 								{/each}
 							</div>
-							<div class="relative overflow-hidden">
+							<div class="relative overflow-visible">
 								<div class="flex gap-1">
 									{#each heatmapWeeks as week, weekIndex}
 										<div class="flex flex-col gap-1">
@@ -1186,11 +1183,11 @@
 													}}
 												>
 													{#if !heatmapLoading}
-														<span
-															class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-														>
-															{heatmapDateLabel(dateKey)}
-														</span>
+											<span
+												class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+											>
+												{heatmapDateLabel(dateKey)}
+											</span>
 													{/if}
 												</button>
 											{/each}
