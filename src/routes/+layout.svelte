@@ -576,7 +576,7 @@
 
 			const { data: hoursRows, error: hoursErr } = await supabase
 				.from('hours')
-				.select('day_id, hour, half, title, status')
+				.select('day_id, hour, half, title, status, category')
 				.in('day_id', dayIds);
 			if (hoursErr) throw hoursErr;
 
@@ -591,11 +591,13 @@
 				const half = ((row.half as boolean) ? 1 : 0) as 0 | 1;
 				const title = (row.title as string | null) ?? '';
 				const status = row.status as boolean | null;
+				const category = (row.category as string | null) ?? null;
 
 				if (!dayId || Number.isNaN(hour)) continue;
 				const key = dayToKey.get(dayId);
 				if (!key) continue;
 				if (!blockIsDue(hour, half, currentHour, currentHalf)) continue;
+				if (category === 'bad') continue;
 				const trimmed = title.trim();
 				// status === false means explicitly in progress
 				const isComplete = status === false ? false : trimmed.length > 0 || status === true;
@@ -1183,11 +1185,11 @@
 													}}
 												>
 													{#if !heatmapLoading}
-											<span
-												class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-											>
-												{heatmapDateLabel(dateKey)}
-											</span>
+														<span
+															class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+														>
+															{heatmapDateLabel(dateKey)}
+														</span>
 													{/if}
 												</button>
 											{/each}

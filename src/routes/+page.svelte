@@ -218,7 +218,7 @@
 		);
 	}
 
-	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | null;
+	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad' | null;
 	type BlockValue = { title: string; status: boolean | null; category: BlockCategory };
 	type BlockRow = { first: BlockValue; second: BlockValue };
 	type HabitBlockRow = { first: string | null; second: string | null };
@@ -230,6 +230,7 @@
 		if (value === 'body' || value === 'rest' || value === 'work' || value === 'admin') {
 			return value;
 		}
+		if (value === 'bad') return 'bad';
 		return null;
 	};
 	type PendingMove = {
@@ -742,13 +743,14 @@
 			for (const half of [0, 1] as const) {
 				const title = (getTitle(user_id, hour, half) ?? '').trim();
 				const habit = (getHabitTitle(user_id, hour, half) ?? '').trim();
-				if (title.length > 0 || habit.length > 0) planned += 1;
-				if (getStatus(user_id, hour, half) === true) completed += 1;
-				if (title.length > 0) {
-					const category = getCategory(user_id, hour, half);
-					if (category && category in categoryCounts) {
-						categoryCounts[category as keyof typeof categoryCounts] += 1;
-					}
+				const category = getCategory(user_id, hour, half);
+				const isBad = category === 'bad';
+				if (!isBad) {
+					if (title.length > 0 || habit.length > 0) planned += 1;
+					if (getStatus(user_id, hour, half) === true) completed += 1;
+				}
+				if (title.length > 0 && category && category in categoryCounts) {
+					categoryCounts[category as keyof typeof categoryCounts] += 1;
 				}
 			}
 		}

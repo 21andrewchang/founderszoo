@@ -51,7 +51,8 @@
 	const habitKey = $derived(habitPlaceholder.toLowerCase());
 	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
-	const showCategoryIcon = $derived(category.length > 0 && !isHabit);
+	const isBadCategory = $derived(category === 'bad');
+	const showCategoryIcon = $derived(category.length > 0 && category !== 'bad' && !isHabit);
 	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
 	const isFilled = $derived(displayTitle.length > 0);
 	const showStatusProp = $derived(props.showStatus);
@@ -72,7 +73,7 @@
 	const showStatus = $derived(
 		showStatusProp === undefined ? isFilled && !isHabit : Boolean(showStatusProp)
 	);
-	const canToggleStatus = $derived(editable && isFilled && !isHabit);
+	const canToggleStatus = $derived(editable && isFilled && !isHabit && !isBadCategory);
 
 	const canToggleHabit = $derived(editable && isHabit);
 	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
@@ -303,7 +304,18 @@
 			class:status-pop-checked={statusAnim === 'check' || statusAnim === 'progress'}
 			class:status-pop-unchecked={statusAnim === 'uncheck'}
 		>
-			{#if status === true}
+			{#if isBadCategory}
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 16 16"
+					class="relative z-10 h-3.5 w-3.5 text-rose-500"
+					fill="currentColor"
+				>
+					<path
+						d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+					/>
+				</svg>
+			{:else if status === true}
 				<svg viewBox="0 0 24 24" class="relative z-10 h-3.5 w-3.5 text-stone-50" fill="none">
 					<path
 						d="M7 12.5 L10.25 15.75 L16.75 9.25"

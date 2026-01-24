@@ -47,7 +47,8 @@
 	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
 	type HabitKey = (typeof HABIT_KEYS)[number];
 
-	type BlockCategory = 'body' | 'rest' | 'work' | 'admin';
+	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad';
+	type StatusKind = 'planned' | 'in_progress' | 'completed' | 'bad';
 	type CategoryPreset = {
 		label: string;
 		value: BlockCategory;
@@ -76,8 +77,23 @@
 	let blockCount = $state(1);
 	let isNewBlock = $state(true);
 	let runLength = $state(1);
+	const statusKind = $derived<StatusKind>(
+		category === 'bad'
+			? 'bad'
+			: status === true
+				? 'completed'
+				: status === false
+					? 'in_progress'
+					: 'planned'
+	);
 	const statusLabel = $derived(
-		status === true ? 'Completed' : status === false ? 'In progress' : 'Planned'
+		statusKind === 'completed'
+			? 'Completed'
+			: statusKind === 'in_progress'
+				? 'In progress'
+				: statusKind === 'bad'
+					? 'Bad'
+					: 'Planned'
 	);
 	const displayedBlockCount = $derived(isNewBlock ? blockCount : runLength);
 	const blockCountDisabled = $derived(!isNewBlock);
@@ -111,8 +127,28 @@
 		if (e.target === e.currentTarget) onClose();
 	}
 
+	function setStatusKind(next: StatusKind) {
+		if (next === 'bad') {
+			status = null;
+			category = 'bad';
+			return;
+		}
+		status = next === 'completed' ? true : next === 'in_progress' ? false : null;
+		if (category === 'bad') {
+			category = null;
+		}
+	}
+
 	function cycleStatus() {
-		status = status === null ? false : status === false ? true : null;
+		const next: StatusKind =
+			statusKind === 'planned'
+				? 'in_progress'
+				: statusKind === 'in_progress'
+					? 'completed'
+					: statusKind === 'completed'
+						? 'bad'
+						: 'planned';
+		setStatusKind(next);
 	}
 
 	function maxBlockCount() {
@@ -148,6 +184,12 @@
 		if (mode === 'normal' && key === 't') {
 			e.preventDefault();
 			cycleBlockCount();
+			return;
+		}
+
+		if (mode === 'normal' && key === 's') {
+			e.preventDefault();
+			cycleStatus();
 			return;
 		}
 
@@ -398,7 +440,18 @@
 					onclick={cycleStatus}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						{#if status === true}
+						{#if statusKind === 'bad'}
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-3 w-3 text-rose-500"
+								fill="currentColor"
+							>
+								<path
+									d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+								/>
+							</svg>
+						{:else if status === true}
 							<span class="absolute inset-0 rounded-full bg-stone-800" />
 							<svg viewBox="0 0 24 24" class="relative z-10 h-2.5 w-2.5 text-stone-50" fill="none">
 								<path
@@ -422,6 +475,14 @@
 									class:status-ring-solid={status === false}
 								/>
 							</svg>
+						{/if}
+						{#if mode === 'normal'}
+							<span
+								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								in:fly={{ y: 6, duration: 200 }}
+							>
+								s
+							</span>
 						{/if}
 					</span>
 					{statusLabel}
