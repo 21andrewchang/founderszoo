@@ -23,14 +23,17 @@
 		destinationLabel?: string | null;
 		hasDestinationContent?: boolean;
 		isHabit?: boolean;
-		mode?: 'move' | 'swap' | 'delete';
+		mode?: 'move' | 'swap' | 'delete' | 'copy';
 		loading?: boolean;
 	}>();
 
 	const isSwap = $derived(mode === 'swap');
 	const isDelete = $derived(mode === 'delete');
-	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : 'Move');
-	const actionVerbIng = $derived(isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : 'Moving…');
+	const isCopy = $derived(mode === 'copy');
+	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : isCopy ? 'Copy' : 'Move');
+	const actionVerbIng = $derived(
+		isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : isCopy ? 'Copying…' : 'Moving…'
+	);
 	const warningShouldRender = $derived(isDelete || hasDestinationContent || isHabit);
 	const warningClasses = $derived(
 		isDelete
@@ -77,7 +80,9 @@
 			? 'Delete block confirmation'
 			: isSwap
 				? 'Swap blocks confirmation'
-				: 'Move block confirmation'}
+				: isCopy
+					? 'Copy block confirmation'
+					: 'Move block confirmation'}
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
@@ -92,6 +97,8 @@
 						Delete {isHabit ? 'habit' : 'block'}?
 					{:else if isSwap}
 						Swap blocks?
+					{:else if isCopy}
+						Copy block?
 					{:else}
 						Move {isHabit ? 'habit' : 'block'}?
 					{/if}
@@ -108,8 +115,12 @@
 						<span class="font-medium text-stone-900"
 							>{blockLabel || (isHabit ? 'this habit' : 'this block')}</span
 						>
-						from <span class="font-medium text-stone-900">{fromLabel}</span> to
-						<span class="font-medium text-stone-900">{toLabel}</span>?
+						{#if isCopy}
+							copy to <span class="font-medium text-stone-900">{toLabel}</span>?
+						{:else}
+							from <span class="font-medium text-stone-900">{fromLabel}</span> to
+							<span class="font-medium text-stone-900">{toLabel}</span>?
+						{/if}
 					</p>
 				{/if}
 				{#if warningShouldRender}

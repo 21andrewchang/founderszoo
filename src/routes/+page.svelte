@@ -263,6 +263,20 @@
 		value: BlockValue;
 		habitTitle: string | null;
 	};
+	type CopyBlock = {
+		user_id: string;
+		hour: number;
+		half: 0 | 1;
+		value: BlockValue;
+	};
+	type PendingCopy = {
+		user_id: string;
+		fromHour: number;
+		fromHalf: 0 | 1;
+		toHour: number;
+		toHalf: 0 | 1;
+		value: BlockValue;
+	};
 	type ShiftEntry = {
 		index: number;
 		hour: number;
@@ -387,6 +401,8 @@
 	let pendingMove = $state<PendingMove | null>(null);
 	let pendingMoveSource = $state<'drag' | 'cut' | null>(null);
 	let isMoveSubmitting = $state(false);
+	let pendingCopy = $state<PendingCopy | null>(null);
+	let isCopySubmitting = $state(false);
 	let pendingDelete = $state<PendingDelete | null>(null);
 	let isDeleteSubmitting = $state(false);
 	let isShiftSubmitting = $state(false);
@@ -394,6 +410,7 @@
 	let pendingG = $state(false);
 	let dragImageEl: HTMLElement | null = null;
 	let cutBlock = $state<CutBlock | null>(null);
+	let copyBlock = $state<CopyBlock | null>(null);
 	const pendingMoveSummary = $derived.by(() => {
 		if (!pendingMove) return null;
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = pendingMove;
@@ -411,6 +428,23 @@
 			hasDestinationContent: destinationHasContent,
 			isHabit: sourceHabit.length > 0,
 			mode
+		};
+	});
+	const pendingCopySummary = $derived.by(() => {
+		if (!pendingCopy) return null;
+		const { user_id, fromHour, fromHalf, toHour, toHalf } = pendingCopy;
+		const sourceTitle = getDisplayTitle(user_id, fromHour, fromHalf);
+		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
+		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		const destinationHasContent = destinationTitle.length > 0 || destinationHabit.length > 0;
+		return {
+			blockLabel: sourceTitle || 'this block',
+			fromLabel: formatBlockLabel(fromHour, fromHalf),
+			toLabel: formatBlockLabel(toHour, toHalf),
+			destinationLabel: destinationTitle || destinationHabit || null,
+			hasDestinationContent: destinationHasContent,
+			isHabit: false,
+			mode: 'copy' as const
 		};
 	});
 	const pendingDeleteSummary = $derived.by(() => {
@@ -444,6 +478,7 @@
 				carryoverPrompt ||
 				plannedPrompt ||
 				pendingMove ||
+				pendingCopy ||
 				pendingDelete ||
 				reviewOpen
 		)
@@ -731,6 +766,14 @@
 	function blockIsCut(user_id: string, h: number, half01: 0 | 1) {
 		return Boolean(
 			cutBlock && cutBlock.user_id === user_id && cutBlock.hour === h && cutBlock.half === half01
+		);
+	}
+	function blockIsCopied(user_id: string, h: number, half01: 0 | 1) {
+		return Boolean(
+			copyBlock &&
+				copyBlock.user_id === user_id &&
+				copyBlock.hour === h &&
+				copyBlock.half === half01
 		);
 	}
 
@@ -1035,7 +1078,6 @@
 		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
 		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
 		const hasTodayEntry = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
-		const blockElapsed = blockHasElapsed(h, half01);
 		const blockStatus = getStatus(user_id, h, half01);
 		const blockCompleted = blockStatus === true;
 		return HABIT_STREAK_KEYS.reduce(
@@ -1050,10 +1092,10 @@
 					acc[key] = (fallbackRecord ?? record)?.[key] ?? null;
 					return acc;
 				}
-				const useCurrent = blockCompleted || (blockElapsed && hasTodayEntry[key]);
+				const useCurrent = blockCompleted || hasTodayEntry[key];
 				const source = useCurrent ? record : fallbackRecord;
 				let value = source?.[key] ?? null;
-				if (blockCompleted && !blockElapsed) {
+				if (blockCompleted && !hasTodayEntry[key]) {
 					const base = fallbackRecord?.[key] ?? null;
 					const baseLen = base && base.kind === 'positive' ? base.length : 0;
 					value = {
@@ -1263,6 +1305,37 @@
 		if (hour === undefined) return false;
 		return cutBlockAt(viewerUserId, hour, selectedBlock.half);
 	}
+	function cancelCopyBlock() {
+		copyBlock = null;
+	}
+	function copyBlockAt(user_id: string, hour: number, half: 0 | 1) {
+		if (!viewerUserId || viewerUserId !== user_id) return false;
+		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
+		if (!blockHasContent(user_id, hour, half)) return false;
+		if (habitName.length > 0) return false;
+		const sourceValue = getBlock(user_id, hour, half);
+		copyBlock = {
+			user_id,
+			hour,
+			half,
+			value: {
+				title: sourceValue.title ?? '',
+				status: sourceValue.status,
+				category: sourceValue.category ?? null
+			}
+		};
+		const hourIndex = getHourIndex(hour);
+		if (hourIndex !== -1) {
+			setSelectedBlock({ hourIndex, half });
+		}
+		return true;
+	}
+	function copySelectedBlock() {
+		if (!viewerUserId || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
+		if (hour === undefined) return false;
+		return copyBlockAt(viewerUserId, hour, selectedBlock.half);
+	}
 	function pasteCutBlockToTarget(hour: number, half: 0 | 1) {
 		if (!cutBlock) return false;
 		const { user_id, hour: fromHour, half: fromHalf } = cutBlock;
@@ -1292,10 +1365,46 @@
 		if (hour === undefined) return false;
 		return pasteCutBlockToTarget(hour, selectedBlock.half);
 	}
+	function shouldConfirmCopy(copy: PendingCopy) {
+		const { user_id, toHour, toHalf } = copy;
+		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
+		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		return destinationTitle.length > 0 || destinationHabit.length > 0;
+	}
+	function pasteCopyBlockToTarget(hour: number, half: 0 | 1) {
+		if (!copyBlock) return false;
+		const { user_id, hour: fromHour, half: fromHalf, value } = copyBlock;
+		if (hour === fromHour && half === fromHalf) return true;
+		const copy: PendingCopy = {
+			user_id,
+			fromHour,
+			fromHalf,
+			toHour: hour,
+			toHalf: half,
+			value
+		};
+		if (shouldConfirmCopy(copy)) {
+			pendingCopy = copy;
+		} else {
+			void submitCopy(copy);
+		}
+		return true;
+	}
+	function pasteCopyBlockAtSelection() {
+		if (!viewerUserId || !copyBlock || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
+		if (hour === undefined) return false;
+		return pasteCopyBlockToTarget(hour, selectedBlock.half);
+	}
 	function maybeHandlePaste(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
-		if (!cutBlock || cutBlock.user_id !== user_id) return false;
-		return pasteCutBlockToTarget(hour, half);
+		if (cutBlock && cutBlock.user_id === user_id) {
+			return pasteCutBlockToTarget(hour, half);
+		}
+		if (copyBlock && copyBlock.user_id === user_id) {
+			return pasteCopyBlockToTarget(hour, half);
+		}
+		return false;
 	}
 
 	function moveSelectionVertical(delta: 1 | -1, count = 1) {
@@ -1720,6 +1829,11 @@
 				event.preventDefault();
 				return;
 			}
+			if (copyBlock) {
+				cancelCopyBlock();
+				event.preventDefault();
+				return;
+			}
 			return;
 		}
 		if (normalized === 'u') {
@@ -1734,7 +1848,11 @@
 			event.preventDefault();
 			return;
 		}
-		if (!['h', 'j', 'k', 'l', 'g', 'm', '>', '<', 'Enter', 'i', 'd', 'x', 'p'].includes(normalized))
+		if (
+			!['h', 'j', 'k', 'l', 'g', 'm', '>', '<', 'Enter', 'i', 'd', 'x', 'y', 'p'].includes(
+				normalized
+			)
+		)
 			return;
 		hoverBlock = null;
 		ensureSelectionExists();
@@ -1795,8 +1913,15 @@
 			case 'x':
 				handled = cutSelectedBlock();
 				break;
+			case 'y':
+				handled = copySelectedBlock();
+				break;
 			case 'p':
-				handled = pasteCutBlockAtSelection();
+				if (cutBlock) {
+					handled = pasteCutBlockAtSelection();
+				} else if (copyBlock) {
+					handled = pasteCopyBlockAtSelection();
+				}
 				break;
 		}
 		if ((normalized === 'j' || normalized === 'k') && commandCount !== null) {
@@ -2069,6 +2194,23 @@
 			else next[h].second = name;
 		}
 		habitsByUser[user_id] = next;
+	}
+	async function upsertHabitDayStatus(user_id: string, habitName: string, completed: boolean) {
+		const day = localToday();
+		const { error } = await supabase.from('habit_day_status').upsert(
+			{
+				user_id,
+				habit_name: habitName,
+				day,
+				completed
+			},
+			{ onConflict: 'user_id,habit_name,day' }
+		);
+		if (error) {
+			console.error('habit day status update error', error);
+			return false;
+		}
+		return true;
 	}
 	async function loadHabitStreaksForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
@@ -2357,7 +2499,14 @@
 		const action = stack[stack.length - 1];
 		undoStacksByDate = { ...undoStacksByDate, [dateKey]: stack.slice(0, -1) };
 
-		const upserts: { day_id: string; hour: number; half: boolean; title: string; status: boolean | null; category: BlockCategory | null }[] = [];
+		const upserts: {
+			day_id: string;
+			hour: number;
+			half: boolean;
+			title: string;
+			status: boolean | null;
+			category: BlockCategory | null;
+		}[] = [];
 		const deletions: UndoEntry[] = [];
 		const habitUpserts: { user_id: string; name: string; hour: number; half: boolean }[] = [];
 		const habitDeletes: UndoEntry[] = [];
@@ -2429,15 +2578,12 @@
 					? supabase.from('habits').upsert(habitUpserts, { onConflict: 'user_id,hour,half' })
 					: null;
 
-			const results = await Promise.all([
-				...hoursDeletes,
-				...habitDeletesCalls,
-				hoursUpsert,
-				habitsUpsert
-			].filter(Boolean));
-			const errorResult = results.find(
-				(result) => (result as { error?: unknown })?.error
-			) as { error?: unknown } | undefined;
+			const results = await Promise.all(
+				[...hoursDeletes, ...habitDeletesCalls, hoursUpsert, habitsUpsert].filter(Boolean)
+			);
+			const errorResult = results.find((result) => (result as { error?: unknown })?.error) as
+				| { error?: unknown }
+				| undefined;
 			if (errorResult?.error) throw errorResult.error;
 		} catch (error) {
 			console.error('undo error', error);
@@ -2453,6 +2599,7 @@
 		const isHabitBlock = habitName.length > 0;
 		const block = getBlock(user_id, hour, half);
 		if (isHabitBlock) {
+			if (displayDateForUser(user_id) !== localToday()) return;
 			pushUndoAction(user_id, day_id, [{ hour, half }]);
 			const nextStatus = block.status === true ? false : true;
 			const resolvedTitle = (block.title ?? '').trim() || habitName;
@@ -2471,6 +2618,8 @@
 				console.error('cycle habit status error', error);
 				return;
 			}
+			const didUpdate = await upsertHabitDayStatus(user_id, habitName, nextStatus);
+			if (!didUpdate) return;
 			setTitle(user_id, hour, half, resolvedTitle, nextStatus);
 			void loadHabitStreaksForUser(user_id);
 			return;
@@ -2526,6 +2675,10 @@
 		pendingMove = null;
 		pendingMoveSource = null;
 	}
+	function cancelPendingCopy() {
+		if (isCopySubmitting) return;
+		pendingCopy = null;
+	}
 	async function confirmPendingMove() {
 		if (!pendingMove) return;
 		const move = pendingMove;
@@ -2536,11 +2689,80 @@
 			pendingMoveSource = null;
 		}
 	}
+	async function confirmPendingCopy() {
+		if (!pendingCopy) return;
+		const copy = pendingCopy;
+		const success = await submitCopy(copy);
+		if (success) {
+			pendingCopy = null;
+		}
+	}
 	function shouldConfirmMove(move: PendingMove) {
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
 		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		if (sourceHabitName.length > 0) return true;
 		return blockHasContent(user_id, toHour, toHalf);
+	}
+	async function submitCopy(copy: PendingCopy): Promise<boolean> {
+		if (isCopySubmitting) return false;
+		isCopySubmitting = true;
+		try {
+			const { user_id, toHour, toHalf, value } = copy;
+			if (viewerUserId !== user_id) return false;
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return false;
+			const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+
+			pushUndoAction(user_id, day_id, [{ hour: toHour, half: toHalf }]);
+
+			const { error } = await supabase.from('hours').upsert(
+				[
+					{
+						day_id,
+						hour: toHour,
+						half: toHalf === 1,
+						title: value.title ?? '',
+						status: value.status ?? null,
+						category: value.category ?? null
+					}
+				],
+				{ onConflict: 'day_id,hour,half' }
+			);
+			if (error) {
+				console.error('block copy error', error);
+				return false;
+			}
+
+			setTitle(
+				user_id,
+				toHour,
+				toHalf,
+				value.title ?? '',
+				value.status ?? null,
+				value.category ?? null
+			);
+			if (destinationHabit.length > 0) {
+				const { error: deleteHabitErr } = await supabase
+					.from('habits')
+					.delete()
+					.eq('user_id', user_id)
+					.eq('hour', toHour)
+					.eq('half', toHalf === 1);
+				if (deleteHabitErr) {
+					console.error('block copy destination habit delete error', deleteHabitErr);
+				}
+				setHabitTitle(user_id, toHour, toHalf, null);
+			}
+			if (viewerUserId === user_id) {
+				const hourIndex = getHourIndex(toHour);
+				if (hourIndex !== -1) {
+					setSelectedBlock({ hourIndex, half: toHalf });
+				}
+			}
+			return true;
+		} finally {
+			isCopySubmitting = false;
+		}
 	}
 	async function submitMove(
 		move: PendingMove,
@@ -3134,6 +3356,7 @@
 		const { user_id, habitHour, habitHalf, currHour, currHalf, habitKey, habitName } =
 			habitCheckPrompt;
 		try {
+			if (displayDateForUser(user_id) !== localToday()) return;
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return;
 			const block = getBlock(user_id, habitHour, habitHalf);
@@ -3153,6 +3376,8 @@
 				console.error('habit prompt update error', error);
 				return;
 			}
+			const didUpdate = await upsertHabitDayStatus(user_id, habitName, completed);
+			if (!didUpdate) return;
 			setTitle(user_id, habitHour, habitHalf, resolvedTitle, completed);
 			habitCheckPrompt = null;
 			void loadHabitStreaksForUser(user_id);
@@ -3533,6 +3758,8 @@
 								{#each hours as h, hourIndex}
 									{@const blockIsCutA = blockIsCut(person.user_id, h, 0)}
 									{@const blockIsCutB = blockIsCut(person.user_id, h, 1)}
+									{@const blockIsCopiedA = blockIsCopied(person.user_id, h, 0)}
+									{@const blockIsCopiedB = blockIsCopied(person.user_id, h, 1)}
 									<div
 										class="hover:none flex h-7 w-full flex-row space-x-1"
 										class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
@@ -3567,6 +3794,7 @@
 												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
 												isCurrent={blockIsCurrent(h, 0)}
 												isCut={blockIsCutA}
+												isCopied={blockIsCopiedA}
 											/>
 										</div>
 										<div
@@ -3599,6 +3827,7 @@
 												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
 												isCurrent={blockIsCurrent(h, 1)}
 												isCut={blockIsCutB}
+												isCopied={blockIsCopiedB}
 											/>
 										</div>
 									</div>
@@ -3843,6 +4072,19 @@
 	isHabit={pendingMoveSummary?.isHabit ?? false}
 	mode={pendingMoveSummary?.mode ?? 'move'}
 	loading={isMoveSubmitting}
+/>
+<ConfirmMoveModal
+	open={pendingCopy !== null}
+	onCancel={cancelPendingCopy}
+	onConfirm={() => void confirmPendingCopy()}
+	blockLabel={pendingCopySummary?.blockLabel ?? ''}
+	fromLabel={pendingCopySummary?.fromLabel ?? ''}
+	toLabel={pendingCopySummary?.toLabel ?? ''}
+	destinationLabel={pendingCopySummary?.destinationLabel ?? null}
+	hasDestinationContent={pendingCopySummary?.hasDestinationContent ?? false}
+	isHabit={false}
+	mode="copy"
+	loading={isCopySubmitting}
 />
 <ConfirmMoveModal
 	open={pendingDelete !== null}

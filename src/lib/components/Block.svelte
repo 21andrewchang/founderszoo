@@ -23,6 +23,7 @@
 		isCurrent?: boolean;
 		habitStreak?: PlayerStreak | null;
 		isCut?: boolean;
+		isCopied?: boolean;
 	}>();
 
 	const title = $derived(props.title ?? '');
@@ -56,6 +57,7 @@
 	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
 	const isFilled = $derived(displayTitle.length > 0);
 	const showStatusProp = $derived(props.showStatus);
+	const isCopied = $derived(Boolean(props.isCopied));
 
 	const currentClass = $derived(isCurrentBlock ? 'bg-stone-200' : '');
 
@@ -200,6 +202,7 @@
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
 	class:block-cut-source={Boolean(props.isCut)}
+	class:block-copy-source={isCopied}
 	role={canOpen ? 'button' : undefined}
 	onclick={handleBlockClick}
 	onkeydown={handleBlockKeydown}
@@ -478,5 +481,10 @@
 	.block-cut-source {
 		box-shadow: 0 0 0 2px rgb(248 113 113);
 		border-color: rgb(248 113 113);
+	}
+
+	.block-copy-source {
+		box-shadow: 0 0 0 2px rgb(59 130 246);
+		border-color: rgb(59 130 246);
 	}
 </style>
