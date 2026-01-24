@@ -11,6 +11,7 @@ then we can just make the goal page and wire up the navigation. then hardcode in
 maybe cut ai for this version?
 
 need testing for 1 full day without having to wait for each hour. need to test review. need to test auto blocks
+- [ ] habit streaks don't work for days in a row you didn't complete something
 
 ## improve existing system to match specs (low hanging fruit)
 - [x] tags for block log menu: body, social, ops, work instead of "Read, Bored, Gym" add a new set of tags and make a new column in supabase for it.

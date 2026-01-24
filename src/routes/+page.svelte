@@ -225,6 +225,17 @@
 	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
 	type DraggingBlock = { user_id: string; hour: number; half: 0 | 1 };
 
+	type UndoEntry = {
+		user_id: string;
+		day_id: string;
+		hour: number;
+		half: 0 | 1;
+		before: BlockValue | null;
+		hadRow: boolean;
+		habitName: string | null;
+	};
+	type UndoAction = { entries: UndoEntry[] };
+
 	const normalizeBlockCategory = (value: unknown): BlockCategory | null => {
 		if (value === 'social') return 'rest';
 		if (value === 'body' || value === 'rest' || value === 'work' || value === 'admin') {
@@ -301,6 +312,8 @@
 		Record<string, Record<HabitKey, PlayerStreak | null>>
 	>({});
 	let habitHasTodayEntryByUser = $state<Record<string, Record<HabitKey, boolean>>>({});
+	let undoStacksByDate = $state<Record<string, UndoAction[]>>({});
+	let lastUndoDate = $state<string | null>(null);
 
 	let logOpen = $state(false);
 	type BlockCarryoverPrompt = {
@@ -463,6 +476,58 @@
 		if (!viewerUserId || viewerUserId !== user_id) return false;
 		return displayDateForUser(user_id) >= localToday();
 	};
+
+	const undoDateForUser = (user_id: string) => displayDateForUser(user_id);
+
+	const buildUndoEntry = (
+		user_id: string,
+		day_id: string,
+		hour: number,
+		half: 0 | 1
+	): UndoEntry => {
+		const block = getBlock(user_id, hour, half);
+		const title = (block.title ?? '').trim();
+		const status = block.status ?? null;
+		const category = block.category ?? null;
+		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim() || null;
+		const hadRow = Boolean(title) || status !== null || category !== null;
+		return {
+			user_id,
+			day_id,
+			hour,
+			half,
+			before: hadRow ? { title: block.title ?? '', status, category } : null,
+			hadRow,
+			habitName
+		};
+	};
+
+	const pushUndoAction = (
+		user_id: string,
+		day_id: string,
+		blocks: { hour: number; half: 0 | 1 }[]
+	) => {
+		if (!canEditDayForUser(user_id)) return;
+		const dateKey = undoDateForUser(user_id);
+		if (!dateKey) return;
+		const seen = new Set<string>();
+		const entries: UndoEntry[] = [];
+		for (const block of blocks) {
+			const key = `${block.hour}-${block.half}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			entries.push(buildUndoEntry(user_id, day_id, block.hour, block.half));
+		}
+		if (entries.length === 0) return;
+		const existing = undoStacksByDate[dateKey] ?? [];
+		const next = [...existing, { entries }];
+		const trimmed = next.length > 10 ? next.slice(next.length - 10) : next;
+		undoStacksByDate = { ...undoStacksByDate, [dateKey]: trimmed };
+	};
+
+	const clearUndoStacks = () => {
+		undoStacksByDate = {};
+	};
 	const canShowReviewDayButton = () => {
 		if (!viewerUserId) return false;
 		if (!isNightWindow()) return false;
@@ -523,6 +588,14 @@
 		const current = activeDayDateByUser[viewerUserId] ?? localToday();
 		if (desiredDate === current) return;
 		void setActiveDayDateForViewer(desiredDate);
+	});
+
+	$effect(() => {
+		if (!viewerUserId) return;
+		const currentDate = displayDateForUser(viewerUserId);
+		if (currentDate === lastUndoDate) return;
+		clearUndoStacks();
+		lastUndoDate = currentDate;
 	});
 
 	async function weeklyHowForDate(dateStr: string) {
@@ -1375,6 +1448,18 @@
 			);
 			if (!ok) return false;
 		}
+
+		const undoTargets = new Map<string, { hour: number; half: 0 | 1 }>();
+		for (const entry of entries) {
+			undoTargets.set(`${entry.hour}-${entry.half}`, { hour: entry.hour, half: entry.half });
+		}
+		for (const move of moves) {
+			const { hour: targetHour, half: targetHalf } = blockFromIndex(move.toIndex);
+			if (targetHour === undefined) continue;
+			undoTargets.set(`${targetHour}-${targetHalf}`, { hour: targetHour, half: targetHalf });
+		}
+		pushUndoAction(user_id, day_id, [...undoTargets.values()]);
+
 		const clearEntries = [...overflow, ...moves.map((move) => move.entry)];
 		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
 		for (const entry of clearEntries) {
@@ -1635,6 +1720,11 @@
 				event.preventDefault();
 				return;
 			}
+			return;
+		}
+		if (normalized === 'u') {
+			void undoLastAction();
+			event.preventDefault();
 			return;
 		}
 		if (key.length === 1 && key >= '0' && key <= '9') {
@@ -2192,6 +2282,8 @@
 			}
 		}
 
+		pushUndoAction(user_id, day_id, [...targets, ...runTargets]);
+
 		const payload = targets.map((target) => ({
 			day_id,
 			hour: target.hour,
@@ -2255,6 +2347,103 @@
 		closeLogModal();
 	}
 
+	async function undoLastAction() {
+		if (!viewerUserId) return;
+		if (!canEditDayForUser(viewerUserId)) return;
+		const dateKey = undoDateForUser(viewerUserId);
+		if (!dateKey) return;
+		const stack = undoStacksByDate[dateKey];
+		if (!stack || stack.length === 0) return;
+		const action = stack[stack.length - 1];
+		undoStacksByDate = { ...undoStacksByDate, [dateKey]: stack.slice(0, -1) };
+
+		const upserts: { day_id: string; hour: number; half: boolean; title: string; status: boolean | null; category: BlockCategory | null }[] = [];
+		const deletions: UndoEntry[] = [];
+		const habitUpserts: { user_id: string; name: string; hour: number; half: boolean }[] = [];
+		const habitDeletes: UndoEntry[] = [];
+
+		for (const entry of action.entries) {
+			if (entry.hadRow && entry.before) {
+				upserts.push({
+					day_id: entry.day_id,
+					hour: entry.hour,
+					half: entry.half === 1,
+					title: entry.before.title ?? '',
+					status: entry.before.status ?? null,
+					category: entry.before.category ?? null
+				});
+			} else {
+				deletions.push(entry);
+			}
+			if (entry.habitName) {
+				habitUpserts.push({
+					user_id: entry.user_id,
+					name: entry.habitName,
+					hour: entry.hour,
+					half: entry.half === 1
+				});
+			} else {
+				habitDeletes.push(entry);
+			}
+		}
+
+		try {
+			for (const entry of action.entries) {
+				if (entry.hadRow && entry.before) {
+					setTitle(
+						entry.user_id,
+						entry.hour,
+						entry.half,
+						entry.before.title ?? '',
+						entry.before.status ?? null,
+						entry.before.category ?? null
+					);
+				} else {
+					setTitle(entry.user_id, entry.hour, entry.half, '', null, null);
+				}
+				setHabitTitle(entry.user_id, entry.hour, entry.half, entry.habitName ?? null);
+			}
+
+			const hoursDeletes = deletions.map((entry) =>
+				supabase
+					.from('hours')
+					.delete()
+					.eq('day_id', entry.day_id)
+					.eq('hour', entry.hour)
+					.eq('half', entry.half === 1)
+			);
+			const habitDeletesCalls = habitDeletes.map((entry) =>
+				supabase
+					.from('habits')
+					.delete()
+					.eq('user_id', entry.user_id)
+					.eq('hour', entry.hour)
+					.eq('half', entry.half === 1)
+			);
+			const hoursUpsert =
+				upserts.length > 0
+					? supabase.from('hours').upsert(upserts, { onConflict: 'day_id,hour,half' })
+					: null;
+			const habitsUpsert =
+				habitUpserts.length > 0
+					? supabase.from('habits').upsert(habitUpserts, { onConflict: 'user_id,hour,half' })
+					: null;
+
+			const results = await Promise.all([
+				...hoursDeletes,
+				...habitDeletesCalls,
+				hoursUpsert,
+				habitsUpsert
+			].filter(Boolean));
+			const errorResult = results.find(
+				(result) => (result as { error?: unknown })?.error
+			) as { error?: unknown } | undefined;
+			if (errorResult?.error) throw errorResult.error;
+		} catch (error) {
+			console.error('undo error', error);
+		}
+	}
+
 	async function cycleStatus(user_id: string, hour: number, half: 0 | 1) {
 		if (viewerUserId !== user_id) return;
 		if (suppressNextClick) return;
@@ -2264,6 +2453,7 @@
 		const isHabitBlock = habitName.length > 0;
 		const block = getBlock(user_id, hour, half);
 		if (isHabitBlock) {
+			pushUndoAction(user_id, day_id, [{ hour, half }]);
 			const nextStatus = block.status === true ? false : true;
 			const resolvedTitle = (block.title ?? '').trim() || habitName;
 			const { error } = await supabase.from('hours').upsert(
@@ -2291,6 +2481,13 @@
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex === -1) return;
 		const { startIndex, endIndex } = blockRunRange(user_id, hour, half);
+		const runBlocks: { hour: number; half: 0 | 1 }[] = [];
+		for (let idx = startIndex; idx <= endIndex; idx += 1) {
+			const { hour: targetHour, half: targetHalf } = blockFromIndex(idx);
+			if (targetHour === undefined) break;
+			runBlocks.push({ hour: targetHour, half: targetHalf });
+		}
+		pushUndoAction(user_id, day_id, runBlocks);
 		const updates = [] as {
 			day_id: string;
 			hour: number;
@@ -2395,6 +2592,11 @@
 			destinationValue !== null && (destinationValue.title ?? '').trim().length > 0;
 		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
 		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+
+		pushUndoAction(user_id, day_id, [
+			{ hour: fromHour, half: fromHalf },
+			{ hour: toHour, half: toHalf }
+		]);
 
 		const { error: deleteDestErr } = await supabase
 			.from('hours')
@@ -2517,6 +2719,30 @@
 		const hourIndex = getHourIndex(hour);
 		const totalBlocks = hours.length * 2;
 		if (day_id) {
+			const undoTargets: { hour: number; half: 0 | 1 }[] = [{ hour, half }];
+			let prevBlock: { hour: number; half: 0 | 1 } | null = null;
+			let prevTitle = '';
+			let nextTitle = '';
+			let isMiddleOfRun = false;
+			if (title && hourIndex !== -1) {
+				const currentIndex = blockIndex(hourIndex, half);
+				const prevIndex = currentIndex - 1;
+				const nextIndex = currentIndex + 1;
+				if (prevIndex >= 0 && nextIndex < totalBlocks) {
+					const prev = blockFromIndex(prevIndex);
+					const next = blockFromIndex(nextIndex);
+					if (prev.hour !== undefined && next.hour !== undefined) {
+						prevTitle = (getTitle(user_id, prev.hour, prev.half) ?? '').trim();
+						nextTitle = (getTitle(user_id, next.hour, next.half) ?? '').trim();
+						isMiddleOfRun = prevTitle === title && nextTitle === title;
+						prevBlock = prev;
+						if (isMiddleOfRun) {
+							undoTargets.push({ hour: prev.hour, half: prev.half });
+						}
+					}
+				}
+			}
+			pushUndoAction(user_id, day_id, undoTargets);
 			const { error } = await supabase
 				.from('hours')
 				.delete()
@@ -2527,36 +2753,21 @@
 				console.error('block delete error', error);
 				return false;
 			}
-			if (title && hourIndex !== -1) {
-				const currentIndex = blockIndex(hourIndex, half);
-				const prevIndex = currentIndex - 1;
-				const nextIndex = currentIndex + 1;
-				if (prevIndex >= 0 && nextIndex < totalBlocks) {
-					const prevBlock = blockFromIndex(prevIndex);
-					const nextBlock = blockFromIndex(nextIndex);
-					if (prevBlock.hour !== undefined && nextBlock.hour !== undefined) {
-						const prevTitle = (getTitle(user_id, prevBlock.hour, prevBlock.half) ?? '').trim();
-						const nextTitle = (getTitle(user_id, nextBlock.hour, nextBlock.half) ?? '').trim();
-						const isMiddleOfRun = prevTitle === title && nextTitle === title;
-
-						if (isMiddleOfRun) {
-							const { error: completeErr } = await supabase.from('hours').upsert(
-								{
-									day_id,
-									hour: prevBlock.hour,
-									half: prevBlock.half === 1,
-									title: prevTitle,
-									status: true
-								},
-								{ onConflict: 'day_id,hour,half' }
-							);
-							if (completeErr) {
-								console.error('block delete split error', completeErr);
-							} else {
-								setStatus(user_id, prevBlock.hour, prevBlock.half, true);
-							}
-						}
-					}
+			if (isMiddleOfRun && prevBlock) {
+				const { error: completeErr } = await supabase.from('hours').upsert(
+					{
+						day_id,
+						hour: prevBlock.hour,
+						half: prevBlock.half === 1,
+						title: prevTitle,
+						status: true
+					},
+					{ onConflict: 'day_id,hour,half' }
+				);
+				if (completeErr) {
+					console.error('block delete split error', completeErr);
+				} else {
+					setStatus(user_id, prevBlock.hour, prevBlock.half, true);
 				}
 			}
 		}
