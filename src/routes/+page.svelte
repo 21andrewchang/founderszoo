@@ -102,7 +102,7 @@
 	const END_HOUR = 24;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
-	const STREAK_LOOKBACK_DAYS = 60;
+	const STREAK_LOOKBACK_DAYS = 365;
 	const COMPLETION_STREAK_LOOKBACK_DAYS = 365;
 	const COMPLETION_STREAK_THRESHOLD = 0.75;
 	const DAY_MS = 86_400_000;
@@ -120,8 +120,6 @@
 		'November',
 		'December'
 	];
-	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored', 'wake'] as const;
-	type HabitKey = (typeof HABIT_STREAK_KEYS)[number];
 	const loadingPlaceholderColumns = Array.from({ length: 2 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
@@ -221,7 +219,15 @@
 	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad' | null;
 	type BlockValue = { title: string; status: boolean | null; category: BlockCategory };
 	type BlockRow = { first: BlockValue; second: BlockValue };
-	type HabitBlockRow = { first: string | null; second: string | null };
+	type HabitEntry = {
+		id: string;
+		name: string;
+		repeatDays: number[];
+		category: BlockCategory | null;
+		createdAtMs: number;
+	};
+	type HabitSaveConfig = { id: string | null; repeatDays: number[] };
+	type HabitBlockRow = { first: HabitEntry | null; second: HabitEntry | null };
 	type SelectedBlock = { hourIndex: number; half: 0 | 1 };
 	type DraggingBlock = { user_id: string; hour: number; half: 0 | 1 };
 
@@ -232,7 +238,7 @@
 		half: 0 | 1;
 		before: BlockValue | null;
 		hadRow: boolean;
-		habitName: string | null;
+		habit: HabitEntry | null;
 	};
 	type UndoAction = { entries: UndoEntry[] };
 
@@ -261,7 +267,7 @@
 		hour: number;
 		half: 0 | 1;
 		value: BlockValue;
-		habitTitle: string | null;
+		habit: HabitEntry | null;
 	};
 	type CopyBlock = {
 		user_id: string;
@@ -284,7 +290,7 @@
 		title: string;
 		status: boolean | null;
 		category: BlockCategory | null;
-		habitName: string | null;
+		habit: HabitEntry | null;
 		hasHabit: boolean;
 	};
 	type ShiftMove = {
@@ -299,6 +305,12 @@
 		title: string | null;
 		status: boolean | null;
 		category?: BlockCategory | null;
+	};
+	type HabitStatusRowPayload = {
+		user_id: string;
+		habit_id: string;
+		day: string;
+		completed: boolean;
 	};
 	type HoursRealtimeState = {
 		channel: RealtimeChannel;
@@ -321,11 +333,7 @@
 	}
 	let blocksByUser = $state<Record<string, Record<number, BlockRow>>>({});
 	let habitsByUser = $state<Record<string, Record<number, HabitBlockRow>>>({});
-	let habitStreaksByUser = $state<Record<string, Record<HabitKey, PlayerStreak | null>>>({});
-	let habitStreaksByUserExcludingToday = $state<
-		Record<string, Record<HabitKey, PlayerStreak | null>>
-	>({});
-	let habitHasTodayEntryByUser = $state<Record<string, Record<HabitKey, boolean>>>({});
+	let habitStatusByUser = $state<Record<string, Record<string, HabitDayStatus[]>>>({});
 	let undoStacksByDate = $state<Record<string, UndoAction[]>>({});
 	let lastUndoDate = $state<string | null>(null);
 
@@ -351,18 +359,8 @@
 	let plannedPrompt = $state<PlannedPrompt | null>(null);
 	let isCarryoverSubmitting = $state(false);
 	let isPlannedSubmitting = $state(false);
-	type HabitPrompt = {
-		user_id: string;
-		habitHour: number;
-		habitHalf: 0 | 1;
-		currHour: number;
-		currHalf: 0 | 1;
-		habitName: string;
-		habitKey: HabitKey | null;
-	};
-	let habitCheckPrompt = $state<HabitPrompt | null>(null);
-	let isHabitPromptSubmitting = $state(false);
 	const hoursRealtimeByUser: Record<string, HoursRealtimeState | null> = {};
+	const habitStatusRealtimeByUser: Record<string, RealtimeChannel | null> = {};
 	let remoteSelectedBlocks = $state<Record<string, SelectedBlock | null>>({});
 	const selectedBlockRealtimeByUser: Record<string, RealtimeChannel | null> = {};
 	let lastBroadcastedSelectionKey: string | null = null;
@@ -384,13 +382,15 @@
 		title: string;
 		status: boolean | null;
 		category: BlockCategory | null;
+		habit: HabitEntry | null;
 	}>({
 		user_id: null,
 		hour: null,
 		half: null,
 		title: '',
 		status: null,
-		category: null
+		category: null,
+		habit: null
 	});
 	let selectedBlock = $state<SelectedBlock | null>(null);
 	let hjklBlock = $state<SelectedBlock | null>(null);
@@ -467,20 +467,9 @@
 		};
 	});
 
-	const logModalHabitStreaks = $derived.by(() => {
-		if (!viewerUserId) return emptyHabitStreakRecord();
-		const h = draft.hour;
-		const half = draft.half;
-		if (h == null || half == null) {
-			return habitStreaksForUser(viewerUserId);
-		}
-		return habitStreakRecordForBlock(viewerUserId, h, half);
-	});
-
 	const modalOverlayActive = $derived.by(() =>
 		Boolean(
 			logOpen ||
-				habitCheckPrompt ||
 				carryoverPrompt ||
 				plannedPrompt ||
 				pendingMove ||
@@ -530,7 +519,7 @@
 		const title = (block.title ?? '').trim();
 		const status = block.status ?? null;
 		const category = block.category ?? null;
-		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim() || null;
+		const habit = getHabitEntry(user_id, hour, half);
 		const hadRow = Boolean(title) || status !== null || category !== null;
 		return {
 			user_id,
@@ -539,7 +528,7 @@
 			half,
 			before: hadRow ? { title: block.title ?? '', status, category } : null,
 			hadRow,
-			habitName
+			habit
 		};
 	};
 
@@ -790,6 +779,11 @@
 	function getStatus(user_id: string, h: number, half01: 0 | 1) {
 		return getBlock(user_id, h, half01).status ?? null;
 	}
+	function getDisplayStatus(user_id: string, h: number, half01: 0 | 1) {
+		const habit = getHabitEntry(user_id, h, half01);
+		if (habit) return habitCompletionStatusForBlock(user_id, h, half01);
+		return getStatus(user_id, h, half01);
+	}
 
 	function setCategory(user_id: string, h: number, half01: 0 | 1, value: BlockCategory | null) {
 		const row = ensureBlockRow(user_id, h);
@@ -800,48 +794,130 @@
 	function getCategory(user_id: string, h: number, half01: 0 | 1) {
 		return getBlock(user_id, h, half01).category ?? null;
 	}
+	function getDisplayCategory(user_id: string, h: number, half01: 0 | 1) {
+		const habit = getHabitEntry(user_id, h, half01);
+		return habit?.category ?? getCategory(user_id, h, half01);
+	}
 
 	function ensureHabitRow(user_id: string, h: number): HabitBlockRow {
 		habitsByUser[user_id] ??= {};
 		habitsByUser[user_id][h] ??= { first: null, second: null };
 		return habitsByUser[user_id][h];
 	}
-	function setHabitTitle(user_id: string, h: number, half01: 0 | 1, name: string | null) {
+	function setHabitEntry(user_id: string, h: number, half01: 0 | 1, entry: HabitEntry | null) {
 		const row = ensureHabitRow(user_id, h);
-		if (half01 === 0) row.first = name;
-		else row.second = name;
+		if (half01 === 0) row.first = entry;
+		else row.second = entry;
 	}
-	function getHabitTitle(user_id: string, h: number, half01: 0 | 1) {
+	function clearHabitEntryById(user_id: string, habitId: string) {
+		const userHabits = habitsByUser[user_id];
+		if (!userHabits) return;
+		const next: Record<number, HabitBlockRow> = { ...userHabits };
+		for (const [hourStr, row] of Object.entries(next)) {
+			const hour = Number(hourStr);
+			const first = row.first?.id === habitId ? null : row.first;
+			const second = row.second?.id === habitId ? null : row.second;
+			next[hour] = { first, second };
+		}
+		habitsByUser[user_id] = next;
+	}
+	function clearHabitStatusById(user_id: string, habitId: string) {
+		const userRecords = habitStatusByUser[user_id];
+		if (!userRecords) return;
+		const { [habitId]: _removed, ...rest } = userRecords;
+		habitStatusByUser = { ...habitStatusByUser, [user_id]: rest };
+	}
+	function getHabitEntry(user_id: string, h: number, half01: 0 | 1) {
 		const row = habitsByUser[user_id]?.[h];
 		if (!row) return null;
-		return half01 === 0 ? row.first : row.second;
+		const entry = half01 === 0 ? row.first : row.second;
+		if (!entry) return null;
+		const dateStr = displayDateForUser(user_id);
+		return habitScheduledOn(entry, dateStr) ? entry : null;
+	}
+	function getHabitTitle(user_id: string, h: number, half01: 0 | 1) {
+		return getHabitEntry(user_id, h, half01)?.name ?? null;
 	}
 	type HabitDayStatus = { date: string; completed: boolean };
-	function normalizeHabitName(value: string | null | undefined): HabitKey | null {
-		const key = (value ?? '').trim().toLowerCase();
-		return HABIT_STREAK_KEYS.includes(key as HabitKey) ? (key as HabitKey) : null;
+	function weekdayIndexFromDate(dateStr: string): number | null {
+		const ms = parseHabitDate(dateStr);
+		if (ms === null) return null;
+		const day = new Date(ms).getUTCDay();
+		return (day + 6) % 7;
 	}
-	function emptyHabitStreakRecord(): Record<HabitKey, PlayerStreak | null> {
-		return HABIT_STREAK_KEYS.reduce(
-			(acc, key) => {
-				acc[key] = null;
-				return acc;
-			},
-			{} as Record<HabitKey, PlayerStreak | null>
-		);
+	function habitScheduledOn(habit: HabitEntry, dateStr: string): boolean {
+		const idx = weekdayIndexFromDate(dateStr);
+		if (idx === null) return false;
+		return habit.repeatDays.includes(idx);
 	}
-	function emptyHabitTodayEntryRecord(): Record<HabitKey, boolean> {
-		return HABIT_STREAK_KEYS.reduce(
-			(acc, key) => {
-				acc[key] = false;
-				return acc;
-			},
-			{} as Record<HabitKey, boolean>
-		);
+	function latestScheduledDate(habit: HabitEntry, startDateStr: string): string | null {
+		let cursor = startDateStr;
+		for (let offset = 0; offset < STREAK_LOOKBACK_DAYS; offset += 1) {
+			if (habitScheduledOn(habit, cursor)) return cursor;
+			cursor = addDaysToDateString(cursor, -1);
+		}
+		return null;
 	}
-	function habitStreaksForUser(user_id: string | null): Record<HabitKey, PlayerStreak | null> {
-		if (!user_id) return emptyHabitStreakRecord();
-		return habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
+	function habitCompletionMap(records: HabitDayStatus[]): Map<string, boolean> {
+		const map = new Map<string, boolean>();
+		for (const record of records) {
+			map.set(record.date, record.completed);
+		}
+		return map;
+	}
+	function calculateHabitStreak(
+		habit: HabitEntry,
+		records: HabitDayStatus[],
+		hour: number,
+		half: 0 | 1
+	): PlayerStreak | null {
+		if (!habit.repeatDays.length) return null;
+		const completionByDate = habitCompletionMap(records);
+		const today = localToday();
+		const scheduledToday = habitScheduledOn(habit, today);
+		const blockElapsed = blockHasElapsed(hour, half);
+		const createdDate = formatDateString(new Date(habit.createdAtMs));
+		const createdBoundaryMs = parseHabitDate(createdDate);
+		let anchorDate: string | null = null;
+		const completedToday = completionByDate.get(today) === true;
+		if (scheduledToday && completedToday) {
+			anchorDate = today;
+		} else if (scheduledToday && blockElapsed) {
+			anchorDate = today;
+		} else {
+			anchorDate = latestScheduledDate(habit, addDaysToDateString(today, -1));
+		}
+		if (!anchorDate) return null;
+		const anchorMs = parseHabitDate(anchorDate);
+		if (createdBoundaryMs !== null && anchorMs !== null && anchorMs < createdBoundaryMs) {
+			return null;
+		}
+		const anchorCompleted = completionByDate.get(anchorDate) === true;
+		let streakLength = 0;
+		let cursor = anchorDate;
+		for (let offset = 0; offset < STREAK_LOOKBACK_DAYS; offset += 1) {
+			const cursorMs = parseHabitDate(cursor);
+			if (createdBoundaryMs !== null && cursorMs !== null && cursorMs < createdBoundaryMs) {
+				break;
+			}
+			if (!habitScheduledOn(habit, cursor)) {
+				cursor = addDaysToDateString(cursor, -1);
+				continue;
+			}
+			const completed = completionByDate.get(cursor) === true;
+			if (anchorCompleted ? completed : !completed) {
+				streakLength += 1;
+			} else {
+				break;
+			}
+			cursor = addDaysToDateString(cursor, -1);
+		}
+		if (streakLength === 0) return null;
+		return {
+			kind: anchorCompleted ? 'positive' : 'negative',
+			length: streakLength,
+			missesOnLatest: anchorCompleted ? 0 : 1
+		};
 	}
 	function parseHabitDate(dateStr: string): number | null {
 		const parts = dateStr.split('-');
@@ -997,132 +1073,27 @@
 			reviewSubmitting = false;
 		}
 	}
-	function calculateHabitStreak(records: HabitDayStatus[]): PlayerStreak | null {
-		if (records.length === 0) return null;
 
-		// Build date -> completed map and track bounds
-		const byDate = new Map<string, boolean>();
-		let earliestMs: number | null = null;
-		let latestMs: number | null = null;
-
-		for (const record of records) {
-			const date = record.date;
-			if (!date) continue;
-			byDate.set(date, record.completed);
-
-			const ms = parseHabitDate(date);
-			if (ms === null) continue;
-			earliestMs = earliestMs === null ? ms : Math.min(earliestMs, ms);
-			latestMs = latestMs === null ? ms : Math.max(latestMs, ms);
-		}
-
-		if (byDate.size === 0 || earliestMs === null || latestMs === null) return null;
-
-		const today = localToday();
-		const todayMs = parseHabitDate(today);
-
-		// Decide which day the streak is anchored on
-		let anchorDateStr: string | null = null;
-		let anchorMs: number | null = null;
-		let targetCompleted: boolean | null = null;
-
-		const todayCompleted = byDate.get(today);
-
-		if (todayCompleted !== undefined && todayMs !== null) {
-			// Today has an explicit entry (completed or missed) → include it
-			anchorDateStr = today;
-			anchorMs = todayMs;
-			targetCompleted = todayCompleted;
-		} else {
-			// Today not done → ignore it, anchor on latest day < today
-			let cursorMs = latestMs;
-			while (true) {
-				const cursorDate = formatDateString(new Date(cursorMs));
-
-				// Only consider strictly before today
-				if (cursorDate < today && byDate.has(cursorDate)) {
-					anchorDateStr = cursorDate;
-					anchorMs = cursorMs;
-					targetCompleted = byDate.get(cursorDate)!;
-					break;
-				}
-
-				cursorMs -= DAY_MS;
-				if (cursorMs < earliestMs) break;
-			}
-			if (anchorDateStr === null || anchorMs === null || targetCompleted === null) {
-				return null;
-			}
-		}
-
-		// Walk backwards from the anchor while values match
-		let streakLength = 0;
-		let cursorMs2 = anchorMs;
-
-		while (true) {
-			const cursorDate = formatDateString(new Date(cursorMs2));
-			const value = byDate.get(cursorDate);
-			if (value === undefined || value !== targetCompleted) break;
-
-			streakLength += 1;
-			cursorMs2 -= DAY_MS;
-			if (cursorMs2 < earliestMs) break;
-		}
-
-		return {
-			kind: targetCompleted ? 'positive' : 'negative',
-			length: streakLength,
-			missesOnLatest: targetCompleted ? 0 : 1
-		};
+	function habitStatusRecordsForUser(user_id: string, habitId: string): HabitDayStatus[] {
+		return habitStatusByUser[user_id]?.[habitId] ?? [];
 	}
-
-	function habitStreakRecordForBlock(
+	function habitCompletionStatusForBlock(
 		user_id: string,
 		h: number,
 		half01: 0 | 1
-	): Record<HabitKey, PlayerStreak | null> {
-		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
-		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
-		const hasTodayEntry = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
-		const blockStatus = getStatus(user_id, h, half01);
-		const blockCompleted = blockStatus === true;
-		return HABIT_STREAK_KEYS.reduce(
-			(acc, key) => {
-				const promptActive =
-					habitCheckPrompt &&
-					habitCheckPrompt.user_id === user_id &&
-					habitCheckPrompt.habitHour === h &&
-					habitCheckPrompt.habitHalf === half01 &&
-					habitCheckPrompt.habitKey === key;
-				if (promptActive) {
-					acc[key] = (fallbackRecord ?? record)?.[key] ?? null;
-					return acc;
-				}
-				const useCurrent = blockCompleted || hasTodayEntry[key];
-				const source = useCurrent ? record : fallbackRecord;
-				let value = source?.[key] ?? null;
-				if (blockCompleted && !hasTodayEntry[key]) {
-					const base = fallbackRecord?.[key] ?? null;
-					const baseLen = base && base.kind === 'positive' ? base.length : 0;
-					value = {
-						kind: 'positive',
-						length: Math.max(1, baseLen + 1),
-						missesOnLatest: 0
-					};
-				}
-				acc[key] = value;
-				return acc;
-			},
-			{} as Record<HabitKey, PlayerStreak | null>
-		);
+	): boolean | null {
+		const habit = getHabitEntry(user_id, h, half01);
+		if (!habit) return null;
+		const dateStr = displayDateForUser(user_id);
+		const records = habitStatusRecordsForUser(user_id, habit.id);
+		const match = records.find((record) => record.date === dateStr);
+		return match ? match.completed : null;
 	}
-
 	function habitStreakForBlock(user_id: string, h: number, half01: 0 | 1): PlayerStreak | null {
-		const habitName = getHabitTitle(user_id, h, half01);
-		const key = normalizeHabitName(habitName);
-		if (!key) return null;
-		const view = habitStreakRecordForBlock(user_id, h, half01);
-		return view[key] ?? null;
+		const habit = getHabitEntry(user_id, h, half01);
+		if (!habit) return null;
+		const records = habitStatusRecordsForUser(user_id, habit.id);
+		return calculateHabitStreak(habit, records, h, half01);
 	}
 
 	function getHourIndex(value: number) {
@@ -1283,9 +1254,9 @@
 	}
 	function cutBlockAt(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
-		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
+		const habitEntry = getHabitEntry(user_id, hour, half);
 		if (!blockHasContent(user_id, hour, half)) return false;
-		if (habitName.length > 0) return false;
+		if (habitEntry) return false;
 		cancelCutBlock();
 		const sourceValue = getBlock(user_id, hour, half);
 		cutBlock = {
@@ -1297,7 +1268,7 @@
 				status: sourceValue.status,
 				category: sourceValue.category ?? null
 			},
-			habitTitle: habitName.length > 0 ? habitName : null
+			habit: null
 		};
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex !== -1) {
@@ -1316,9 +1287,9 @@
 	}
 	function copyBlockAt(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
-		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
+		const habitEntry = getHabitEntry(user_id, hour, half);
 		if (!blockHasContent(user_id, hour, half)) return false;
-		if (habitName.length > 0) return false;
+		if (habitEntry) return false;
 		const sourceValue = getBlock(user_id, hour, half);
 		copyBlock = {
 			user_id,
@@ -1349,6 +1320,7 @@
 			cancelCutBlock();
 			return true;
 		}
+		if (getHabitEntry(user_id, hour, half)) return false;
 		const move: PendingMove = {
 			user_id,
 			fromHour,
@@ -1374,13 +1346,13 @@
 	function shouldConfirmCopy(copy: PendingCopy) {
 		const { user_id, toHour, toHalf } = copy;
 		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
-		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
-		return destinationTitle.length > 0 || destinationHabit.length > 0;
+		return destinationTitle.length > 0;
 	}
 	function pasteCopyBlockToTarget(hour: number, half: 0 | 1) {
 		if (!copyBlock) return false;
 		const { user_id, hour: fromHour, half: fromHalf, value } = copyBlock;
 		if (hour === fromHour && half === fromHalf) return true;
+		if (getHabitEntry(user_id, hour, half)) return false;
 		const copy: PendingCopy = {
 			user_id,
 			fromHour,
@@ -1476,8 +1448,6 @@
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
 		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
-		const habitName = getHabitTitle(viewerUserId, hour, selectedBlock.half);
-		if ((habitName ?? '').trim().length > 0) return false;
 		openEditor(viewerUserId, hour, selectedBlock.half, normal);
 		return true;
 	}
@@ -1489,9 +1459,8 @@
 			if (hour === undefined) continue;
 			const title = getTitle(user_id, hour, half);
 			const status = getStatus(user_id, hour, half);
-
-			const habitName = getHabitTitle(user_id, hour, half);
-			const hasHabit = (habitName ?? '').trim().length > 0;
+			const habit = getHabitEntry(user_id, hour, half);
+			const hasHabit = Boolean(habit);
 			const hasContent = getDisplayTitle(user_id, hour, half).length > 0;
 
 			if (!hasContent) {
@@ -1505,7 +1474,7 @@
 				title: title ?? '',
 				status: status ?? null,
 				category: getCategory(user_id, hour, half),
-				habitName,
+				habit,
 				hasHabit
 			});
 		}
@@ -1588,14 +1557,13 @@
 		const movedSelection = moves.find((move) => move.fromIndex === startIndex);
 		for (const entry of clearEntries) {
 			setTitle(user_id, entry.hour, entry.half, '', null, null);
-			if (entry.hasHabit) setHabitTitle(user_id, entry.hour, entry.half, null);
+			if (entry.hasHabit) setHabitEntry(user_id, entry.hour, entry.half, null);
 		}
 		for (const move of moves) {
 			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
 			if (toHour === undefined) continue;
-			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
-			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
+			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : '';
 			setTitle(
 				user_id,
 				toHour,
@@ -1604,9 +1572,7 @@
 				move.entry.status ?? null,
 				move.entry.category
 			);
-			if (move.entry.hasHabit) {
-				setHabitTitle(user_id, toHour, toHalf, habitName ?? null);
-			}
+			if (move.entry.hasHabit) setHabitEntry(user_id, toHour, toHalf, move.entry.habit ?? null);
 		}
 		if (viewerUserId === user_id && movedSelection) {
 			const { hourIndex, half } = blockFromIndex(movedSelection.toIndex);
@@ -1644,9 +1610,9 @@
 		for (const move of moves) {
 			const { hour: toHour, half: toHalf } = blockFromIndex(move.toIndex);
 			if (toHour === undefined) continue;
-			const habitName = move.entry.habitName ?? null;
 			const baseTitle = move.entry.title ?? '';
-			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : (habitName ?? '');
+			const habitTitle = move.entry.habit?.name ?? '';
+			const resolvedTitle = baseTitle.trim().length > 0 ? baseTitle : habitTitle;
 			const hasHoursContent = resolvedTitle.trim().length > 0 || move.entry.hasHabit;
 			if (!hasHoursContent) continue;
 			updates.set(`${toHour}-${toHalf}`, {
@@ -2083,11 +2049,48 @@
 		};
 		applyRealtimeBlockValue(user_id, hour, half, blockValue);
 	}
+	function handleHabitStatusRealtime(
+		user_id: string,
+		payload: RealtimePostgresChangesPayload<HabitStatusRowPayload>
+	) {
+		const row = (payload.new ?? payload.old) as HabitStatusRowPayload | null;
+		if (!row || row.user_id !== user_id) return;
+		const habitId = row.habit_id;
+		const day = row.day;
+		if (!habitId || !day) return;
+		const userRecords = habitStatusByUser[user_id] ?? {};
+		const records = userRecords[habitId] ?? [];
+		if (payload.eventType === 'DELETE') {
+			const nextRecords = records.filter((record) => record.date !== day);
+			habitStatusByUser = {
+				...habitStatusByUser,
+				[user_id]: { ...userRecords, [habitId]: nextRecords }
+			};
+			return;
+		}
+		const completed = Boolean(row.completed);
+		const existingIndex = records.findIndex((record) => record.date === day);
+		const nextEntry: HabitDayStatus = { date: day, completed };
+		const nextRecords =
+			existingIndex === -1
+				? [...records, nextEntry]
+				: records.map((record, index) => (index === existingIndex ? nextEntry : record));
+		habitStatusByUser = {
+			...habitStatusByUser,
+			[user_id]: { ...userRecords, [habitId]: nextRecords }
+		};
+	}
 	function teardownHoursRealtime(user_id: string) {
 		const current = hoursRealtimeByUser[user_id];
 		if (!current) return;
 		current.channel.unsubscribe();
 		hoursRealtimeByUser[user_id] = null;
+	}
+	function teardownHabitStatusRealtime(user_id: string) {
+		const current = habitStatusRealtimeByUser[user_id];
+		if (!current) return;
+		current.unsubscribe();
+		habitStatusRealtimeByUser[user_id] = null;
 	}
 	function ensureHoursRealtime(user_id: string, day_id: string | null) {
 		const existing = hoursRealtimeByUser[user_id];
@@ -2111,6 +2114,26 @@
 		);
 		channel.subscribe();
 		hoursRealtimeByUser[user_id] = { channel, day_id };
+	}
+	function ensureHabitStatusRealtime(user_id: string) {
+		const existing = habitStatusRealtimeByUser[user_id];
+		if (viewerUserId && user_id === viewerUserId) {
+			if (existing) teardownHabitStatusRealtime(user_id);
+			return;
+		}
+		if (existing) return;
+		const channel = supabase.channel(`habit-status:${user_id}`);
+		channel.on(
+			'postgres_changes',
+			{ event: '*', schema: 'public', table: 'habit_day_status' },
+			(payload) =>
+				handleHabitStatusRealtime(
+					user_id,
+					payload as RealtimePostgresChangesPayload<HabitStatusRowPayload>
+				)
+		);
+		channel.subscribe();
+		habitStatusRealtimeByUser[user_id] = channel;
 	}
 	function teardownSelectedBlockRealtime(user_id: string) {
 		const current = selectedBlockRealtimeByUser[user_id];
@@ -2196,11 +2219,14 @@
 		for (const userId of Object.keys(selectedBlockRealtimeByUser)) {
 			teardownSelectedBlockRealtime(userId);
 		}
+		for (const userId of Object.keys(habitStatusRealtimeByUser)) {
+			teardownHabitStatusRealtime(userId);
+		}
 	}
 	async function loadHabitsForUser(user_id: string) {
 		const { data, error } = await supabase
 			.from('habits')
-			.select('hour, half, name')
+			.select('id, hour, half, name, repeat_days, category, created_at')
 			.eq('user_id', user_id);
 		if (error) throw error;
 		const next: Record<number, HabitBlockRow> = {};
@@ -2208,22 +2234,31 @@
 			const h = r.hour as number;
 			const half01 = (r.half ? 1 : 0) as 0 | 1;
 			const name = r.name ?? '';
+			const createdAt = r.created_at ? new Date(r.created_at as string) : new Date();
+			const createdAtMs = Number.isNaN(createdAt.getTime()) ? Date.now() : createdAt.getTime();
+			const entry: HabitEntry = {
+				id: r.id as string,
+				name,
+				repeatDays: (r.repeat_days as number[] | null) ?? [0, 1, 2, 3, 4, 5, 6],
+				category: normalizeBlockCategory(r.category),
+				createdAtMs
+			};
 			next[h] ??= { first: null, second: null };
-			if (half01 === 0) next[h].first = name;
-			else next[h].second = name;
+			if (half01 === 0) next[h].first = entry;
+			else next[h].second = entry;
 		}
 		habitsByUser[user_id] = next;
 	}
-	async function upsertHabitDayStatus(user_id: string, habitName: string, completed: boolean) {
+	async function upsertHabitDayStatus(user_id: string, habitId: string, completed: boolean) {
 		const day = localToday();
 		const { error } = await supabase.from('habit_day_status').upsert(
 			{
 				user_id,
-				habit_name: habitName,
+				habit_id: habitId,
 				day,
 				completed
 			},
-			{ onConflict: 'user_id,habit_name,day' }
+			{ onConflict: 'habit_id,day' }
 		);
 		if (error) {
 			console.error('habit day status update error', error);
@@ -2231,105 +2266,47 @@
 		}
 		return true;
 	}
-	function optimisticUpdateHabitStreak(user_id: string, habitName: string, completed: boolean) {
-		const key = normalizeHabitName(habitName);
-		if (!key) return;
-		const record = habitStreaksByUser[user_id] ?? emptyHabitStreakRecord();
-		const fallbackRecord = habitStreaksByUserExcludingToday[user_id] ?? record;
-		const base = fallbackRecord[key] ?? null;
-		let updated: PlayerStreak | null = null;
-		if (completed) {
-			const baseLen = base && base.kind === 'positive' ? base.length : 0;
-			updated = {
-				kind: 'positive',
-				length: Math.max(1, baseLen + 1),
-				missesOnLatest: 0
-			};
-		} else {
-			const baseLen = base && base.kind === 'negative' ? base.length : 0;
-			updated = {
-				kind: 'negative',
-				length: Math.max(1, baseLen + 1),
-				missesOnLatest: 1
-			};
-		}
-		const hasToday = habitHasTodayEntryByUser[user_id] ?? emptyHabitTodayEntryRecord();
-		habitStreaksByUser = {
-			...habitStreaksByUser,
-			[user_id]: { ...record, [key]: updated }
-		};
-		habitHasTodayEntryByUser = {
-			...habitHasTodayEntryByUser,
-			[user_id]: { ...hasToday, [key]: true }
+	function optimisticUpdateHabitStatus(user_id: string, habitId: string, completed: boolean) {
+		const day = localToday();
+		const userRecords = habitStatusByUser[user_id] ?? {};
+		const records = userRecords[habitId] ?? [];
+		const existingIndex = records.findIndex((record) => record.date === day);
+		const nextEntry: HabitDayStatus = { date: day, completed };
+		const nextRecords =
+			existingIndex === -1
+				? [...records, nextEntry]
+				: records.map((record, index) => (index === existingIndex ? nextEntry : record));
+		habitStatusByUser = {
+			...habitStatusByUser,
+			[user_id]: { ...userRecords, [habitId]: nextRecords }
 		};
 	}
-	async function loadHabitStreaksForUser(user_id: string) {
+	async function loadHabitStatusForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(STREAK_LOOKBACK_DAYS);
 		try {
 			const { data, error } = await supabase
 				.from('habit_day_status')
-				.select('habit_name, day, completed')
+				.select('habit_id, day, completed')
 				.eq('user_id', user_id)
 				.gte('day', lookbackStart);
 			if (error) throw error;
-			const grouped = HABIT_STREAK_KEYS.reduce(
-				(acc, key) => {
-					acc[key] = [] as HabitDayStatus[];
-					return acc;
-				},
-				{} as Record<HabitKey, HabitDayStatus[]>
-			);
+			const grouped: Record<string, HabitDayStatus[]> = {};
 			for (const row of data ?? []) {
-				const key = normalizeHabitName(row.habit_name as string | null);
-				if (!key) continue;
+				const habitId = row.habit_id as string | null;
+				if (!habitId) continue;
 				const day = row.day as string | null;
 				if (!day) continue;
 				const completed = Boolean(row.completed);
-				grouped[key].push({
+				grouped[habitId] ??= [];
+				grouped[habitId].push({
 					date: day,
 					completed
 				});
 			}
-			const today = localToday();
-			const streakRecord = HABIT_STREAK_KEYS.reduce(
-				(acc, key) => {
-					const summaries = grouped[key];
-					acc[key] = summaries.length === 0 ? null : calculateHabitStreak(summaries);
-					return acc;
-				},
-				{} as Record<HabitKey, PlayerStreak | null>
-			);
-			const streakRecordExcludingToday = HABIT_STREAK_KEYS.reduce(
-				(acc, key) => {
-					const summaries = grouped[key];
-					const filtered = summaries.filter((record) => record.date !== today);
-					acc[key] = filtered.length === 0 ? null : calculateHabitStreak(filtered);
-					return acc;
-				},
-				{} as Record<HabitKey, PlayerStreak | null>
-			);
-			const hasToday = HABIT_STREAK_KEYS.reduce(
-				(acc, key) => {
-					acc[key] = grouped[key].some((record) => record.date === today);
-					return acc;
-				},
-				{} as Record<HabitKey, boolean>
-			);
-			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: streakRecord };
-			habitStreaksByUserExcludingToday = {
-				...habitStreaksByUserExcludingToday,
-				[user_id]: streakRecordExcludingToday
-			};
-			habitHasTodayEntryByUser = { ...habitHasTodayEntryByUser, [user_id]: hasToday };
+			habitStatusByUser = { ...habitStatusByUser, [user_id]: grouped };
 		} catch (error) {
 			console.error('load habit streak error', { user_id, error });
-			const empty = emptyHabitStreakRecord();
-			habitStreaksByUser = { ...habitStreaksByUser, [user_id]: empty };
-			habitStreaksByUserExcludingToday = { ...habitStreaksByUserExcludingToday, [user_id]: empty };
-			habitHasTodayEntryByUser = {
-				...habitHasTodayEntryByUser,
-				[user_id]: emptyHabitTodayEntryRecord()
-			};
+			habitStatusByUser = { ...habitStatusByUser, [user_id]: {} };
 		}
 	}
 
@@ -2398,13 +2375,17 @@
 			setSelectedBlock({ hourIndex, half: half01 });
 		}
 		const block = getBlock(user_id, h, half01);
+		const habit = getHabitEntry(user_id, h, half01);
+		const resolvedTitle = habit?.name ?? block.title ?? '';
+		const resolvedCategory = habit?.category ?? block.category ?? null;
 		draft = {
 			user_id,
 			hour: h,
 			half: half01,
-			title: block.title ?? '',
+			title: resolvedTitle,
 			status: block.status ?? null,
-			category: block.category ?? null
+			category: resolvedCategory,
+			habit
 		};
 		editorMode = normal ?? editorMode;
 		logOpen = true;
@@ -2423,7 +2404,8 @@
 		hour: number,
 		half: 0 | 1,
 		blockCount: number,
-		category: BlockCategory | null
+		category: BlockCategory | null,
+		habitConfig: HabitSaveConfig | null
 	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
@@ -2432,12 +2414,101 @@
 
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex === -1) return;
+		const trimmedTitle = text.trim();
+		if (habitConfig) {
+			if (!trimmedTitle) return;
+			const existingHabit = getHabitEntry(user_id, hour, half);
+			if (existingHabit && existingHabit.id !== habitConfig.id) return;
+			const payload = {
+				user_id,
+				name: trimmedTitle,
+				hour,
+				half: half === 1,
+				repeat_days: habitConfig.repeatDays,
+				category
+			};
+			try {
+				let saved: HabitEntry | null = null;
+				if (habitConfig.id) {
+					const { data, error } = await supabase
+						.from('habits')
+						.update(payload)
+						.eq('id', habitConfig.id)
+						.select('id, name, repeat_days, category, created_at')
+						.single();
+					if (error) throw error;
+					const createdAt = data.created_at ? new Date(data.created_at as string) : new Date();
+					const createdAtMs = Number.isNaN(createdAt.getTime()) ? Date.now() : createdAt.getTime();
+					saved = {
+						id: data.id as string,
+						name: data.name ?? '',
+						repeatDays: (data.repeat_days as number[] | null) ?? [0, 1, 2, 3, 4, 5, 6],
+						category: normalizeBlockCategory(data.category),
+						createdAtMs
+					};
+				} else {
+					const { data, error } = await supabase
+						.from('habits')
+						.insert(payload)
+						.select('id, name, repeat_days, category, created_at')
+						.single();
+					if (error) throw error;
+					const createdAt = data.created_at ? new Date(data.created_at as string) : new Date();
+					const createdAtMs = Number.isNaN(createdAt.getTime()) ? Date.now() : createdAt.getTime();
+					saved = {
+						id: data.id as string,
+						name: data.name ?? '',
+						repeatDays: (data.repeat_days as number[] | null) ?? [0, 1, 2, 3, 4, 5, 6],
+						category: normalizeBlockCategory(data.category),
+						createdAtMs
+					};
+				}
+				if (saved) {
+					clearHabitEntryById(user_id, saved.id);
+					setHabitEntry(user_id, hour, half, saved);
+					const existingBlock = getBlock(user_id, hour, half);
+					const hasHoursContent =
+						(existingBlock.title ?? '').trim().length > 0 ||
+						existingBlock.status !== null ||
+						existingBlock.category !== null;
+					if (hasHoursContent) {
+						const { error: deleteErr } = await supabase
+							.from('hours')
+							.delete()
+							.eq('day_id', day_id)
+							.eq('hour', hour)
+							.eq('half', half === 1);
+						if (deleteErr) {
+							console.error('save habit clear block error', deleteErr);
+						} else {
+							setTitle(user_id, hour, half, '', null, null);
+						}
+					}
+				}
+			} catch (error) {
+				console.error('save habit error', error);
+			}
+			closeLogModal();
+			return;
+		}
+		const existingHabit = getHabitEntry(user_id, hour, half);
+		if (existingHabit) {
+			const { error: deleteHabitErr } = await supabase
+				.from('habits')
+				.delete()
+				.eq('id', existingHabit.id);
+			if (deleteHabitErr) {
+				console.error('save block habit delete error', deleteHabitErr);
+				return;
+			}
+			setHabitEntry(user_id, hour, half, null);
+			clearHabitStatusById(user_id, existingHabit.id);
+		}
 		const totalBlocks = hours.length * 2;
 		const isNewBlock = (draft.title ?? '').trim().length === 0;
 		const maxCount = maxBlockCountFor(user_id, hour, half);
 		const desiredCount = isNewBlock ? Math.min(blockCount, maxCount) : 1;
 		const targets: { hour: number; half: 0 | 1 }[] = [];
-		const trimmedTitle = text.trim();
 		let resolvedCategory = category;
 		const currentCategory = getBlock(user_id, hour, half).category ?? null;
 		const shouldUpdateRunCategory = !isNewBlock && resolvedCategory !== currentCategory;
@@ -2559,7 +2630,15 @@
 			category: BlockCategory | null;
 		}[] = [];
 		const deletions: UndoEntry[] = [];
-		const habitUpserts: { user_id: string; name: string; hour: number; half: boolean }[] = [];
+		const habitUpserts: {
+			id: string;
+			user_id: string;
+			name: string;
+			hour: number;
+			half: boolean;
+			repeat_days: number[];
+			category: BlockCategory | null;
+		}[] = [];
 		const habitDeletes: UndoEntry[] = [];
 
 		for (const entry of action.entries) {
@@ -2575,12 +2654,15 @@
 			} else {
 				deletions.push(entry);
 			}
-			if (entry.habitName) {
+			if (entry.habit) {
 				habitUpserts.push({
+					id: entry.habit.id,
 					user_id: entry.user_id,
-					name: entry.habitName,
+					name: entry.habit.name,
 					hour: entry.hour,
-					half: entry.half === 1
+					half: entry.half === 1,
+					repeat_days: entry.habit.repeatDays,
+					category: entry.habit.category
 				});
 			} else {
 				habitDeletes.push(entry);
@@ -2601,7 +2683,7 @@
 				} else {
 					setTitle(entry.user_id, entry.hour, entry.half, '', null, null);
 				}
-				setHabitTitle(entry.user_id, entry.hour, entry.half, entry.habitName ?? null);
+				setHabitEntry(entry.user_id, entry.hour, entry.half, entry.habit ?? null);
 			}
 
 			const hoursDeletes = deletions.map((entry) =>
@@ -2613,12 +2695,14 @@
 					.eq('half', entry.half === 1)
 			);
 			const habitDeletesCalls = habitDeletes.map((entry) =>
-				supabase
-					.from('habits')
-					.delete()
-					.eq('user_id', entry.user_id)
-					.eq('hour', entry.hour)
-					.eq('half', entry.half === 1)
+				entry.habit
+					? supabase.from('habits').delete().eq('id', entry.habit.id)
+					: supabase
+							.from('habits')
+							.delete()
+							.eq('user_id', entry.user_id)
+							.eq('hour', entry.hour)
+							.eq('half', entry.half === 1)
 			);
 			const hoursUpsert =
 				upserts.length > 0
@@ -2626,7 +2710,7 @@
 					: null;
 			const habitsUpsert =
 				habitUpserts.length > 0
-					? supabase.from('habits').upsert(habitUpserts, { onConflict: 'user_id,hour,half' })
+					? supabase.from('habits').upsert(habitUpserts, { onConflict: 'id' })
 					: null;
 
 			const results = await Promise.all(
@@ -2646,33 +2730,14 @@
 		if (suppressNextClick) return;
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
-		const habitName = (getHabitTitle(user_id, hour, half) ?? '').trim();
-		const isHabitBlock = habitName.length > 0;
+		const habitEntry = getHabitEntry(user_id, hour, half);
 		const block = getBlock(user_id, hour, half);
-		if (isHabitBlock) {
+		if (habitEntry) {
 			if (displayDateForUser(user_id) !== localToday()) return;
-			pushUndoAction(user_id, day_id, [{ hour, half }]);
-			const nextStatus = block.status === true ? false : true;
-			const resolvedTitle = (block.title ?? '').trim() || habitName;
-			const { error } = await supabase.from('hours').upsert(
-				{
-					day_id,
-					hour,
-					half: half === 1,
-					title: resolvedTitle,
-					status: nextStatus,
-					habit: true
-				},
-				{ onConflict: 'day_id,hour,half' }
-			);
-			if (error) {
-				console.error('cycle habit status error', error);
-				return;
-			}
-			void upsertHabitDayStatus(user_id, habitName, nextStatus);
-			optimisticUpdateHabitStreak(user_id, habitName, nextStatus);
-			setTitle(user_id, hour, half, resolvedTitle, nextStatus);
-			void loadHabitStreaksForUser(user_id);
+			const currentStatus = habitCompletionStatusForBlock(user_id, hour, half);
+			const nextStatus = currentStatus === true ? false : true;
+			void upsertHabitDayStatus(user_id, habitEntry.id, nextStatus);
+			optimisticUpdateHabitStatus(user_id, habitEntry.id, nextStatus);
 			return;
 		}
 		const title = (block.title ?? '').trim();
@@ -2750,8 +2815,8 @@
 	}
 	function shouldConfirmMove(move: PendingMove) {
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
-		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
-		if (sourceHabitName.length > 0) return true;
+		const sourceHabit = getHabitEntry(user_id, fromHour, fromHalf);
+		if (sourceHabit) return true;
 		return blockHasContent(user_id, toHour, toHalf);
 	}
 	async function submitCopy(copy: PendingCopy): Promise<boolean> {
@@ -2762,7 +2827,8 @@
 			if (viewerUserId !== user_id) return false;
 			const day_id = dayIdByUser[user_id];
 			if (!day_id) return false;
-			const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+			const destinationHabit = getHabitEntry(user_id, toHour, toHalf);
+			if (destinationHabit) return false;
 
 			pushUndoAction(user_id, day_id, [{ hour: toHour, half: toHalf }]);
 
@@ -2792,18 +2858,6 @@
 				value.status ?? null,
 				value.category ?? null
 			);
-			if (destinationHabit.length > 0) {
-				const { error: deleteHabitErr } = await supabase
-					.from('habits')
-					.delete()
-					.eq('user_id', user_id)
-					.eq('hour', toHour)
-					.eq('half', toHalf === 1);
-				if (deleteHabitErr) {
-					console.error('block copy destination habit delete error', deleteHabitErr);
-				}
-				setHabitTitle(user_id, toHour, toHalf, null);
-			}
 			if (viewerUserId === user_id) {
 				const hourIndex = getHourIndex(toHour);
 				if (hourIndex !== -1) {
@@ -2845,6 +2899,34 @@
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return false;
 		if (!blockHasContent(user_id, fromHour, fromHalf)) return false;
+		const sourceHabit = getHabitEntry(user_id, fromHour, fromHalf);
+		const destinationHabit = getHabitEntry(user_id, toHour, toHalf);
+		if (sourceHabit) {
+			if (destinationHabit) return false;
+			if (blockHasContent(user_id, toHour, toHalf)) return false;
+			pushUndoAction(user_id, day_id, [
+				{ hour: fromHour, half: fromHalf },
+				{ hour: toHour, half: toHalf }
+			]);
+			const { error: updateHabitErr } = await supabase
+				.from('habits')
+				.update({ hour: toHour, half: toHalf === 1 })
+				.eq('id', sourceHabit.id);
+			if (updateHabitErr) {
+				console.error('habit move error', updateHabitErr);
+				return false;
+			}
+			setHabitEntry(user_id, toHour, toHalf, sourceHabit);
+			setHabitEntry(user_id, fromHour, fromHalf, null);
+			if (viewerUserId === user_id) {
+				const hourIndex = getHourIndex(toHour);
+				if (hourIndex !== -1) {
+					setSelectedBlock({ hourIndex, half: toHalf });
+				}
+			}
+			return true;
+		}
+		if (destinationHabit) return false;
 
 		const sourceBlock = getBlock(user_id, fromHour, fromHalf);
 		const sourceValue: BlockValue = {
@@ -2863,8 +2945,8 @@
 			: null;
 		const destinationHasHoursContent =
 			destinationValue !== null && (destinationValue.title ?? '').trim().length > 0;
-		const sourceHabitName = (getHabitTitle(user_id, fromHour, fromHalf) ?? '').trim();
-		const destinationHabitName = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		const sourceHabitName = '';
+		const destinationHabitName = '';
 
 		pushUndoAction(user_id, day_id, [
 			{ hour: fromHour, half: fromHalf },
@@ -2922,50 +3004,6 @@
 			setTitle(user_id, fromHour, fromHalf, '', null, null);
 		}
 
-		if (destinationHabitName.length > 0) {
-			const { error: deleteHabitErr } = await supabase
-				.from('habits')
-				.delete()
-				.eq('user_id', user_id)
-				.eq('hour', toHour)
-				.eq('half', toHalf === 1);
-			if (deleteHabitErr) {
-				console.error('block move destination habit delete error', deleteHabitErr);
-			}
-		}
-
-		if (sourceHabitName.length > 0) {
-			const { error: updateHabitErr } = await supabase
-				.from('habits')
-				.update({ hour: toHour, half: toHalf === 1 })
-				.eq('user_id', user_id)
-				.eq('hour', fromHour)
-				.eq('half', fromHalf === 1);
-			if (updateHabitErr) {
-				console.error('habit move error', updateHabitErr);
-			}
-		}
-
-		if (destinationHabitName.length > 0) {
-			const { error: insertHabitErr } = await supabase.from('habits').upsert(
-				{
-					user_id,
-					name: destinationHabitName,
-					hour: fromHour,
-					half: fromHalf === 1
-				},
-				{ onConflict: 'user_id,hour,half' }
-			);
-			if (insertHabitErr) {
-				console.error('habit swap insert error', insertHabitErr);
-			}
-		}
-
-		const nextDestinationHabit = sourceHabitName.length > 0 ? sourceHabitName : null;
-		const nextSourceHabit = destinationHabitName.length > 0 ? destinationHabitName : null;
-		setHabitTitle(user_id, toHour, toHalf, nextDestinationHabit);
-		setHabitTitle(user_id, fromHour, fromHalf, nextSourceHabit);
-
 		return true;
 	}
 
@@ -2987,6 +3025,17 @@
 		const { user_id, hour, half } = action;
 		if (viewerUserId !== user_id) return false;
 		const day_id = dayIdByUser[user_id];
+		const habitEntry = getHabitEntry(user_id, hour, half);
+		if (habitEntry) {
+			const { error } = await supabase.from('habits').delete().eq('id', habitEntry.id);
+			if (error) {
+				console.error('habit delete error', error);
+				return false;
+			}
+			setHabitEntry(user_id, hour, half, null);
+			clearHabitStatusById(user_id, habitEntry.id);
+			return true;
+		}
 		const title = (getTitle(user_id, hour, half) ?? '').trim();
 		const status = getStatus(user_id, hour, half);
 		const hourIndex = getHourIndex(hour);
@@ -3400,44 +3449,6 @@
 		}
 	}
 
-	async function resolveHabitPrompt(completed: boolean) {
-		if (!habitCheckPrompt || isHabitPromptSubmitting) return;
-		isHabitPromptSubmitting = true;
-
-		const { user_id, habitHour, habitHalf, currHour, currHalf, habitKey, habitName } =
-			habitCheckPrompt;
-		try {
-			if (displayDateForUser(user_id) !== localToday()) return;
-			const day_id = dayIdByUser[user_id];
-			if (!day_id) return;
-			const block = getBlock(user_id, habitHour, habitHalf);
-			const resolvedTitle = (block.title ?? '').trim() || habitName;
-			const { error } = await supabase.from('hours').upsert(
-				{
-					day_id,
-					hour: habitHour,
-					half: habitHalf === 1,
-					title: resolvedTitle,
-					status: completed,
-					habit: true
-				},
-				{ onConflict: 'day_id,hour,half' }
-			);
-			if (error) {
-				console.error('habit prompt update error', error);
-				return;
-			}
-			void upsertHabitDayStatus(user_id, habitName, completed);
-			optimisticUpdateHabitStreak(user_id, habitName, completed);
-			setTitle(user_id, habitHour, habitHalf, resolvedTitle, completed);
-			habitCheckPrompt = null;
-			void loadHabitStreaksForUser(user_id);
-		} finally {
-			isHabitPromptSubmitting = false;
-		}
-		openEditor(user_id, currHour, currHalf, false);
-	}
-
 	async function refreshSpectatorDay(dateStr: string) {
 		const perUserLoads = people.map(async ({ user_id }) => {
 			const dayId = await getDayIdForUser(user_id, dateStr, false);
@@ -3661,7 +3672,7 @@
 				dayIdByUser[user_id] = dayId;
 				const tasks: Promise<void>[] = [
 					loadHabitsForUser(user_id),
-					loadHabitStreaksForUser(user_id),
+					loadHabitStatusForUser(user_id),
 					loadCompletionStreakForUser(
 						user_id,
 						currentStreakValues[user_id] ?? null,
@@ -3671,6 +3682,7 @@
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
 				ensureHoursRealtime(user_id, dayId);
+				ensureHabitStatusRealtime(user_id);
 			});
 
 			await Promise.all(perUserLoads);
@@ -3833,8 +3845,8 @@
 										>
 											<Block
 												title={getTitle(person.user_id, h, 0)}
-												status={getStatus(person.user_id, h, 0)}
-												category={getCategory(person.user_id, h, 0)}
+												status={getDisplayStatus(person.user_id, h, 0)}
+												category={getDisplayCategory(person.user_id, h, 0)}
 												showStatus={blockShowsStatus(person.user_id, h, 0)}
 												editable={canEditDayForUser(person.user_id)}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
@@ -3872,8 +3884,8 @@
 										>
 											<Block
 												title={getTitle(person.user_id, h, 1)}
-												status={getStatus(person.user_id, h, 1)}
-												category={getCategory(person.user_id, h, 1)}
+												status={getDisplayStatus(person.user_id, h, 1)}
+												category={getDisplayCategory(person.user_id, h, 1)}
 												showStatus={blockShowsStatus(person.user_id, h, 1)}
 												editable={canEditDayForUser(person.user_id)}
 												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
@@ -4002,40 +4014,10 @@
 	initialTitle={draft.title}
 	initialStatus={draft.status}
 	initialCategory={draft.category}
-	habitStreaks={logModalHabitStreaks}
+	initialHabit={draft.habit ? { id: draft.habit.id, repeatDays: draft.habit.repeatDays } : null}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
 />
-
-{#if habitCheckPrompt}
-	<div class="fixed inset-0 z-[1900] flex items-center justify-center">
-		<div class="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
-			<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Habit check</div>
-			<div class="mt-1 text-sm font-medium text-stone-900">
-				Did you complete {habitCheckPrompt.habitName}?
-			</div>
-
-			<div class="mt-4 flex justify-end gap-2">
-				<button
-					type="button"
-					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-60"
-					onclick={() => void resolveHabitPrompt(false)}
-					disabled={isHabitPromptSubmitting}
-				>
-					No
-				</button>
-				<button
-					type="button"
-					class="rounded-md bg-stone-900 px-3 py-1 text-xs font-semibold text-white hover:bg-stone-800 disabled:opacity-60"
-					onclick={() => void resolveHabitPrompt(true)}
-					disabled={isHabitPromptSubmitting}
-				>
-					Yes
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
 
 {#if carryoverPrompt}
 	<div class="fixed inset-0 z-[1900] flex items-center justify-center">

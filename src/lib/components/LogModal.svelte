@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { fade, fly, scale } from 'svelte/transition';
-	import type { PlayerStreak } from '$lib/streaks';
 
 	const START = 8;
 	const END = 23;
@@ -17,7 +16,7 @@
 		initialTitle = '',
 		initialStatus = null,
 		initialCategory = null,
-		habitStreaks = null,
+		initialHabit = null,
 		maxBlockCountFor = null,
 		runLengthFor = null
 	} = $props<{
@@ -30,25 +29,25 @@
 			hour: number,
 			half: 0 | 1,
 			blockCount: number,
-			category: BlockCategory | null
+			category: BlockCategory | null,
+			habitConfig: HabitSaveConfig | null
 		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
 		initialStatus?: boolean | null;
 		initialCategory?: BlockCategory | null;
-		habitStreaks?: Record<string, PlayerStreak | null> | null;
+		initialHabit?: HabitConfig | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
 	}>();
 
 	type ModalMode = 'insert' | 'normal';
 
-	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
-	type HabitKey = (typeof HABIT_KEYS)[number];
-
 	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad';
 	type StatusKind = 'planned' | 'in_progress' | 'completed' | 'bad';
+	type HabitConfig = { id: string; repeatDays: number[] };
+	type HabitSaveConfig = { id: string | null; repeatDays: number[] };
 	type CategoryPreset = {
 		label: string;
 		value: BlockCategory;
@@ -61,15 +60,15 @@
 		{ label: 'Work', value: 'work', key: '3' },
 		{ label: 'Admin', value: 'admin', key: '4' }
 	];
-
-	const streakArrowClassFor = (key: HabitKey) => {
-		const streak = habitStreaks?.[key] ?? null;
-		const base = 'h-2 w-2 transition-transform';
-		if (!streak) return `${base} text-stone-400`;
-		const color = streak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
-		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
-		return `${base} ${color} ${rotation}`;
-	};
+	const HABIT_DAYS = [
+		{ label: 'Mon', value: 0 },
+		{ label: 'Tue', value: 1 },
+		{ label: 'Wed', value: 2 },
+		{ label: 'Thu', value: 3 },
+		{ label: 'Fri', value: 4 },
+		{ label: 'Sat', value: 5 },
+		{ label: 'Sun', value: 6 }
+	];
 
 	let text = $state('');
 	let status = $state<boolean | null>(null);
@@ -77,6 +76,11 @@
 	let blockCount = $state(1);
 	let isNewBlock = $state(true);
 	let runLength = $state(1);
+	let habitMode = $state(false);
+	let habitMenuOpen = $state(false);
+	let habitMenuIndex = $state(0);
+	let habitDays = $state<number[]>([0, 1, 2, 3, 4, 5, 6]);
+	let habitId = $state<string | null>(null);
 	const statusKind = $derived<StatusKind>(
 		category === 'bad'
 			? 'bad'
@@ -96,13 +100,15 @@
 					: 'Planned'
 	);
 	const displayedBlockCount = $derived(isNewBlock ? blockCount : runLength);
-	const blockCountDisabled = $derived(!isNewBlock);
+	const blockCountDisabled = $derived(!isNewBlock || habitMode);
+	const statusDisabled = $derived(habitMode);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
 	let hour = $state<number>((initialHour ?? currentBlock().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentBlock().half) as 0 | 1);
 	let mode = $state<ModalMode>(normal ? 'normal' : 'insert');
+	let didInit = $state(false);
 
 	function focusInputSoon() {
 		queueMicrotask(() => inputEl?.focus());
@@ -151,6 +157,26 @@
 		setStatusKind(next);
 	}
 
+	function toggleHabitDay(value: number) {
+		if (habitDays.includes(value)) {
+			habitDays = habitDays.filter((day) => day !== value);
+		} else {
+			habitDays = [...habitDays, value].sort((a, b) => a - b);
+		}
+	}
+	function toggleHabitMenu() {
+		habitMenuOpen = !habitMenuOpen;
+		if (habitMenuOpen) {
+			if (!habitMode) habitMode = true;
+			if (habitDays.length === 0) habitDays = [0, 1, 2, 3, 4, 5, 6];
+			habitMenuIndex = Math.min(habitMenuIndex, HABIT_DAYS.length - 1);
+		}
+	}
+	function disableHabitMode() {
+		habitMode = false;
+		habitMenuOpen = false;
+	}
+
 	function maxBlockCount() {
 		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
@@ -164,6 +190,30 @@
 
 	function handleKeydown(e: KeyboardEvent) {
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+		if (habitMenuOpen) {
+			if (key === 'Escape') {
+				habitMenuOpen = false;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'j' || key === 'ArrowDown') {
+				habitMenuIndex = (habitMenuIndex + 1) % HABIT_DAYS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'k' || key === 'ArrowUp') {
+				habitMenuIndex = (habitMenuIndex - 1 + HABIT_DAYS.length) % HABIT_DAYS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'Enter') {
+				const day = HABIT_DAYS[habitMenuIndex];
+				if (day) toggleHabitDay(day.value);
+				e.preventDefault();
+				return;
+			}
+		}
 
 		if (key === 'Escape') {
 			if (mode === 'insert') {
@@ -188,6 +238,7 @@
 		}
 
 		if (mode === 'normal' && key === 's') {
+			if (statusDisabled) return;
 			e.preventDefault();
 			cycleStatus();
 			return;
@@ -227,7 +278,13 @@
 		saving = true;
 		try {
 			const saveCount = isNewBlock ? blockCount : 1;
-			await Promise.resolve(onSave(value, status, hour, half, saveCount, category));
+			const habitConfig = habitMode
+				? {
+						id: habitId,
+						repeatDays: habitDays.length > 0 ? habitDays : [0, 1, 2, 3, 4, 5, 6]
+					}
+				: null;
+			await Promise.resolve(onSave(value, status, hour, half, saveCount, category, habitConfig));
 			text = '';
 			status = null;
 			onClose();
@@ -247,20 +304,30 @@
 	});
 
 	$effect(() => {
-		if (!open) return;
+		if (!open) {
+			didInit = false;
+			return;
+		}
+		if (didInit) return;
+		didInit = true;
 		const fallback = currentBlock();
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
 		category = initialCategory ?? null;
-		isNewBlock = (initialTitle ?? '').trim().length === 0;
+		habitMode = Boolean(initialHabit);
+		habitId = initialHabit?.id ?? null;
+		habitDays = initialHabit?.repeatDays ?? [0, 1, 2, 3, 4, 5, 6];
+		habitMenuOpen = false;
+		habitMenuIndex = 0;
+		isNewBlock = (initialTitle ?? '').trim().length === 0 && !initialHabit;
 		runLength = !isNewBlock && runLengthFor ? runLengthFor(hour, half) : 1;
-		blockCount = isNewBlock ? 1 : runLength;
+		blockCount = habitMode ? 1 : isNewBlock ? 1 : runLength;
 	});
 
 	$effect(() => {
-		if (!open || isNewBlock) return;
+		if (!open || isNewBlock || habitMode) return;
 		runLength = runLengthFor ? runLengthFor(hour, half) : 1;
 		blockCount = runLength;
 	});
@@ -270,6 +337,16 @@
 		const maxCount = maxBlockCount();
 		if (blockCount > maxCount) {
 			blockCount = maxCount;
+		}
+	});
+	$effect(() => {
+		if (!open) return;
+		if (habitMode) {
+			status = null;
+			blockCount = 1;
+		}
+		if (!habitMode && habitMenuOpen) {
+			habitMenuOpen = false;
 		}
 	});
 
@@ -446,7 +523,10 @@
 				<button
 					type="button"
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					class:opacity-50={statusDisabled}
+					class:cursor-not-allowed={statusDisabled}
 					onclick={cycleStatus}
+					disabled={statusDisabled}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
 						{#if statusKind === 'bad'}
@@ -498,7 +578,64 @@
 				</button>
 			</div>
 
-			<div class="flex items-center justify-end gap-2 border-t border-stone-100 p-4 py-3">
+			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-4 py-3">
+				<div class="relative flex items-center gap-2">
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class:bg-stone-100={habitMode}
+						onclick={toggleHabitMenu}
+					>
+						<span class="relative flex h-3 w-3 items-center justify-center">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-3 w-3 text-stone-700"
+								fill="currentColor"
+							>
+								<path
+									d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+								/>
+								<path
+									fill-rule="evenodd"
+									d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+								/>
+							</svg>
+						</span>
+						Habit
+					</button>
+					{#if habitMenuOpen}
+						<div
+							class="absolute top-full left-0 z-20 mt-2 w-40 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+						>
+							<div class="space-y-1">
+								{#each HABIT_DAYS as day, index}
+									<button
+										type="button"
+										class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+										class:bg-stone-100={habitMenuIndex === index}
+										onclick={() => toggleHabitDay(day.value)}
+										onmouseenter={() => (habitMenuIndex = index)}
+									>
+										<span>{day.label}</span>
+										{#if habitDays.includes(day.value)}
+											<span class="text-[10px] font-semibold text-stone-900">✓</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+							<div class="mt-2 border-t border-stone-100 pt-2">
+								<button
+									type="button"
+									class="w-full rounded-md px-2 py-1 text-left text-[10px] font-medium text-stone-500 hover:text-stone-900"
+									onclick={disableHabitMode}
+								>
+									Not a habit
+								</button>
+							</div>
+						</div>
+					{/if}
+				</div>
 				<button
 					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={handleSubmit}

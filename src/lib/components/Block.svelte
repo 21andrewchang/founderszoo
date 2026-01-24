@@ -1,13 +1,5 @@
 <script lang="ts">
 	import type { PlayerStreak } from '$lib/streaks';
-	type HabitConfig = { icon: string };
-
-	const HABITS: Record<string, HabitConfig> = {
-		wake: { icon: '☀️' },
-		read: { icon: '📖' },
-		bored: { icon: '😵‍💫' },
-		gym: { icon: '🏋️' }
-	};
 
 	const props = $props<{
 		title?: string;
@@ -39,7 +31,8 @@
 	const isCurrentBlock = $derived(Boolean(props.isCurrent));
 	const habitStreak = $derived(props.habitStreak ?? null);
 	const habitStreakLabel = $derived(() => {
-		if (habitStreak == null || !habitStreak || habitStreak.length <= 0) return null;
+		if (!isHabit) return null;
+		if (habitStreak == null || !habitStreak || habitStreak.length <= 0) return '0';
 		return `${habitStreak.kind === 'positive' ? '' : '-'}${habitStreak.length}`;
 	});
 	const habitStreakClasses = $derived(() => {
@@ -50,11 +43,10 @@
 	});
 
 	const trimmed = $derived((title ?? '').trim());
-	const habitKey = $derived(habitPlaceholder.toLowerCase());
-	const habitPreset = $derived(HABITS[habitKey]);
 	const isHabit = $derived(Boolean(props.habit));
 	const isBadCategory = $derived(category === 'bad');
-	const showCategoryIcon = $derived(category.length > 0 && category !== 'bad' && !isHabit);
+	const showCategoryIcon = $derived(category.length > 0 && category !== 'bad');
+	const showHabitFallbackIcon = $derived(isHabit && category.length === 0);
 	const displayTitle = $derived(isHabit && trimmed.length === 0 ? habitPlaceholder : trimmed);
 	const isFilled = $derived(displayTitle.length > 0);
 	const showStatusProp = $derived(props.showStatus);
@@ -80,7 +72,7 @@
 	const canToggleStatus = $derived(editable && isFilled && !isHabit && !isBadCategory);
 
 	const canToggleHabit = $derived(editable && isHabit);
-	const showHabitStreak = $derived(isHabit && Boolean(habitStreakLabel));
+	const showHabitStreak = $derived(isHabit && habitStreakLabel !== null);
 	const canOpen = $derived(editable && !habitPlaceholder);
 
 	function handleBlockClick() {
@@ -129,8 +121,12 @@
 	}
 
 	$effect(() => {
-		// No streak → reset tracking
+		const prevLen = lastStreakLength;
+		const prevKind = lastStreakKind;
 		if (!habitStreak) {
+			if (prevLen !== null) {
+				triggerStreakAnim('down');
+			}
 			lastStreakLength = null;
 			lastStreakKind = null;
 			streakAnim = 'none';
@@ -139,10 +135,10 @@
 
 		const len = habitStreak.length;
 		const kind = habitStreak.kind;
-		const prevLen = lastStreakLength;
-		const prevKind = lastStreakKind;
 
-		if (prevLen !== null) {
+		if (prevLen === null) {
+			triggerStreakAnim(kind === 'positive' ? 'up' : 'down');
+		} else {
 			// Checking off → positive streak increased
 			if (len > prevLen && kind === 'positive') {
 				triggerStreakAnim('up');
@@ -300,8 +296,24 @@
 					{/if}
 				</span>
 			{/if}
-			{#if habitPreset}
-				<span class="text-xs leading-none">{habitPreset.icon}</span>
+			{#if showHabitFallbackIcon}
+				<span class="mr-1 text-stone-400">
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 16 16"
+						class="h-2.5 w-2.5"
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<path
+							d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+						/>
+						<path
+							fill-rule="evenodd"
+							d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+						/>
+					</svg>
+				</span>
 			{/if}
 
 			{#if isFilled}
