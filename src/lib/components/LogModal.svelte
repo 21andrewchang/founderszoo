@@ -422,17 +422,26 @@
 					disabled={blockCountDisabled}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						<span class="h-2 w-2 rounded-full border border-stone-400" />
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-3 w-3 text-stone-700"
+							fill="currentColor"
+						>
+							<path
+								d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71z"
+							/>
+						</svg>
 						{#if mode === 'normal' && !blockCountDisabled}
 							<span
-								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
 								t
 							</span>
 						{/if}
 					</span>
-					{displayedBlockCount} block{displayedBlockCount === 1 ? '' : 's'}
+					{displayedBlockCount} Block{displayedBlockCount === 1 ? '' : 's'}
 				</button>
 				<button
 					type="button"
@@ -478,7 +487,7 @@
 						{/if}
 						{#if mode === 'normal'}
 							<span
-								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
 								s
