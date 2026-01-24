@@ -254,7 +254,7 @@
 	const heatmapDateLabel = (dateStr: string) =>
 		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
 	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
-	const calendarPreviewDate = $derived(calendarLockedDate ?? calendarHoverDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
 	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
 	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
 	const msPerDay = 24 * 60 * 60 * 1000;
@@ -523,12 +523,10 @@
 	}
 
 	function handleCalendarHover(dateStr: string) {
-		if (calendarLockedDate) return;
 		calendarHoverDate = dateStr;
 	}
 
 	function clearCalendarHover() {
-		if (calendarLockedDate) return;
 		calendarHoverDate = null;
 	}
 
@@ -1177,8 +1175,7 @@
 				<div class="flex items-center">
 					<button
 						type="button"
-						class="flex w-24 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
-						class:opacity-40={isActiveDayToday}
+						class="flex w-22 font-medium items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
 						disabled={isActiveDayToday}
 						onclick={() => {
 							activeDayDateStore.set(localToday());
@@ -1452,21 +1449,21 @@
 			</div>
 			<div class="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
 				<div class="flex justify-center">
-					<div class="flex flex-col gap-6">
-						<div class="flex items-start gap-4">
+					<div class="flex w-full max-w-5xl flex-col gap-6">
+						<div class="flex items-start gap-2 justify-center">
 							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-								<div class="h-3"></div>
-								<div class="h-3">Mon</div>
-								<div class="h-3"></div>
-								<div class="h-3">Wed</div>
-								<div class="h-3"></div>
-								<div class="h-3">Fri</div>
-								<div class="h-3"></div>
+								<div class="h-3.5"></div>
+								<div class="h-3.5">M</div>
+								<div class="h-3.5"></div>
+								<div class="h-3.5">W</div>
+								<div class="h-3.5"></div>
+								<div class="h-3.5">F</div>
+								<div class="h-3.5"></div>
 							</div>
 							<div class="flex flex-col gap-2">
 								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
 									{#each heatmapMonthLabels as label}
-										<div class="w-3 text-center">{label}</div>
+										<div class="w-3.5 text-center">{label}</div>
 									{/each}
 								</div>
 								<div class="relative overflow-visible">
@@ -1477,15 +1474,16 @@
 													{@const dateKey = formatDateString(day)}
 													<button
 														type="button"
-														class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
+														class={`group relative h-3.5 w-3.5 rounded-xs transition-colors transition-opacity duration-300 ${
 															heatmapLoading
 																? 'bg-stone-200'
 																: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
-														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''}`}
+														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''} ${
+															dateKey === calendarSelectedDate ? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white' : ''
+														}`}
 														style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
 														disabled={heatmapLoading}
-														onmouseenter={() => handleCalendarHover(dateKey)}
-														onmouseleave={clearCalendarHover}
+
 														onclick={() => handleCalendarSelect(dateKey)}
 													>
 														{#if !heatmapLoading}
@@ -1510,16 +1508,51 @@
 				</div>
 				<div class="flex justify-center">
 					<div class="grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-						<div class="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+						<div class="rounded-2xl border border-stone-200 bg-white p-4">
 							<div class="flex items-center justify-between">
 								<div class="text-sm font-semibold text-stone-900">{calendarMonthLabel}</div>
-								<button
-									type="button"
-									class="rounded-md border border-stone-200 px-2 py-1 text-[10px] font-semibold text-stone-600 hover:bg-stone-100"
-									onclick={() => handleCalendarSelect(localToday())}
-								>
-									Today
-								</button>
+								<div class="flex items-center gap-1">
+									<button
+										type="button"
+										class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+										aria-label="Previous month"
+										onclick={() => moveSelectedByMonths(-1)}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											fill="currentColor"
+											class="bi bi-chevron-up"
+											viewBox="0 0 16 16"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M7.646 4.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1-.708.708L8 5.707 1.646 11.354a.5.5 0 0 1-.708-.708l6-6z"
+											/>
+										</svg>
+									</button>
+									<button
+										type="button"
+										class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+										aria-label="Next month"
+										onclick={() => moveSelectedByMonths(1)}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											fill="currentColor"
+											class="bi bi-chevron-down"
+											viewBox="0 0 16 16"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
+											/>
+										</svg>
+									</button>
+								</div>
 							</div>
 							<div class="mt-4 grid grid-cols-[32px_repeat(7,minmax(0,1fr))] gap-1 text-xs">
 								<div class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400">
@@ -1551,8 +1584,6 @@
 											} ${
 												isSelected ? '' : isCurrentMonth ? 'text-stone-800' : 'text-stone-400'
 											} ${!isSelected && isToday ? 'ring-1 ring-stone-300' : ''}`}
-											onmouseenter={() => handleCalendarHover(dateKey)}
-											onmouseleave={clearCalendarHover}
 											onclick={() => handleCalendarSelect(dateKey)}
 										>
 											<span class="leading-none">{day.getDate()}</span>
@@ -1564,10 +1595,9 @@
 								{/each}
 							</div>
 						</div>
-						<div class="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+						<div class="rounded-2xl border border-stone-200 bg-white p-4">
 							<div class="flex items-start justify-between">
 								<div>
-									<div class="text-xs font-semibold tracking-wide text-stone-500 uppercase">Summary</div>
 									<div class="mt-1 text-sm font-medium text-stone-900">
 										{calendarSummaryLabel ?? '—'}
 									</div>
@@ -1579,26 +1609,6 @@
 										)}`}
 									>
 										{calendarSummary?.score ?? 0}
-									</div>
-								<div class="flex items-center gap-2 text-[10px]">
-									<div class="flex items-center gap-1">
-											<button
-												type="button"
-												class="flex h-6 w-6 items-center justify-center rounded-md border border-stone-200 text-xs text-stone-600 hover:bg-stone-100"
-												aria-label="Previous day"
-												onclick={() => moveSelectedByDays(-1)}
-											>
-												‹
-											</button>
-											<button
-												type="button"
-												class="flex h-6 w-6 items-center justify-center rounded-md border border-stone-200 text-xs text-stone-600 hover:bg-stone-100"
-												aria-label="Next day"
-												onclick={() => moveSelectedByDays(1)}
-											>
-												›
-											</button>
-										</div>
 									</div>
 								</div>
 							</div>
