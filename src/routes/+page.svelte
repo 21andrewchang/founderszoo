@@ -464,12 +464,7 @@
 
 	const modalOverlayActive = $derived.by(() =>
 		Boolean(
-			logOpen ||
-				carryoverPrompt ||
-				plannedPrompt ||
-				pendingMove ||
-				pendingCopy ||
-				pendingDelete
+			logOpen || carryoverPrompt || plannedPrompt || pendingMove || pendingCopy || pendingDelete
 		)
 	);
 
@@ -1374,7 +1369,6 @@
 		if (!viewerUserId || !selectedBlock) return false;
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
 		openEditor(viewerUserId, hour, selectedBlock.half, normal);
 		return true;
 	}
@@ -1730,7 +1724,7 @@
 	}
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
-		if (!viewerUserId || logOpen) return;
+		if (!viewerUserId || modalOverlayActive) return;
 		if (isTypingTarget(event.target)) return;
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
@@ -3918,7 +3912,6 @@
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
 {/if}
-
 
 <LogModal
 	normal={editorMode}

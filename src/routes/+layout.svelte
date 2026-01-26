@@ -36,6 +36,7 @@
 	const HISTORY_LOOKBACK_DAYS = 30;
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
 	const HEATMAP_LOOKBACK_DAYS = 365;
+	const YC_APP_DUE_DATE = '2026-02-09';
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -79,8 +80,9 @@
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
+	type SummaryCategoryKey = 'body' | 'rest' | 'work' | 'admin' | 'bad';
 	type SummaryCategory = {
-		key: 'body' | 'rest' | 'work' | 'admin';
+		key: SummaryCategoryKey;
 		label: string;
 		percent: number;
 		hours: number;
@@ -90,6 +92,7 @@
 		completed: number;
 		productiveHours: number;
 		score: number;
+		badBlocks: number;
 		categoryBreakdown: SummaryCategory[];
 	};
 
@@ -183,44 +186,10 @@
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
 	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
-	const GOAL_ROTATION = ['year', 'quarter', 'month', 'week'] as const;
-	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
-	const yearGoalEntry = $derived(mergedYearEntry());
-	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
-	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
-	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
-	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+	type GoalRotationKey = 'year' | 'quarter' | 'month' | 'week' | 'yc-app';
+	const msPerDay = 24 * 60 * 60 * 1000;
 
-	function entryForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
-		if (goalKey === 'week') return currentWeekEntry;
-		if (goalKey === 'month') return currentMonthEntry;
-		if (goalKey === 'quarter') return currentQuarterEntry;
-		return yearGoalEntry;
-	}
-
-	function rangeLabelForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
-		if (goalKey === 'week') {
-			return `Now`;
-		}
-		if (goalKey === 'month') {
-			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
-		}
-		if (goalKey === 'quarter') {
-			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
-		}
-		return '2026';
-	}
-
-	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
-	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
-
-	const localToday = () => formatDateString(new Date());
-	const dateStringNDaysAgo = (days: number) => {
-		const d = new Date();
-		d.setDate(d.getDate() - days);
-		return formatDateString(d);
-	};
-	const parseLocalDate = (dateStr: string): Date | null => {
+	function parseLocalDate(dateStr: string): Date | null {
 		const [yearStr, monthStr, dayStr] = dateStr.split('-');
 		const year = Number(yearStr);
 		const month = Number(monthStr);
@@ -237,6 +206,78 @@
 			return null;
 		}
 		return new Date(year, month - 1, day);
+	}
+
+	function startOfDay(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+	}
+
+	function daysUntilDue(dateStr: string | null) {
+		if (!dateStr) return null;
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return null;
+		const due = startOfDay(parsed);
+		const today = startOfDay(new Date());
+		return Math.round((due.getTime() - today.getTime()) / msPerDay);
+	}
+	const GOAL_ROTATION = $derived.by<GoalRotationKey[]>(() => {
+		const base: GoalRotationKey[] = ['year', 'quarter', 'month', 'week'];
+		const days = daysUntilDue(YC_APP_DUE_DATE);
+		if (days !== null && days >= 0) base.push('yc-app');
+		return base;
+	});
+	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
+	const yearGoalEntry = $derived(mergedYearEntry());
+	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
+	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
+	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
+	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+
+	function entryForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') return currentWeekEntry;
+		if (goalKey === 'month') return currentMonthEntry;
+		if (goalKey === 'quarter') return currentQuarterEntry;
+		if (goalKey === 'yc-app') {
+			return {
+				id: null,
+				title: 'YC App',
+				how: '',
+				goal_key: 'yc-app',
+				due_date: YC_APP_DUE_DATE
+			};
+		}
+		return yearGoalEntry;
+	}
+
+	function rangeLabelForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') {
+			return `Now`;
+		}
+		if (goalKey === 'month') {
+			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
+		}
+		if (goalKey === 'quarter') {
+			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
+		}
+		if (goalKey === 'yc-app') {
+			const days = daysUntilDue(YC_APP_DUE_DATE);
+			if (days === null) return 'Days';
+			if (days > 1) return `${days} Days`;
+			if (days === 1) return '1 Day';
+			if (days === 0) return 'Due Today';
+			return 'Days';
+		}
+		return '2026';
+	}
+
+	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
+	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
+
+	const localToday = () => formatDateString(new Date());
+	const dateStringNDaysAgo = (days: number) => {
+		const d = new Date();
+		d.setDate(d.getDate() - days);
+		return formatDateString(d);
 	};
 	const formatDisplayDate = (
 		dateStr: string,
@@ -257,8 +298,6 @@
 	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
 	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
 	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
-	const msPerDay = 24 * 60 * 60 * 1000;
-
 	$effect(() => {
 		if (!heatmapOpen) return;
 		if (heatmapLoading) {
@@ -286,19 +325,6 @@
 		if (calendarPreviewDate === calendarSummaryDate && calendarSummary) return;
 		void loadCalendarSummary(calendarPreviewDate);
 	});
-
-	function startOfDay(date: Date) {
-		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-	}
-
-	function daysUntilDue(dateStr: string | null) {
-		if (!dateStr) return null;
-		const parsed = parseLocalDate(dateStr);
-		if (!parsed) return null;
-		const due = startOfDay(parsed);
-		const today = startOfDay(new Date());
-		return Math.round((due.getTime() - today.getTime()) / msPerDay);
-	}
 
 	function formatDaysUntilText(days: number | null) {
 		if (days === null) return null;
@@ -384,6 +410,20 @@
 	}
 
 	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
+		admin: 'var(--summary-admin)',
+		body: 'var(--summary-body)',
+		rest: 'var(--summary-rest)',
+		work: 'var(--summary-work)',
+		bad: 'var(--summary-bad)'
+	};
+	const SUMMARY_CATEGORY_CLASSES: Record<SummaryCategoryKey, string> = {
+		admin: 'text-amber-900/30',
+		body: 'text-rose-300',
+		rest: 'text-violet-300',
+		work: 'text-slate-300',
+		bad: 'text-rose-500'
+	};
 
 	function formatProductiveHours(value: number) {
 		const rounded = Math.round(value * 10) / 10;
@@ -397,22 +437,47 @@
 		return 'bg-stone-500';
 	}
 
+	function summaryPieStyle(summary: SummaryStats | null) {
+		if (!summary) return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		let offset = 0;
+		const segments = summary.categoryBreakdown
+			.filter((entry) => entry.percent > 0)
+			.map((entry) => {
+				const start = offset;
+				offset += entry.percent;
+				const color = SUMMARY_CATEGORY_COLORS[entry.key] ?? 'var(--summary-empty)';
+				return `${color} ${start}% ${offset}%`;
+			});
+		if (segments.length === 0) {
+			return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		}
+		return `background: conic-gradient(${segments.join(', ')});`;
+	}
+
 	function computeSummaryStats(
 		hours: { title: string | null; status: boolean | null; category: string | null }[]
 	): SummaryStats {
 		let planned = 0;
 		let completed = 0;
-		const categoryCounts = { body: 0, rest: 0, work: 0, admin: 0 };
+		let badBlocks = 0;
+		const categoryCounts: Record<SummaryCategoryKey, number> = {
+			body: 0,
+			rest: 0,
+			work: 0,
+			admin: 0,
+			bad: 0
+		};
 		for (const row of hours) {
 			const title = (row.title ?? '').trim();
-			const category = row.category as SummaryCategory['key'] | 'bad' | null;
+			const category = row.category as SummaryCategoryKey | null;
 			const isBad = category === 'bad';
+			if (title.length > 0 && isBad) badBlocks += 1;
 			if (!isBad) {
 				if (title.length > 0) planned += 1;
 				if (row.status === true) completed += 1;
 			}
-			if (title.length > 0 && category && category in categoryCounts) {
-				categoryCounts[category as keyof typeof categoryCounts] += 1;
+			if (title.length > 0 && category) {
+				categoryCounts[category] += 1;
 			}
 		}
 		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
@@ -421,7 +486,8 @@
 				{ key: 'body', label: 'Body' },
 				{ key: 'rest', label: 'Rest' },
 				{ key: 'work', label: 'Work' },
-				{ key: 'admin', label: 'Admin' }
+				{ key: 'admin', label: 'Admin' },
+				{ key: 'bad', label: 'Bad' }
 			] as const
 		).map((entry) => ({
 			...entry,
@@ -435,6 +501,7 @@
 			completed,
 			productiveHours: completed / 2,
 			score,
+			badBlocks,
 			categoryBreakdown
 		};
 	}
@@ -953,35 +1020,56 @@
 				dayIdByDate.set(id, date);
 			}
 
-			if (dayIdByDate.size === 0) {
-				heatmapByDate = {};
-				return;
+			const { data: habitData, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('day, completed')
+				.eq('user_id', userId)
+				.gte('day', lookbackStart);
+			if (habitError) throw habitError;
+
+			const habitCounts = new Map<string, number>();
+			for (const row of habitData ?? []) {
+				const day = (row.day as string | null) ?? null;
+				if (!day || !row.completed) continue;
+				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
 			}
 
-			const dayIds = Array.from(dayIdByDate.keys());
-			const { data: hoursData, error: hoursError } = await supabase
-				.from('hours')
-				.select('day_id, status')
-				.in('day_id', dayIds)
-				.eq('status', true);
-			if (hoursError) throw hoursError;
-
 			const completedCounts = new Map<string, number>();
-			for (const row of hoursData ?? []) {
-				const dayId = (row.day_id as string | null) ?? null;
-				if (!dayId) continue;
-				completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+			if (dayIdByDate.size > 0) {
+				const dayIds = Array.from(dayIdByDate.keys());
+				const { data: hoursData, error: hoursError } = await supabase
+					.from('hours')
+					.select('day_id, status')
+					.in('day_id', dayIds)
+					.eq('status', true);
+				if (hoursError) throw hoursError;
+
+				for (const row of hoursData ?? []) {
+					const dayId = (row.day_id as string | null) ?? null;
+					if (!dayId) continue;
+					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+				}
 			}
 
 			const next: Record<string, number> = {};
 			for (const [dayId, date] of dayIdByDate.entries()) {
-				const completed = completedCounts.get(dayId) ?? 0;
+				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
 				const pct = Math.max(
 					0,
 					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
 				);
 				next[date] = pct;
 			}
+
+			for (const [date, completed] of habitCounts.entries()) {
+				if (next[date] !== undefined) continue;
+				const pct = Math.max(
+					0,
+					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+				);
+				next[date] = pct;
+			}
+
 			heatmapByDate = next;
 		} catch (error) {
 			console.error('heatmap load error', error);
@@ -1038,7 +1126,7 @@
 
 		const goalRotationInterval = window.setInterval(() => {
 			goalRotationIndex = (goalRotationIndex + 1) % GOAL_ROTATION.length;
-		}, 5000);
+		}, 10000);
 
 		const handleKeyDown = (event: KeyboardEvent) => {
 			const target = event.target as HTMLElement | null;
@@ -1175,7 +1263,7 @@
 				<div class="flex items-center">
 					<button
 						type="button"
-						class="flex w-22 font-medium items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
+						class="flex w-22 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-stone-200/50"
 						disabled={isActiveDayToday}
 						onclick={() => {
 							activeDayDateStore.set(localToday());
@@ -1185,48 +1273,46 @@
 						<span>{activeDayLabel}</span>
 					</button>
 					<div class="flex items-center">
-					<button
-						type="button"
-						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
-						aria-label="Previous day"
-						onclick={() =>
-							activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
-					>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							width="10"
-							height="10"
-							fill="currentColor"
-							class="bi bi-chevron-left"
-							viewBox="0 0 16 16"
+						<button
+							type="button"
+							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+							aria-label="Previous day"
+							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
 						>
-							<path
-								fill-rule="evenodd"
-								d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
-							/>
-						</svg>
-					</button>
-					<button
-						type="button"
-						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
-						aria-label="Next day"
-						onclick={() =>
-							activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
-					>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							width="10"
-							height="10"
-							fill="currentColor"
-							class="bi bi-chevron-right"
-							viewBox="0 0 16 16"
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="10"
+								height="10"
+								fill="currentColor"
+								class="bi bi-chevron-left"
+								viewBox="0 0 16 16"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
+								/>
+							</svg>
+						</button>
+						<button
+							type="button"
+							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+							aria-label="Next day"
+							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
 						>
-							<path
-								fill-rule="evenodd"
-								d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-							/>
-						</svg>
-					</button>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="10"
+								height="10"
+								fill="currentColor"
+								class="bi bi-chevron-right"
+								viewBox="0 0 16 16"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
+								/>
+							</svg>
+						</button>
 					</div>
 				</div>
 			</div>
@@ -1450,7 +1536,7 @@
 			<div class="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
 				<div class="flex justify-center">
 					<div class="flex w-full max-w-5xl flex-col gap-6">
-						<div class="flex items-start gap-2 justify-center">
+						<div class="flex items-start justify-center gap-2">
 							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
 								<div class="h-3.5"></div>
 								<div class="h-3.5">M</div>
@@ -1479,11 +1565,12 @@
 																? 'bg-stone-200'
 																: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
 														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''} ${
-															dateKey === calendarSelectedDate ? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white' : ''
+															dateKey === calendarSelectedDate
+																? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white'
+																: ''
 														}`}
 														style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
 														disabled={heatmapLoading}
-
 														onclick={() => handleCalendarSelect(dateKey)}
 													>
 														{#if !heatmapLoading}
@@ -1555,16 +1642,22 @@
 								</div>
 							</div>
 							<div class="mt-4 grid grid-cols-[32px_repeat(7,minmax(0,1fr))] gap-1 text-xs">
-								<div class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400">
+								<div
+									class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400"
+								>
 									W
 								</div>
 								{#each CALENDAR_WEEKDAYS as label}
-									<div class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400">
+									<div
+										class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400"
+									>
 										{label}
 									</div>
 								{/each}
 								{#each calendarWeeks as week, weekIndex}
-									<div class="flex h-9 items-center justify-center text-[10px] font-semibold text-stone-400">
+									<div
+										class="flex h-9 items-center justify-center text-[10px] font-semibold text-stone-400"
+									>
 										{weekIndex + 1}
 									</div>
 									{#each week as day}
@@ -1636,18 +1729,88 @@
 									</div>
 								</div>
 								<div class="mt-4">
-									<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">
-										Category breakdown
-									</div>
-									<div class="mt-2 space-y-1 text-sm text-stone-700">
-										{#each calendarSummary?.categoryBreakdown ?? [] as category}
-											<div class="flex items-center justify-between">
-												<span>{category.label}</span>
-												<span class="font-semibold text-stone-900">
-													{category.percent}% · {formatProductiveHours(category.hours)}h
-												</span>
-											</div>
-										{/each}
+									<div class="mt-3 flex justify-between gap-2">
+										<div class="flex items-center justify-center">
+											<div
+												class="summary-pie h-30 w-30 rounded-full"
+												style={summaryPieStyle(calendarSummary)}
+											></div>
+										</div>
+										<div class="space-y-2 text-sm text-stone-700">
+											{#each calendarSummary?.categoryBreakdown ?? [] as category}
+												<div class="flex w-40 items-center justify-between">
+													<div class="flex items-center gap-2">
+														<span class={SUMMARY_CATEGORY_CLASSES[category.key]}>
+															{#if category.key === 'rest'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+																	/>
+																</svg>
+															{:else if category.key === 'body'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+																	/>
+																</svg>
+															{:else if category.key === 'work'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+																	/>
+																</svg>
+															{:else if category.key === 'admin'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+																	/>
+																</svg>
+															{:else}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+																	/>
+																</svg>
+															{/if}
+														</span>
+														<span>{category.label}</span>
+													</div>
+													<span class="font-semibold text-stone-900">
+														{formatProductiveHours(category.hours)}h
+													</span>
+												</div>
+											{/each}
+										</div>
 									</div>
 								</div>
 							{/if}
@@ -1662,6 +1825,19 @@
 {@render children()}
 
 <style>
+	:global(:root) {
+		--summary-body: #fda4af;
+		--summary-rest: #c4b5fd;
+		--summary-work: #cbd5e1;
+		--summary-admin: rgba(120, 53, 15, 0.3);
+		--summary-bad: #f43f5e;
+		--summary-empty: #e5e7eb;
+	}
+
+	.summary-pie {
+		background: conic-gradient(var(--summary-empty) 0% 100%);
+	}
+
 	.heatmap-sheen {
 		overflow: hidden;
 	}

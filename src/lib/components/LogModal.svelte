@@ -61,14 +61,15 @@
 		{ label: 'Admin', value: 'admin', key: '4' }
 	];
 	const HABIT_DAYS = [
-		{ label: 'Mon', value: 0 },
-		{ label: 'Tue', value: 1 },
-		{ label: 'Wed', value: 2 },
-		{ label: 'Thu', value: 3 },
-		{ label: 'Fri', value: 4 },
-		{ label: 'Sat', value: 5 },
-		{ label: 'Sun', value: 6 }
+		{ label: 'Monday', value: 0 },
+		{ label: 'Tuesday', value: 1 },
+		{ label: 'Wednesday', value: 2 },
+		{ label: 'Thursday', value: 3 },
+		{ label: 'Friday', value: 4 },
+		{ label: 'Saturday', value: 5 },
+		{ label: 'Sunday', value: 6 }
 	];
+	const HABIT_MENU_DAYS = [{ label: 'All days', value: -1 }, ...HABIT_DAYS];
 
 	let text = $state('');
 	let status = $state<boolean | null>(null);
@@ -79,7 +80,7 @@
 	let habitMode = $state(false);
 	let habitMenuOpen = $state(false);
 	let habitMenuIndex = $state(0);
-	let habitDays = $state<number[]>([0, 1, 2, 3, 4, 5, 6]);
+	let habitDays = $state<number[]>([]);
 	let habitId = $state<string | null>(null);
 	const statusKind = $derived<StatusKind>(
 		category === 'bad'
@@ -158,6 +159,14 @@
 	}
 
 	function toggleHabitDay(value: number) {
+		if (value === -1) {
+			if (habitDays.length === HABIT_DAYS.length) {
+				habitDays = [];
+				return;
+			}
+			habitDays = HABIT_DAYS.map((day) => day.value);
+			return;
+		}
 		if (habitDays.includes(value)) {
 			habitDays = habitDays.filter((day) => day !== value);
 		} else {
@@ -167,16 +176,9 @@
 	function toggleHabitMenu() {
 		habitMenuOpen = !habitMenuOpen;
 		if (habitMenuOpen) {
-			if (!habitMode) habitMode = true;
-			if (habitDays.length === 0) habitDays = [0, 1, 2, 3, 4, 5, 6];
-			habitMenuIndex = Math.min(habitMenuIndex, HABIT_DAYS.length - 1);
+			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
 		}
 	}
-	function disableHabitMode() {
-		habitMode = false;
-		habitMenuOpen = false;
-	}
-
 	function maxBlockCount() {
 		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
@@ -198,17 +200,17 @@
 				return;
 			}
 			if (key === 'j' || key === 'ArrowDown') {
-				habitMenuIndex = (habitMenuIndex + 1) % HABIT_DAYS.length;
+				habitMenuIndex = (habitMenuIndex + 1) % HABIT_MENU_DAYS.length;
 				e.preventDefault();
 				return;
 			}
 			if (key === 'k' || key === 'ArrowUp') {
-				habitMenuIndex = (habitMenuIndex - 1 + HABIT_DAYS.length) % HABIT_DAYS.length;
+				habitMenuIndex = (habitMenuIndex - 1 + HABIT_MENU_DAYS.length) % HABIT_MENU_DAYS.length;
 				e.preventDefault();
 				return;
 			}
 			if (key === 'Enter') {
-				const day = HABIT_DAYS[habitMenuIndex];
+				const day = HABIT_MENU_DAYS[habitMenuIndex];
 				if (day) toggleHabitDay(day.value);
 				e.preventDefault();
 				return;
@@ -241,6 +243,12 @@
 			if (statusDisabled) return;
 			e.preventDefault();
 			cycleStatus();
+			return;
+		}
+
+		if (mode === 'normal' && key === 'h') {
+			e.preventDefault();
+			toggleHabitMenu();
 			return;
 		}
 
@@ -281,7 +289,7 @@
 			const habitConfig = habitMode
 				? {
 						id: habitId,
-						repeatDays: habitDays.length > 0 ? habitDays : [0, 1, 2, 3, 4, 5, 6]
+						repeatDays: habitDays
 					}
 				: null;
 			await Promise.resolve(onSave(value, status, hour, half, saveCount, category, habitConfig));
@@ -316,9 +324,9 @@
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
 		category = initialCategory ?? null;
-		habitMode = Boolean(initialHabit);
 		habitId = initialHabit?.id ?? null;
-		habitDays = initialHabit?.repeatDays ?? [0, 1, 2, 3, 4, 5, 6];
+		habitDays = initialHabit?.repeatDays ?? [];
+		habitMode = habitDays.length > 0;
 		habitMenuOpen = false;
 		habitMenuIndex = 0;
 		isNewBlock = (initialTitle ?? '').trim().length === 0 && !initialHabit;
@@ -341,12 +349,12 @@
 	});
 	$effect(() => {
 		if (!open) return;
+		habitMode = habitDays.length > 0;
 		if (habitMode) {
 			status = null;
 			blockCount = 1;
-		}
-		if (!habitMode && habitMenuOpen) {
-			habitMenuOpen = false;
+		} else {
+			habitId = null;
 		}
 	});
 
@@ -601,6 +609,14 @@
 									d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
 								/>
 							</svg>
+							{#if mode === 'normal'}
+								<span
+									class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+									in:fly={{ y: 6, duration: 200 }}
+								>
+									h
+								</span>
+							{/if}
 						</span>
 						Habit
 					</button>
@@ -609,7 +625,7 @@
 							class="absolute top-full left-0 z-20 mt-2 w-40 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
 						>
 							<div class="space-y-1">
-								{#each HABIT_DAYS as day, index}
+								{#each HABIT_MENU_DAYS as day, index}
 									<button
 										type="button"
 										class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
@@ -618,20 +634,11 @@
 										onmouseenter={() => (habitMenuIndex = index)}
 									>
 										<span>{day.label}</span>
-										{#if habitDays.includes(day.value)}
+										{#if day.value === -1 ? habitDays.length === HABIT_DAYS.length : habitDays.includes(day.value)}
 											<span class="text-[10px] font-semibold text-stone-900">✓</span>
 										{/if}
 									</button>
 								{/each}
-							</div>
-							<div class="mt-2 border-t border-stone-100 pt-2">
-								<button
-									type="button"
-									class="w-full rounded-md px-2 py-1 text-left text-[10px] font-medium text-stone-500 hover:text-stone-900"
-									onclick={disableHabitMode}
-								>
-									Not a habit
-								</button>
 							</div>
 						</div>
 					{/if}

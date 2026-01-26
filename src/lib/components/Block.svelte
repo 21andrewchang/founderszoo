@@ -89,9 +89,16 @@
 		onSelect();
 	}
 
+	function handleBlockMouseDown(event: MouseEvent) {
+		if (!editable) return;
+		event.preventDefault();
+	}
+
 	function handleBlockKeydown(event: KeyboardEvent) {
 		if (!editable) return;
+		if (!selected) return;
 		if (event.key === 'Enter' || event.key === ' ') {
+			event.stopPropagation();
 			event.preventDefault();
 			handleBlockClick();
 		}
@@ -231,6 +238,7 @@
 	class:block-copy-source={isCopied}
 	role={canOpen ? 'button' : undefined}
 	onclick={handleBlockClick}
+	onmousedown={handleBlockMouseDown}
 	onkeydown={handleBlockKeydown}
 >
 	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
@@ -549,7 +557,7 @@
 	}
 
 	.block-copy-source {
-		box-shadow: 0 0 0 2px rgb(59 130 246);
-		border-color: rgb(59 130 246);
+		box-shadow: none;
+		border-color: inherit;
 	}
 </style>
