@@ -89,11 +89,6 @@
 		onSelect();
 	}
 
-	function handleBlockMouseDown(event: MouseEvent) {
-		if (!editable) return;
-		event.preventDefault();
-	}
-
 	function handleBlockKeydown(event: KeyboardEvent) {
 		if (!editable) return;
 		if (!selected) return;
@@ -235,10 +230,9 @@
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
 	class:block-cut-source={Boolean(props.isCut)}
-	class:block-copy-source={isCopied}
 	role={canOpen ? 'button' : undefined}
+	tabindex={-1}
 	onclick={handleBlockClick}
-	onmousedown={handleBlockMouseDown}
 	onkeydown={handleBlockKeydown}
 >
 	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
@@ -554,10 +548,5 @@
 	.block-cut-source {
 		box-shadow: 0 0 0 2px rgb(248 113 113);
 		border-color: rgb(248 113 113);
-	}
-
-	.block-copy-source {
-		box-shadow: none;
-		border-color: inherit;
 	}
 </style>
