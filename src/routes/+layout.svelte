@@ -36,6 +36,7 @@
 	const HISTORY_LOOKBACK_DAYS = 30;
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
 	const HEATMAP_LOOKBACK_DAYS = 365;
+	const YC_APP_DUE_DATE = '2026-02-09';
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -79,10 +80,35 @@
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
+	type SummaryCategoryKey = 'body' | 'rest' | 'work' | 'admin' | 'bad';
+	type SummaryCategory = {
+		key: SummaryCategoryKey;
+		label: string;
+		percent: number;
+		hours: number;
+	};
+	type SummaryStats = {
+		planned: number;
+		completed: number;
+		productiveHours: number;
+		score: number;
+		badBlocks: number;
+		categoryBreakdown: SummaryCategory[];
+	};
+
 	let heatmapOpen = $state(false);
 	let heatmapLoading = $state(false);
 	let heatmapAnimated = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
+	let calendarLockedDate = $state<string | null>(null);
+	let calendarHoverDate = $state<string | null>(null);
+	let calendarMonthIndex = $state<number>(new Date().getMonth());
+	let calendarYear = $state<number>(new Date().getFullYear());
+	let calendarSummary = $state<SummaryStats | null>(null);
+	let calendarSummaryDate = $state<string | null>(null);
+	let calendarSummaryLabel = $state<string | null>(null);
+	let calendarSummaryLoading = $state(false);
+	let calendarSummaryRequestId = 0;
 
 	type GoalEntry = {
 		id: string | null;
@@ -160,44 +186,10 @@
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
 	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
-	const GOAL_ROTATION = ['year', 'quarter', 'month', 'week'] as const;
-	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
-	const yearGoalEntry = $derived(mergedYearEntry());
-	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
-	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
-	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
-	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+	type GoalRotationKey = 'year' | 'quarter' | 'month' | 'week' | 'yc-app';
+	const msPerDay = 24 * 60 * 60 * 1000;
 
-	function entryForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
-		if (goalKey === 'week') return currentWeekEntry;
-		if (goalKey === 'month') return currentMonthEntry;
-		if (goalKey === 'quarter') return currentQuarterEntry;
-		return yearGoalEntry;
-	}
-
-	function rangeLabelForGoalKey(goalKey: (typeof GOAL_ROTATION)[number]) {
-		if (goalKey === 'week') {
-			return `Now`;
-		}
-		if (goalKey === 'month') {
-			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
-		}
-		if (goalKey === 'quarter') {
-			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
-		}
-		return '2026';
-	}
-
-	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
-	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
-
-	const localToday = () => formatDateString(new Date());
-	const dateStringNDaysAgo = (days: number) => {
-		const d = new Date();
-		d.setDate(d.getDate() - days);
-		return formatDateString(d);
-	};
-	const parseLocalDate = (dateStr: string): Date | null => {
+	function parseLocalDate(dateStr: string): Date | null {
 		const [yearStr, monthStr, dayStr] = dateStr.split('-');
 		const year = Number(yearStr);
 		const month = Number(monthStr);
@@ -214,6 +206,78 @@
 			return null;
 		}
 		return new Date(year, month - 1, day);
+	}
+
+	function startOfDay(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+	}
+
+	function daysUntilDue(dateStr: string | null) {
+		if (!dateStr) return null;
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return null;
+		const due = startOfDay(parsed);
+		const today = startOfDay(new Date());
+		return Math.round((due.getTime() - today.getTime()) / msPerDay);
+	}
+	const GOAL_ROTATION = $derived.by<GoalRotationKey[]>(() => {
+		const base: GoalRotationKey[] = ['year', 'quarter', 'month', 'week'];
+		const days = daysUntilDue(YC_APP_DUE_DATE);
+		if (days !== null && days >= 0) base.push('yc-app');
+		return base;
+	});
+	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
+	const yearGoalEntry = $derived(mergedYearEntry());
+	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
+	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
+	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
+	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+
+	function entryForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') return currentWeekEntry;
+		if (goalKey === 'month') return currentMonthEntry;
+		if (goalKey === 'quarter') return currentQuarterEntry;
+		if (goalKey === 'yc-app') {
+			return {
+				id: null,
+				title: 'YC App',
+				how: '',
+				goal_key: 'yc-app',
+				due_date: YC_APP_DUE_DATE
+			};
+		}
+		return yearGoalEntry;
+	}
+
+	function rangeLabelForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') {
+			return `Now`;
+		}
+		if (goalKey === 'month') {
+			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
+		}
+		if (goalKey === 'quarter') {
+			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
+		}
+		if (goalKey === 'yc-app') {
+			const days = daysUntilDue(YC_APP_DUE_DATE);
+			if (days === null) return 'Days';
+			if (days > 1) return `${days} Days`;
+			if (days === 1) return '1 Day';
+			if (days === 0) return 'Due Today';
+			return 'Days';
+		}
+		return '2026';
+	}
+
+	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
+	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
+
+	const localToday = () => formatDateString(new Date());
+	const dateStringNDaysAgo = (days: number) => {
+		const d = new Date();
+		d.setDate(d.getDate() - days);
+		return formatDateString(d);
 	};
 	const formatDisplayDate = (
 		dateStr: string,
@@ -230,8 +294,10 @@
 	const isActiveDayToday = $derived(activeDayDate === localToday());
 	const heatmapDateLabel = (dateStr: string) =>
 		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
-	const msPerDay = 24 * 60 * 60 * 1000;
-
+	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
+	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
 	$effect(() => {
 		if (!heatmapOpen) return;
 		if (heatmapLoading) {
@@ -244,18 +310,21 @@
 		});
 	});
 
-	function startOfDay(date: Date) {
-		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-	}
+	$effect(() => {
+		if (!heatmapOpen) return;
+		calendarHoverDate = null;
+		if (!calendarLockedDate) {
+			setCalendarMonthFromDate(activeDayDate);
+		}
+	});
 
-	function daysUntilDue(dateStr: string | null) {
-		if (!dateStr) return null;
-		const parsed = parseLocalDate(dateStr);
-		if (!parsed) return null;
-		const due = startOfDay(parsed);
-		const today = startOfDay(new Date());
-		return Math.round((due.getTime() - today.getTime()) / msPerDay);
-	}
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!viewerId) return;
+		if (!calendarPreviewDate) return;
+		if (calendarPreviewDate === calendarSummaryDate && calendarSummary) return;
+		void loadCalendarSummary(calendarPreviewDate);
+	});
 
 	function formatDaysUntilText(days: number | null) {
 		if (days === null) return null;
@@ -338,6 +407,215 @@
 		if (pct >= 50) return 'bg-green-500';
 		if (pct >= 25) return 'bg-green-200';
 		return 'bg-stone-200';
+	}
+
+	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
+		admin: 'var(--summary-admin)',
+		body: 'var(--summary-body)',
+		rest: 'var(--summary-rest)',
+		work: 'var(--summary-work)',
+		bad: 'var(--summary-bad)'
+	};
+	const SUMMARY_CATEGORY_CLASSES: Record<SummaryCategoryKey, string> = {
+		admin: 'text-amber-900/30',
+		body: 'text-rose-300',
+		rest: 'text-violet-300',
+		work: 'text-slate-300',
+		bad: 'text-rose-500'
+	};
+
+	function formatProductiveHours(value: number) {
+		const rounded = Math.round(value * 10) / 10;
+		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function summaryScoreColor(score: number) {
+		if (score >= 75) return 'bg-emerald-700';
+		if (score >= 50) return 'bg-emerald-500';
+		if (score >= 25) return 'bg-emerald-300';
+		return 'bg-stone-500';
+	}
+
+	function summaryPieStyle(summary: SummaryStats | null) {
+		if (!summary) return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		let offset = 0;
+		const segments = summary.categoryBreakdown
+			.filter((entry) => entry.percent > 0)
+			.map((entry) => {
+				const start = offset;
+				offset += entry.percent;
+				const color = SUMMARY_CATEGORY_COLORS[entry.key] ?? 'var(--summary-empty)';
+				return `${color} ${start}% ${offset}%`;
+			});
+		if (segments.length === 0) {
+			return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		}
+		return `background: conic-gradient(${segments.join(', ')});`;
+	}
+
+	function computeSummaryStats(
+		hours: { title: string | null; status: boolean | null; category: string | null }[]
+	): SummaryStats {
+		let planned = 0;
+		let completed = 0;
+		let badBlocks = 0;
+		const categoryCounts: Record<SummaryCategoryKey, number> = {
+			body: 0,
+			rest: 0,
+			work: 0,
+			admin: 0,
+			bad: 0
+		};
+		for (const row of hours) {
+			const title = (row.title ?? '').trim();
+			const category = row.category as SummaryCategoryKey | null;
+			const isBad = category === 'bad';
+			if (title.length > 0 && isBad) badBlocks += 1;
+			if (!isBad) {
+				if (title.length > 0) planned += 1;
+				if (row.status === true) completed += 1;
+			}
+			if (title.length > 0 && category) {
+				categoryCounts[category] += 1;
+			}
+		}
+		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const categoryBreakdown: SummaryCategory[] = (
+			[
+				{ key: 'body', label: 'Body' },
+				{ key: 'rest', label: 'Rest' },
+				{ key: 'work', label: 'Work' },
+				{ key: 'admin', label: 'Admin' },
+				{ key: 'bad', label: 'Bad' }
+			] as const
+		).map((entry) => ({
+			...entry,
+			percent:
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
+			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
+		}));
+		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
+		return {
+			planned,
+			completed,
+			productiveHours: completed / 2,
+			score,
+			badBlocks,
+			categoryBreakdown
+		};
+	}
+
+	function buildCalendarWeeks(year: number, monthIndex: number) {
+		const firstDay = new Date(year, monthIndex, 1);
+		const lastDay = new Date(year, monthIndex + 1, 0);
+		const firstWeekday = (firstDay.getDay() + 6) % 7;
+		const start = new Date(firstDay);
+		start.setDate(firstDay.getDate() - firstWeekday);
+		const lastWeekday = (lastDay.getDay() + 6) % 7;
+		const end = new Date(lastDay);
+		end.setDate(lastDay.getDate() + (6 - lastWeekday));
+		const weeks: Date[][] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push(days);
+		}
+		return weeks;
+	}
+
+	function addDaysToDateString(dateStr: string, days: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		parsed.setDate(parsed.getDate() + days);
+		return formatDateString(parsed);
+	}
+
+	function addMonthsToDateString(dateStr: string, months: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		const day = parsed.getDate();
+		parsed.setMonth(parsed.getMonth() + months);
+		if (parsed.getDate() !== day) {
+			parsed.setDate(0);
+		}
+		return formatDateString(parsed);
+	}
+
+	function setCalendarMonthFromDate(dateStr: string) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return;
+		calendarMonthIndex = parsed.getMonth();
+		calendarYear = parsed.getFullYear();
+	}
+
+	async function loadCalendarSummary(dateStr: string) {
+		if (!viewerId) return;
+		const requestId = (calendarSummaryRequestId += 1);
+		calendarSummaryLoading = true;
+		calendarSummaryDate = dateStr;
+		calendarSummaryLabel = heatmapDateLabel(dateStr);
+		try {
+			const { data: dayRow, error: dayError } = await supabase
+				.from('days')
+				.select('id')
+				.eq('user_id', viewerId)
+				.eq('date', dateStr)
+				.maybeSingle();
+			if (dayError) throw dayError;
+			let rows: { title: string | null; status: boolean | null; category: string | null }[] = [];
+			if (dayRow?.id) {
+				const { data: hoursRows, error: hoursError } = await supabase
+					.from('hours')
+					.select('title, status, category')
+					.eq('day_id', dayRow.id as string);
+				if (hoursError) throw hoursError;
+				rows = (hoursRows ?? []) as typeof rows;
+			}
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats(rows);
+		} catch (error) {
+			console.error('calendar summary load error', error);
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats([]);
+		} finally {
+			if (requestId === calendarSummaryRequestId) {
+				calendarSummaryLoading = false;
+			}
+		}
+	}
+
+	function handleCalendarHover(dateStr: string) {
+		calendarHoverDate = dateStr;
+	}
+
+	function clearCalendarHover() {
+		calendarHoverDate = null;
+	}
+
+	function handleCalendarSelect(dateStr: string) {
+		calendarLockedDate = dateStr;
+		calendarHoverDate = null;
+		setCalendarMonthFromDate(dateStr);
+		activeDayDateStore.set(dateStr);
+	}
+
+	function moveSelectedByDays(days: number) {
+		const baseDate = calendarLockedDate ?? activeDayDate;
+		handleCalendarSelect(addDaysToDateString(baseDate, days));
+	}
+
+	function moveSelectedByWeeks(weeks: number) {
+		moveSelectedByDays(weeks * 7);
+	}
+
+	function moveSelectedByMonths(months: number) {
+		const baseDate = calendarLockedDate ?? activeDayDate;
+		handleCalendarSelect(addMonthsToDateString(baseDate, months));
 	}
 
 	function buildHeatmapWeeks() {
@@ -742,35 +1020,56 @@
 				dayIdByDate.set(id, date);
 			}
 
-			if (dayIdByDate.size === 0) {
-				heatmapByDate = {};
-				return;
+			const { data: habitData, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('day, completed')
+				.eq('user_id', userId)
+				.gte('day', lookbackStart);
+			if (habitError) throw habitError;
+
+			const habitCounts = new Map<string, number>();
+			for (const row of habitData ?? []) {
+				const day = (row.day as string | null) ?? null;
+				if (!day || !row.completed) continue;
+				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
 			}
 
-			const dayIds = Array.from(dayIdByDate.keys());
-			const { data: hoursData, error: hoursError } = await supabase
-				.from('hours')
-				.select('day_id, status')
-				.in('day_id', dayIds)
-				.eq('status', true);
-			if (hoursError) throw hoursError;
-
 			const completedCounts = new Map<string, number>();
-			for (const row of hoursData ?? []) {
-				const dayId = (row.day_id as string | null) ?? null;
-				if (!dayId) continue;
-				completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+			if (dayIdByDate.size > 0) {
+				const dayIds = Array.from(dayIdByDate.keys());
+				const { data: hoursData, error: hoursError } = await supabase
+					.from('hours')
+					.select('day_id, status')
+					.in('day_id', dayIds)
+					.eq('status', true);
+				if (hoursError) throw hoursError;
+
+				for (const row of hoursData ?? []) {
+					const dayId = (row.day_id as string | null) ?? null;
+					if (!dayId) continue;
+					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+				}
 			}
 
 			const next: Record<string, number> = {};
 			for (const [dayId, date] of dayIdByDate.entries()) {
-				const completed = completedCounts.get(dayId) ?? 0;
+				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
 				const pct = Math.max(
 					0,
 					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
 				);
 				next[date] = pct;
 			}
+
+			for (const [date, completed] of habitCounts.entries()) {
+				if (next[date] !== undefined) continue;
+				const pct = Math.max(
+					0,
+					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+				);
+				next[date] = pct;
+			}
+
 			heatmapByDate = next;
 		} catch (error) {
 			console.error('heatmap load error', error);
@@ -827,11 +1126,55 @@
 
 		const goalRotationInterval = window.setInterval(() => {
 			goalRotationIndex = (goalRotationIndex + 1) % GOAL_ROTATION.length;
-		}, 5000);
+		}, 10000);
 
 		const handleKeyDown = (event: KeyboardEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				const tag = target.tagName?.toLowerCase();
+				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
+			}
+			const normalized = event.key.toLowerCase();
+			if (normalized === 't' && !heatmapOpen) {
+				heatmapOpen = true;
+				void loadHeatmap(viewerId);
+				event.preventDefault();
+				return;
+			}
 			if (event.key === 'Escape' && heatmapOpen) {
 				heatmapOpen = false;
+				return;
+			}
+			if (!heatmapOpen) return;
+			let handled = true;
+			switch (normalized) {
+				case 'h':
+					moveSelectedByDays(-1);
+					break;
+				case 'l':
+					moveSelectedByDays(1);
+					break;
+				case 'j':
+					moveSelectedByWeeks(1);
+					break;
+				case 'k':
+					moveSelectedByWeeks(-1);
+					break;
+				case 'n':
+					moveSelectedByMonths(1);
+					break;
+				case 'p':
+					moveSelectedByMonths(-1);
+					break;
+				case 'enter':
+					heatmapOpen = false;
+					activeDayDateStore.set(calendarSelectedDate);
+					break;
+				default:
+					handled = false;
+			}
+			if (handled) {
+				event.preventDefault();
 			}
 		};
 		document.addEventListener('keydown', handleKeyDown);
@@ -898,11 +1241,10 @@
 				<button
 					type="button"
 					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
-					class:opacity-40={isActiveDayToday}
-					disabled={isActiveDayToday}
-					aria-label="Jump to today"
+					aria-label="Open timeline"
 					onclick={() => {
-						activeDayDateStore.set(localToday());
+						heatmapOpen = true;
+						void loadHeatmap(viewerId);
 					}}
 				>
 					<svg
@@ -918,17 +1260,61 @@
 						/>
 					</svg>
 				</button>
-				<button
-					type="button"
-					class="flex items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
-					onclick={() => {
-						heatmapOpen = true;
-						void loadHeatmap(viewerId);
-					}}
-					aria-expanded={heatmapOpen}
-				>
-					<span>{activeDayLabel}</span>
-				</button>
+				<div class="flex items-center">
+					<button
+						type="button"
+						class="flex w-22 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-stone-200/50"
+						disabled={isActiveDayToday}
+						onclick={() => {
+							activeDayDateStore.set(localToday());
+						}}
+						aria-label="Jump to today"
+					>
+						<span>{activeDayLabel}</span>
+					</button>
+					<div class="flex items-center">
+						<button
+							type="button"
+							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+							aria-label="Previous day"
+							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="10"
+								height="10"
+								fill="currentColor"
+								class="bi bi-chevron-left"
+								viewBox="0 0 16 16"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
+								/>
+							</svg>
+						</button>
+						<button
+							type="button"
+							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+							aria-label="Next day"
+							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="10"
+								height="10"
+								fill="currentColor"
+								class="bi bi-chevron-right"
+								viewBox="0 0 16 16"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
+								/>
+							</svg>
+						</button>
+					</div>
+				</div>
 			</div>
 		</div>
 
@@ -1134,10 +1520,11 @@
 		class="fixed inset-0 z-[1800] bg-white text-stone-800"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Daily completion heatmap"
+		aria-label="Timeline"
 	>
 		<div class="flex h-full flex-col">
 			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
+				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Timeline</div>
 				<button
 					type="button"
 					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
@@ -1146,60 +1533,287 @@
 					Close
 				</button>
 			</div>
-			<div class="flex items-center justify-center px-6 py-8">
-				<div class="flex flex-col gap-6">
-					<div class="flex items-start gap-4">
-						<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-							<div class="h-3"></div>
-							<div class="h-3">Mon</div>
-							<div class="h-3"></div>
-							<div class="h-3">Wed</div>
-							<div class="h-3"></div>
-							<div class="h-3">Fri</div>
-							<div class="h-3"></div>
-						</div>
-						<div class="flex flex-col gap-2">
-							<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
-								{#each heatmapMonthLabels as label}
-									<div class="w-3 text-center">{label}</div>
-								{/each}
+			<div class="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
+				<div class="flex justify-center">
+					<div class="flex w-full max-w-5xl flex-col gap-6">
+						<div class="flex items-start justify-center gap-2">
+							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
+								<div class="h-3.5"></div>
+								<div class="h-3.5">M</div>
+								<div class="h-3.5"></div>
+								<div class="h-3.5">W</div>
+								<div class="h-3.5"></div>
+								<div class="h-3.5">F</div>
+								<div class="h-3.5"></div>
 							</div>
-							<div class="relative overflow-visible">
-								<div class="flex gap-1">
-									{#each heatmapWeeks as week, weekIndex}
-										<div class="flex flex-col gap-1">
-											{#each week.days as day}
-												{@const dateKey = formatDateString(day)}
-												<button
-													type="button"
-													class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
-														heatmapLoading
-															? 'bg-stone-200'
-															: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
-													} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''}`}
-													style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
-													disabled={heatmapLoading}
-													onclick={() => {
-														activeDayDateStore.set(dateKey);
-														heatmapOpen = false;
-													}}
-												>
-													{#if !heatmapLoading}
-														<span
-															class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-														>
-															{heatmapDateLabel(dateKey)}
-														</span>
-													{/if}
-												</button>
-											{/each}
-										</div>
+							<div class="flex flex-col gap-2">
+								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
+									{#each heatmapMonthLabels as label}
+										<div class="w-3.5 text-center">{label}</div>
 									{/each}
 								</div>
-								{#if heatmapLoading}
-									<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
-								{/if}
+								<div class="relative overflow-visible">
+									<div class="flex gap-1">
+										{#each heatmapWeeks as week, weekIndex}
+											<div class="flex flex-col gap-1">
+												{#each week.days as day}
+													{@const dateKey = formatDateString(day)}
+													<button
+														type="button"
+														class={`group relative h-3.5 w-3.5 rounded-xs transition-colors transition-opacity duration-300 ${
+															heatmapLoading
+																? 'bg-stone-200'
+																: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
+														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''} ${
+															dateKey === calendarSelectedDate
+																? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white'
+																: ''
+														}`}
+														style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
+														disabled={heatmapLoading}
+														onclick={() => handleCalendarSelect(dateKey)}
+													>
+														{#if !heatmapLoading}
+															<span
+																class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+															>
+																{heatmapDateLabel(dateKey)}
+															</span>
+														{/if}
+													</button>
+												{/each}
+											</div>
+										{/each}
+									</div>
+									{#if heatmapLoading}
+										<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
+									{/if}
+								</div>
 							</div>
+						</div>
+					</div>
+				</div>
+				<div class="flex justify-center">
+					<div class="grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+						<div class="rounded-2xl border border-stone-200 bg-white p-4">
+							<div class="flex items-center justify-between">
+								<div class="text-sm font-semibold text-stone-900">{calendarMonthLabel}</div>
+								<div class="flex items-center gap-1">
+									<button
+										type="button"
+										class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+										aria-label="Previous month"
+										onclick={() => moveSelectedByMonths(-1)}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											fill="currentColor"
+											class="bi bi-chevron-up"
+											viewBox="0 0 16 16"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M7.646 4.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1-.708.708L8 5.707 1.646 11.354a.5.5 0 0 1-.708-.708l6-6z"
+											/>
+										</svg>
+									</button>
+									<button
+										type="button"
+										class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+										aria-label="Next month"
+										onclick={() => moveSelectedByMonths(1)}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											fill="currentColor"
+											class="bi bi-chevron-down"
+											viewBox="0 0 16 16"
+										>
+											<path
+												fill-rule="evenodd"
+												d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
+											/>
+										</svg>
+									</button>
+								</div>
+							</div>
+							<div class="mt-4 grid grid-cols-[32px_repeat(7,minmax(0,1fr))] gap-1 text-xs">
+								<div
+									class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400"
+								>
+									W
+								</div>
+								{#each CALENDAR_WEEKDAYS as label}
+									<div
+										class="flex h-8 items-center justify-center text-[10px] font-semibold text-stone-400"
+									>
+										{label}
+									</div>
+								{/each}
+								{#each calendarWeeks as week, weekIndex}
+									<div
+										class="flex h-9 items-center justify-center text-[10px] font-semibold text-stone-400"
+									>
+										{weekIndex + 1}
+									</div>
+									{#each week as day}
+										{@const dateKey = formatDateString(day)}
+										{@const isCurrentMonth = day.getMonth() === calendarMonthIndex}
+										{@const isSelected = dateKey === calendarSelectedDate}
+										{@const isHovered = dateKey === calendarHoverDate}
+										{@const isToday = dateKey === localToday()}
+										<button
+											type="button"
+											class={`group flex h-9 w-full flex-col items-center justify-center rounded-md border border-transparent text-xs transition ${
+												isSelected
+													? 'bg-stone-900 text-white'
+													: isHovered
+														? 'bg-stone-100'
+														: 'hover:bg-stone-100'
+											} ${
+												isSelected ? '' : isCurrentMonth ? 'text-stone-800' : 'text-stone-400'
+											} ${!isSelected && isToday ? 'ring-1 ring-stone-300' : ''}`}
+											onclick={() => handleCalendarSelect(dateKey)}
+										>
+											<span class="leading-none">{day.getDate()}</span>
+											<span
+												class={`mt-1 h-1 w-1 rounded-full ${heatmapColorClass(heatmapByDate[dateKey] ?? 0)}`}
+											></span>
+										</button>
+									{/each}
+								{/each}
+							</div>
+						</div>
+						<div class="rounded-2xl border border-stone-200 bg-white p-4">
+							<div class="flex items-start justify-between">
+								<div>
+									<div class="mt-1 text-sm font-medium text-stone-900">
+										{calendarSummaryLabel ?? '—'}
+									</div>
+								</div>
+								<div class="flex flex-col items-end gap-2">
+									<div
+										class={`flex items-center justify-center rounded-md p-2 text-xs font-medium text-white ${summaryScoreColor(
+											calendarSummary?.score ?? 0
+										)}`}
+									>
+										{calendarSummary?.score ?? 0}
+									</div>
+								</div>
+							</div>
+							{#if calendarSummaryLoading}
+								<div class="mt-4 text-xs text-stone-400">Loading summary...</div>
+							{:else}
+								<div class="mt-4 space-y-2 text-sm text-stone-700">
+									<div class="flex items-center justify-between">
+										<span>Tasks planned</span>
+										<span class="font-semibold text-stone-900">
+											{calendarSummary?.planned ?? 0}
+										</span>
+									</div>
+									<div class="flex items-center justify-between">
+										<span>Tasks completed</span>
+										<span class="font-semibold text-stone-900">
+											{calendarSummary?.completed ?? 0}
+										</span>
+									</div>
+									<div class="flex items-center justify-between">
+										<span>Productive hours</span>
+										<span class="font-semibold text-stone-900">
+											{formatProductiveHours(calendarSummary?.productiveHours ?? 0)}
+										</span>
+									</div>
+								</div>
+								<div class="mt-4">
+									<div class="mt-3 flex justify-between gap-2">
+										<div class="flex items-center justify-center">
+											<div
+												class="summary-pie h-30 w-30 rounded-full"
+												style={summaryPieStyle(calendarSummary)}
+											></div>
+										</div>
+										<div class="space-y-2 text-sm text-stone-700">
+											{#each calendarSummary?.categoryBreakdown ?? [] as category}
+												<div class="flex w-40 items-center justify-between">
+													<div class="flex items-center gap-2">
+														<span class={SUMMARY_CATEGORY_CLASSES[category.key]}>
+															{#if category.key === 'rest'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+																	/>
+																</svg>
+															{:else if category.key === 'body'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+																	/>
+																</svg>
+															{:else if category.key === 'work'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+																	/>
+																</svg>
+															{:else if category.key === 'admin'}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+																	/>
+																</svg>
+															{:else}
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	class="h-3 w-3"
+																	fill="currentColor"
+																	aria-hidden="true"
+																>
+																	<path
+																		d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+																	/>
+																</svg>
+															{/if}
+														</span>
+														<span>{category.label}</span>
+													</div>
+													<span class="font-semibold text-stone-900">
+														{formatProductiveHours(category.hours)}h
+													</span>
+												</div>
+											{/each}
+										</div>
+									</div>
+								</div>
+							{/if}
 						</div>
 					</div>
 				</div>
@@ -1211,6 +1825,19 @@
 {@render children()}
 
 <style>
+	:global(:root) {
+		--summary-body: #fda4af;
+		--summary-rest: #c4b5fd;
+		--summary-work: #cbd5e1;
+		--summary-admin: rgba(120, 53, 15, 0.3);
+		--summary-bad: #f43f5e;
+		--summary-empty: #e5e7eb;
+	}
+
+	.summary-pie {
+		background: conic-gradient(var(--summary-empty) 0% 100%);
+	}
+
 	.heatmap-sheen {
 		overflow: hidden;
 	}

@@ -91,7 +91,9 @@
 
 	function handleBlockKeydown(event: KeyboardEvent) {
 		if (!editable) return;
+		if (!selected) return;
 		if (event.key === 'Enter' || event.key === ' ') {
+			event.stopPropagation();
 			event.preventDefault();
 			handleBlockClick();
 		}
@@ -228,8 +230,8 @@
 	class:ring-offset-1={selected}
 	class:ring-offset-stone-50={selected}
 	class:block-cut-source={Boolean(props.isCut)}
-	class:block-copy-source={isCopied}
 	role={canOpen ? 'button' : undefined}
+	tabindex={-1}
 	onclick={handleBlockClick}
 	onkeydown={handleBlockKeydown}
 >
@@ -546,10 +548,5 @@
 	.block-cut-source {
 		box-shadow: 0 0 0 2px rgb(248 113 113);
 		border-color: rgb(248 113 113);
-	}
-
-	.block-copy-source {
-		box-shadow: 0 0 0 2px rgb(59 130 246);
-		border-color: rgb(59 130 246);
 	}
 </style>

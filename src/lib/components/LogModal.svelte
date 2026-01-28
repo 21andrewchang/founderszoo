@@ -61,14 +61,15 @@
 		{ label: 'Admin', value: 'admin', key: '4' }
 	];
 	const HABIT_DAYS = [
-		{ label: 'Mon', value: 0 },
-		{ label: 'Tue', value: 1 },
-		{ label: 'Wed', value: 2 },
-		{ label: 'Thu', value: 3 },
-		{ label: 'Fri', value: 4 },
-		{ label: 'Sat', value: 5 },
-		{ label: 'Sun', value: 6 }
+		{ label: 'Monday', value: 0 },
+		{ label: 'Tuesday', value: 1 },
+		{ label: 'Wednesday', value: 2 },
+		{ label: 'Thursday', value: 3 },
+		{ label: 'Friday', value: 4 },
+		{ label: 'Saturday', value: 5 },
+		{ label: 'Sunday', value: 6 }
 	];
+	const HABIT_MENU_DAYS = [{ label: 'All days', value: -1 }, ...HABIT_DAYS];
 
 	let text = $state('');
 	let status = $state<boolean | null>(null);
@@ -79,7 +80,7 @@
 	let habitMode = $state(false);
 	let habitMenuOpen = $state(false);
 	let habitMenuIndex = $state(0);
-	let habitDays = $state<number[]>([0, 1, 2, 3, 4, 5, 6]);
+	let habitDays = $state<number[]>([]);
 	let habitId = $state<string | null>(null);
 	const statusKind = $derived<StatusKind>(
 		category === 'bad'
@@ -158,6 +159,14 @@
 	}
 
 	function toggleHabitDay(value: number) {
+		if (value === -1) {
+			if (habitDays.length === HABIT_DAYS.length) {
+				habitDays = [];
+				return;
+			}
+			habitDays = HABIT_DAYS.map((day) => day.value);
+			return;
+		}
 		if (habitDays.includes(value)) {
 			habitDays = habitDays.filter((day) => day !== value);
 		} else {
@@ -167,16 +176,9 @@
 	function toggleHabitMenu() {
 		habitMenuOpen = !habitMenuOpen;
 		if (habitMenuOpen) {
-			if (!habitMode) habitMode = true;
-			if (habitDays.length === 0) habitDays = [0, 1, 2, 3, 4, 5, 6];
-			habitMenuIndex = Math.min(habitMenuIndex, HABIT_DAYS.length - 1);
+			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
 		}
 	}
-	function disableHabitMode() {
-		habitMode = false;
-		habitMenuOpen = false;
-	}
-
 	function maxBlockCount() {
 		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
@@ -198,17 +200,17 @@
 				return;
 			}
 			if (key === 'j' || key === 'ArrowDown') {
-				habitMenuIndex = (habitMenuIndex + 1) % HABIT_DAYS.length;
+				habitMenuIndex = (habitMenuIndex + 1) % HABIT_MENU_DAYS.length;
 				e.preventDefault();
 				return;
 			}
 			if (key === 'k' || key === 'ArrowUp') {
-				habitMenuIndex = (habitMenuIndex - 1 + HABIT_DAYS.length) % HABIT_DAYS.length;
+				habitMenuIndex = (habitMenuIndex - 1 + HABIT_MENU_DAYS.length) % HABIT_MENU_DAYS.length;
 				e.preventDefault();
 				return;
 			}
 			if (key === 'Enter') {
-				const day = HABIT_DAYS[habitMenuIndex];
+				const day = HABIT_MENU_DAYS[habitMenuIndex];
 				if (day) toggleHabitDay(day.value);
 				e.preventDefault();
 				return;
@@ -231,7 +233,7 @@
 			return;
 		}
 
-		if (mode === 'normal' && key === 't') {
+		if (mode === 'normal' && key === 'b') {
 			e.preventDefault();
 			cycleBlockCount();
 			return;
@@ -241,6 +243,12 @@
 			if (statusDisabled) return;
 			e.preventDefault();
 			cycleStatus();
+			return;
+		}
+
+		if (mode === 'normal' && key === 'h') {
+			e.preventDefault();
+			toggleHabitMenu();
 			return;
 		}
 
@@ -281,7 +289,7 @@
 			const habitConfig = habitMode
 				? {
 						id: habitId,
-						repeatDays: habitDays.length > 0 ? habitDays : [0, 1, 2, 3, 4, 5, 6]
+						repeatDays: habitDays
 					}
 				: null;
 			await Promise.resolve(onSave(value, status, hour, half, saveCount, category, habitConfig));
@@ -316,9 +324,9 @@
 		text = initialTitle ?? '';
 		status = initialStatus ?? null;
 		category = initialCategory ?? null;
-		habitMode = Boolean(initialHabit);
 		habitId = initialHabit?.id ?? null;
-		habitDays = initialHabit?.repeatDays ?? [0, 1, 2, 3, 4, 5, 6];
+		habitDays = initialHabit?.repeatDays ?? [];
+		habitMode = habitDays.length > 0;
 		habitMenuOpen = false;
 		habitMenuIndex = 0;
 		isNewBlock = (initialTitle ?? '').trim().length === 0 && !initialHabit;
@@ -341,12 +349,12 @@
 	});
 	$effect(() => {
 		if (!open) return;
+		habitMode = habitDays.length > 0;
 		if (habitMode) {
 			status = null;
 			blockCount = 1;
-		}
-		if (!habitMode && habitMenuOpen) {
-			habitMenuOpen = false;
+		} else {
+			habitId = null;
 		}
 	});
 
@@ -514,7 +522,7 @@
 								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
-								t
+								b
 							</span>
 						{/if}
 					</span>
@@ -579,62 +587,101 @@
 			</div>
 
 			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-4 py-3">
-				<div class="relative flex items-center gap-2">
+				<div class="flex items-center gap-2">
+					<div class="relative">
+						<button
+							type="button"
+							class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+							class:bg-stone-100={habitMode}
+							onclick={toggleHabitMenu}
+						>
+							<span class="relative flex h-3 w-3 items-center justify-center">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-3 w-3 text-stone-700"
+									fill="currentColor"
+								>
+									<path
+										d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+									/>
+									<path
+										fill-rule="evenodd"
+										d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+									/>
+								</svg>
+								{#if mode === 'normal'}
+									<span
+										class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+										in:fly={{ y: 6, duration: 200 }}
+									>
+										h
+									</span>
+								{/if}
+							</span>
+							Habit
+						</button>
+						{#if habitMenuOpen}
+							<div
+								class="absolute top-full left-0 z-20 mt-2 w-40 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+							>
+								<div class="space-y-1">
+									{#each HABIT_MENU_DAYS as day, index}
+										<button
+											type="button"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+											class:bg-stone-100={habitMenuIndex === index}
+											onclick={() => toggleHabitDay(day.value)}
+											onmouseenter={() => (habitMenuIndex = index)}
+										>
+											<span>{day.label}</span>
+											{#if day.value === -1 ? habitDays.length === HABIT_DAYS.length : habitDays.includes(day.value)}
+												<span class="text-[10px] font-semibold text-stone-900">✓</span>
+											{/if}
+										</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</div>
 					<button
 						type="button"
 						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-						class:bg-stone-100={habitMode}
-						onclick={toggleHabitMenu}
 					>
-						<span class="relative flex h-3 w-3 items-center justify-center">
+						<span class="flex h-3 w-3 items-center justify-center">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-2.5 w-2.5 text-stone-700"
+								fill="currentColor"
+								aria-hidden="true"
+							>
+								<path
+									d="M2 2v13.5a.5.5 0 0 0 .74.439L8 13.069l5.26 2.87A.5.5 0 0 0 14 15.5V2a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2"
+								/>
+							</svg>
+						</span>
+						Event
+					</button>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					>
+						<span class="flex h-3 w-3 items-center justify-center">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								viewBox="0 0 16 16"
 								class="h-3 w-3 text-stone-700"
 								fill="currentColor"
+								aria-hidden="true"
 							>
 								<path
-									d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
-								/>
-								<path
-									fill-rule="evenodd"
-									d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+									d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8 4a.905.905 0 0 0-.9.995l.35 3.507a.552.552 0 0 0 1.1 0l.35-3.507A.905.905 0 0 0 8 4m.002 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2"
 								/>
 							</svg>
 						</span>
-						Habit
+						Prio
 					</button>
-					{#if habitMenuOpen}
-						<div
-							class="absolute top-full left-0 z-20 mt-2 w-40 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
-						>
-							<div class="space-y-1">
-								{#each HABIT_DAYS as day, index}
-									<button
-										type="button"
-										class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
-										class:bg-stone-100={habitMenuIndex === index}
-										onclick={() => toggleHabitDay(day.value)}
-										onmouseenter={() => (habitMenuIndex = index)}
-									>
-										<span>{day.label}</span>
-										{#if habitDays.includes(day.value)}
-											<span class="text-[10px] font-semibold text-stone-900">✓</span>
-										{/if}
-									</button>
-								{/each}
-							</div>
-							<div class="mt-2 border-t border-stone-100 pt-2">
-								<button
-									type="button"
-									class="w-full rounded-md px-2 py-1 text-left text-[10px] font-medium text-stone-500 hover:text-stone-900"
-									onclick={disableHabitMode}
-								>
-									Not a habit
-								</button>
-							</div>
-						</div>
-					{/if}
 				</div>
 				<button
 					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
