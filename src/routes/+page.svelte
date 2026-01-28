@@ -1353,7 +1353,6 @@
 		if (!viewerUserId || !selectedBlock) return false;
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
-		if (maybeHandlePaste(viewerUserId, hour, selectedBlock.half)) return true;
 		const habitName = (getHabitTitle(viewerUserId, hour, selectedBlock.half) ?? '').trim();
 		const title = getTitle(viewerUserId, hour, selectedBlock.half).trim();
 		if (!title && !habitName) return true;
