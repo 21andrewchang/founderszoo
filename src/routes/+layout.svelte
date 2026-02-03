@@ -107,6 +107,10 @@
 	let heatmapLoading = $state(false);
 	let heatmapAnimated = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
+	let heatmapCellPx = $state(14);
+	let heatmapGapPx = $state(4);
+	let heatmapGridEl = $state<HTMLDivElement | null>(null);
+	let heatmapResizeObserver: ResizeObserver | null = null;
 	let calendarLockedDate = $state<string | null>(null);
 	let calendarHoverDate = $state<string | null>(null);
 	let calendarMonthIndex = $state<number>(new Date().getMonth());
@@ -245,7 +249,7 @@
 		if (days !== null && days >= 0) base.push('yc-app');
 		return base;
 	});
-	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Goal');
+	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Milestone');
 	const yearGoalEntry = $derived(mergedYearEntry());
 	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
 	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
@@ -426,6 +430,19 @@
 		return 'bg-stone-200';
 	}
 
+	function updateHeatmapSizing() {
+		if (!heatmapGridEl) return;
+		const columns = heatmapWeeks.length;
+		if (!columns) return;
+		const width = heatmapGridEl.getBoundingClientRect().width;
+		const gap = 4;
+		const rawCell = Math.floor((width - gap * (columns - 1)) / columns);
+		const nextCell = Math.max(8, Math.min(20, rawCell));
+		const nextGap = Math.max(2, Math.min(6, Math.round(nextCell * 0.25)));
+		heatmapCellPx = nextCell;
+		heatmapGapPx = nextGap;
+	}
+
 	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
 		admin: 'var(--summary-admin)',
@@ -525,13 +542,11 @@
 
 	function buildCalendarWeeks(year: number, monthIndex: number) {
 		const firstDay = new Date(year, monthIndex, 1);
-		const lastDay = new Date(year, monthIndex + 1, 0);
 		const firstWeekday = (firstDay.getDay() + 6) % 7;
 		const start = new Date(firstDay);
 		start.setDate(firstDay.getDate() - firstWeekday);
-		const lastWeekday = (lastDay.getDay() + 6) % 7;
-		const end = new Date(lastDay);
-		end.setDate(lastDay.getDate() + (6 - lastWeekday));
+		const end = new Date(start);
+		end.setDate(start.getDate() + 6 * 7 - 1);
 		const weeks: Date[][] = [];
 		let cursor = new Date(start);
 		while (cursor <= end) {
@@ -697,7 +712,13 @@
 	}
 
 	function openGoalModal() {
-		isGoalModalOpen = true;
+		const nextOpen = !isGoalModalOpen;
+		isGoalModalOpen = nextOpen;
+		if (nextOpen) {
+			heatmapOpen = false;
+		} else {
+			void saveAllGoals();
+		}
 	}
 
 	function closeGoalModal() {
@@ -1106,6 +1127,18 @@
 		return () => unsubscribe();
 	});
 
+	$effect(() => {
+		if (!browser || !heatmapGridEl) return;
+		heatmapResizeObserver?.disconnect();
+		heatmapResizeObserver = new ResizeObserver(() => updateHeatmapSizing());
+		heatmapResizeObserver.observe(heatmapGridEl);
+		updateHeatmapSizing();
+		return () => {
+			heatmapResizeObserver?.disconnect();
+			heatmapResizeObserver = null;
+		};
+	});
+
 	onMount(() => {
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
@@ -1156,14 +1189,23 @@
 				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
 			}
 			const normalized = event.key.toLowerCase();
-			if (normalized === 't' && !heatmapOpen) {
-				heatmapOpen = true;
-				void loadHeatmap(viewerId);
+			if (normalized === 't') {
+				const nextOpen = !heatmapOpen;
+				heatmapOpen = nextOpen;
+				if (nextOpen) {
+					isGoalModalOpen = false;
+					void loadHeatmap(viewerId);
+				}
 				event.preventDefault();
 				return;
 			}
 			if (event.key === 'Escape' && heatmapOpen) {
 				heatmapOpen = false;
+				return;
+			}
+			if (event.key === 'Escape' && isGoalModalOpen) {
+				isGoalModalOpen = false;
+				void saveAllGoals();
 				return;
 			}
 			if (!heatmapOpen) return;
@@ -1227,7 +1269,7 @@
 
 {#if authSet == null}
 	<div></div>
-{:else if !authSet && presenceCounts.connected && !suppressSpectator}
+{:else if !authSet && !suppressSpectator}
 	<div in:fly={{ y: 2, duration: 400 }}>
 		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<nav
@@ -1252,7 +1294,7 @@
 			</div>
 		</nav>
 	</div>
-{:else if authSet && $session.user && presenceCounts.connected}
+{:else if authSet && $session.user}
 	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
 		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<div
@@ -1263,10 +1305,14 @@
 				<button
 					type="button"
 					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
-					aria-label="Open timeline"
+					aria-label="Toggle timeline"
 					onclick={() => {
-						heatmapOpen = true;
-						void loadHeatmap(viewerId);
+						const nextOpen = !heatmapOpen;
+						heatmapOpen = nextOpen;
+						if (nextOpen) {
+							isGoalModalOpen = false;
+							void loadHeatmap(viewerId);
+						}
 					}}
 				>
 					<svg
@@ -1357,7 +1403,7 @@
 								{currentRangeLabel}
 							</span>
 							<span>
-								{currentGoalEntry.title || 'Goal'}
+								{currentGoalEntry.title || 'Milestone'}
 							</span>
 						</span>
 					{/key}
@@ -1377,28 +1423,8 @@
 {/if}
 
 {#if isGoalModalOpen}
-	<div
-		class="fixed inset-0 z-[1800] bg-white text-stone-800"
-		role="dialog"
-		aria-modal="true"
-		aria-label="Goals"
-	>
-		<div class="flex h-full flex-col">
-			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
-				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Goals</div>
-				<div class="flex items-center gap-2">
-					<button
-						type="button"
-						class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
-						onclick={() => {
-							void saveAllGoals();
-							closeGoalModal();
-						}}
-					>
-						Close
-					</button>
-				</div>
-			</div>
+	<div class="min-h-screen bg-white text-stone-800">
+		<div class="mx-auto flex h-full w-full max-w-[1200px] flex-col pt-16">
 			<div class="flex-1 overflow-y-auto px-6 py-6">
 				<div class="space-y-10">
 					<div class="flex w-full items-center justify-between gap-12">
@@ -1424,7 +1450,7 @@
 							</div>
 							<input
 								class="w-full p-2 text-2xl text-stone-800 outline-none"
-								placeholder="Year goal"
+								placeholder="Year milestone"
 								value={yearGoalEntry.title}
 								oninput={(event) =>
 									updateGoalDraft(
@@ -1448,7 +1474,7 @@
 										</div>
 										<input
 											class="w-full rounded-md p-2 text-2xl text-stone-800 outline-none"
-											placeholder={`${quarter.label} goal`}
+											placeholder={`${quarter.label} milestone`}
 											value={quarter.goal.title}
 											oninput={(event) =>
 												updateGoalDraft(
@@ -1470,7 +1496,7 @@
 													</div>
 													<input
 														class="text-md w-full rounded-md p-1 text-stone-800 outline-none"
-														placeholder={`${month.label} goal`}
+														placeholder={`${month.label} milestone`}
 														value={month.goal.title}
 														oninput={(event) =>
 															updateGoalDraft(
@@ -1492,7 +1518,7 @@
 															</div>
 															<input
 																class="w-full rounded-md border border-stone-200 p-2 text-base text-stone-700 outline-none"
-																placeholder={`${week.label} goal`}
+																placeholder={`${week.label} milestone`}
 																value={week.goal.title}
 																oninput={(event) =>
 																	updateGoalDraft(
@@ -1520,78 +1546,69 @@
 {/if}
 
 {#if heatmapOpen}
-	<div
-		class="fixed inset-0 z-[1800] bg-white text-stone-800"
-		role="dialog"
-		aria-modal="true"
-		aria-label="Timeline"
-	>
-		<div class="flex h-full flex-col">
-			<div class="flex items-center justify-between border-b border-stone-200 px-6 py-4">
-				<div class="text-[11px] font-semibold tracking-wide text-stone-500 uppercase">Timeline</div>
-				<button
-					type="button"
-					class="rounded-md border border-stone-300 px-3 py-1 text-xs font-semibold text-stone-600"
-					onclick={() => (heatmapOpen = false)}
-				>
-					Close
-				</button>
-			</div>
-			<div class="flex flex-1 gap-0 overflow-y-auto px-6 py-6">
-				<div class="flex min-w-0 flex-[2] flex-col gap-6 pr-6">
+	<div class="min-h-screen text-stone-800">
+		<div class="mx-auto flex h-full w-full max-w-[1200px] flex-col pt-16">
+			<div class="flex min-h-[calc(100vh-64px)] flex-1 gap-0 overflow-y-auto px-6 py-2">
+				<div class="relative z-30 flex min-w-0 flex-[2] flex-col gap-6 overflow-x-hidden pr-6">
 					<div class="flex w-full flex-col gap-6">
-						<div class="flex items-start justify-start gap-2">
-							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-								<div class="h-3.5"></div>
-								<div class="h-3.5">M</div>
-								<div class="h-3.5"></div>
-								<div class="h-3.5">W</div>
-								<div class="h-3.5"></div>
-								<div class="h-3.5">F</div>
-								<div class="h-3.5"></div>
-							</div>
-							<div class="flex flex-col gap-2">
-								<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
-									{#each heatmapMonthLabels as label}
-										<div class="w-3.5 text-center">{label}</div>
-									{/each}
+						<div class="w-full overflow-visible pb-1">
+							<div class="flex min-w-max items-start justify-start gap-2">
+								<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
+									<div class="heatmap-day-label"></div>
+									<div class="heatmap-day-label">M</div>
+									<div class="heatmap-day-label"></div>
+									<div class="heatmap-day-label">W</div>
+									<div class="heatmap-day-label"></div>
+									<div class="heatmap-day-label">F</div>
+									<div class="heatmap-day-label"></div>
 								</div>
-								<div class="relative overflow-visible">
-									<div class="flex gap-1">
-										{#each heatmapWeeks as week, weekIndex}
-											<div class="flex flex-col gap-1">
-												{#each week.days as day}
-													{@const dateKey = formatDateString(day)}
-													<button
-														type="button"
-														class={`group relative h-3.5 w-3.5 rounded-xs transition-colors transition-opacity duration-300 ${
-															heatmapLoading
-																? 'bg-stone-200'
-																: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
-														} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''} ${
-															dateKey === calendarSelectedDate
-																? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white'
-																: ''
-														}`}
-														style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
-														disabled={heatmapLoading}
-														onclick={() => handleCalendarSelect(dateKey)}
-													>
-														{#if !heatmapLoading}
-															<span
-																class="pointer-events-none absolute bottom-full left-1/2 z-[20000] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-															>
-																{heatmapDateLabel(dateKey)}
-															</span>
-														{/if}
-													</button>
-												{/each}
-											</div>
+								<div
+									class="heatmap-column flex w-full flex-col gap-2"
+									bind:this={heatmapGridEl}
+									style={`--heatmap-cell: ${heatmapCellPx}px; --heatmap-gap: ${heatmapGapPx}px;`}
+								>
+									<div class="heatmap-months flex h-3 items-center text-[10px] leading-3 text-stone-400">
+										{#each heatmapMonthLabels as label}
+											<div class="heatmap-month text-center">{label}</div>
 										{/each}
 									</div>
-									{#if heatmapLoading}
-										<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
-									{/if}
+									<div class="relative overflow-visible">
+										<div class="heatmap-grid flex">
+											{#each heatmapWeeks as week, weekIndex}
+												<div class="heatmap-week flex flex-col">
+													{#each week.days as day}
+														{@const dateKey = formatDateString(day)}
+														<button
+															type="button"
+															class={`heatmap-cell group relative rounded-xs transition-colors transition-opacity duration-300 ${
+																heatmapLoading
+																	? 'bg-stone-200'
+																	: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
+															} ${!heatmapLoading && !heatmapAnimated ? 'opacity-0' : ''} ${
+																dateKey === calendarSelectedDate
+																	? 'ring-2 ring-stone-400 ring-offset-1 ring-offset-white'
+																	: ''
+															}`}
+															style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
+															disabled={heatmapLoading}
+															onclick={() => handleCalendarSelect(dateKey)}
+														>
+															{#if !heatmapLoading}
+																<span
+																	class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+																>
+																	{heatmapDateLabel(dateKey)}
+																</span>
+															{/if}
+														</button>
+													{/each}
+												</div>
+											{/each}
+										</div>
+										{#if heatmapLoading}
+											<div class="heatmap-sheen pointer-events-none absolute inset-0"></div>
+										{/if}
+									</div>
 								</div>
 							</div>
 						</div>
@@ -1819,7 +1836,7 @@
 						</div>
 					</div>
 				</div>
-				<div class="flex min-w-0 flex-1 flex-col gap-4 border-l border-stone-100 pl-6">
+				<div class="relative z-0 flex min-h-full min-w-0 flex-1 flex-col gap-4 border-l border-stone-100 pl-6">
 					<div class="text-base font-medium text-stone-800">Upcoming</div>
 					<div class="space-y-3">
 						{#each UPCOMING_EVENTS as event}
@@ -1843,12 +1860,16 @@
 
 {#if desktopMode}
 	{#if authSet && $session.user}
-		{@render children()}
+		{#if !heatmapOpen && !isGoalModalOpen}
+			{@render children()}
+		{/if}
 	{:else}
 		<GrogathLogin />
 	{/if}
 {:else}
-	{@render children()}
+	{#if !heatmapOpen && !isGoalModalOpen}
+		{@render children()}
+	{/if}
 {/if}
 
 <style>
@@ -1867,6 +1888,37 @@
 
 	.heatmap-sheen {
 		overflow: hidden;
+	}
+
+	.heatmap-column {
+		gap: var(--heatmap-gap);
+	}
+
+	.heatmap-months {
+		gap: var(--heatmap-gap);
+	}
+
+	.heatmap-month {
+		width: var(--heatmap-cell);
+	}
+
+	.heatmap-grid {
+		gap: var(--heatmap-gap);
+	}
+
+	.heatmap-week {
+		gap: var(--heatmap-gap);
+	}
+
+	.heatmap-cell {
+		width: var(--heatmap-cell);
+		height: var(--heatmap-cell);
+	}
+
+	.heatmap-day-label {
+		height: var(--heatmap-cell);
+		display: flex;
+		align-items: center;
 	}
 
 	.heatmap-sheen::after {

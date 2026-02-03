@@ -6,3 +6,9 @@ body.cursor-hidden,
 body.cursor-hidden * {
 	cursor: none !important;
 }
+
+button:focus,
+button:focus-visible {
+	outline: none;
+	box-shadow: none;
+}

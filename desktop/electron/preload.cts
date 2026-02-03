@@ -1,3 +1,5 @@
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
-contextBridge.exposeInMainWorld('desktop', {});
+contextBridge.exposeInMainWorld('desktop', {
+	hidePanel: () => ipcRenderer.send('desktop:hide-panel')
+});

@@ -12,6 +12,37 @@ body {
 	-webkit-app-region: drag;
 }
 
+.panel-root {
+	width: 100vw;
+	height: 100vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+}
+
+.panel-card {
+	-webkit-app-region: no-drag;
+	width: 320px;
+	max-width: calc(100vw - 48px);
+	padding: 18px 22px;
+	border-radius: 14px;
+	background: rgba(28, 28, 30, 0.6);
+	border: 1px solid rgba(255, 255, 255, 0.14);
+	box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+	backdrop-filter: blur(20px) saturate(150%);
+	-webkit-backdrop-filter: blur(20px) saturate(150%);
+	color: rgba(255, 255, 255, 0.92);
+	font-family: 'Cormorant Garamond', serif;
+}
+
+.panel-title {
+	font-size: 22px;
+	font-weight: 600;
+	letter-spacing: 0.4px;
+	text-align: center;
+}
+
 button,
 a,
 input,
