@@ -620,89 +620,6 @@
 		lastUndoDate = currentDate;
 	});
 
-	async function weeklyHowForDate(dateStr: string) {
-		const weekKey = weekKeyForDate(dateStr);
-		if (!weekKey) return '';
-		try {
-			const { data, error } = await supabase
-				.from('goals')
-				.select('how')
-				.eq('goal_key', weekKey)
-				.maybeSingle();
-			if (error) throw error;
-			return (data?.how ?? '').toString().trim();
-		} catch (error) {
-			console.error('weekly how load error', error);
-			return '';
-		}
-	}
-
-	async function scheduleWeeklyHowSessions(user_id: string, dateStr: string, day_id: string) {
-		const how = (await weeklyHowForDate(dateStr)).trim();
-		if (!how) return;
-
-		const totalBlocks = hours.length * 2;
-		const reserved = new Set<number>();
-		for (let hourIndex = 0; hourIndex < hours.length; hourIndex += 1) {
-			for (const half of [0, 1] as const) {
-				if (!blockHasContent(user_id, hours[hourIndex], half)) continue;
-				reserved.add(blockIndex(hourIndex, half));
-			}
-		}
-
-		const sessions: number[] = [];
-		for (let idx = 0; idx <= totalBlocks - 3 && sessions.length < 2; idx += 1) {
-			const indices = [idx, idx + 1, idx + 2];
-			const isOpen = indices.every((runIndex) => {
-				if (runIndex >= totalBlocks) return false;
-				if (reserved.has(runIndex)) return false;
-				const { hour, half } = blockFromIndex(runIndex);
-				if (hour === undefined) return false;
-				return !blockHasContent(user_id, hour, half);
-			});
-			if (!isOpen) continue;
-			sessions.push(idx);
-			for (const runIndex of indices) reserved.add(runIndex);
-		}
-
-		if (sessions.length === 0) return;
-
-		const payload = [] as {
-			day_id: string;
-			hour: number;
-			half: boolean;
-			title: string;
-			status: boolean | null;
-			category: BlockCategory | null;
-		}[];
-		for (const startIndex of sessions) {
-			for (let offset = 0; offset < 3; offset += 1) {
-				const { hour, half } = blockFromIndex(startIndex + offset);
-				if (hour === undefined) continue;
-				payload.push({
-					day_id,
-					hour,
-					half: half === 1,
-					title: how,
-					status: null,
-					category: null
-				});
-			}
-		}
-		if (payload.length === 0) return;
-
-		const { error } = await supabase
-			.from('hours')
-			.upsert(payload, { onConflict: 'day_id,hour,half' });
-		if (error) {
-			console.error('weekly how schedule error', error);
-			return;
-		}
-		for (const entry of payload) {
-			setTitle(user_id, entry.hour, entry.half ? 1 : 0, how, null, null);
-		}
-	}
-
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
 		blocksByUser[user_id] ??= {};
 		blocksByUser[user_id][h] ??= { first: createEmptyBlock(), second: createEmptyBlock() };
@@ -985,7 +902,6 @@
 			dayIdByUser = { ...dayIdByUser, [viewerUserId]: dayId };
 			if (dayId) {
 				await loadHoursForDay(viewerUserId, dayId);
-				await scheduleWeeklyHowSessions(viewerUserId, nextDate, dayId);
 			} else {
 				blocksByUser = { ...blocksByUser, [viewerUserId]: {} };
 			}

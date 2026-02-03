@@ -45,7 +45,7 @@
 	type ModalMode = 'insert' | 'normal';
 
 	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad';
-	type StatusKind = 'planned' | 'in_progress' | 'completed' | 'bad';
+	type StatusKind = 'none' | 'planned' | 'bad';
 	type HabitConfig = { id: string; repeatDays: number[] };
 	type HabitSaveConfig = { id: string | null; repeatDays: number[] };
 	type CategoryPreset = {
@@ -83,23 +83,9 @@
 	let habitDays = $state<number[]>([]);
 	let habitId = $state<string | null>(null);
 	const statusKind = $derived<StatusKind>(
-		category === 'bad'
-			? 'bad'
-			: status === true
-				? 'completed'
-				: status === false
-					? 'in_progress'
-					: 'planned'
+		category === 'bad' ? 'bad' : status === false ? 'planned' : 'none'
 	);
-	const statusLabel = $derived(
-		statusKind === 'completed'
-			? 'Completed'
-			: statusKind === 'in_progress'
-				? 'In progress'
-				: statusKind === 'bad'
-					? 'Bad'
-					: 'Planned'
-	);
+	const statusLabel = $derived(statusKind === 'bad' ? 'Bad' : 'Planned');
 	const displayedBlockCount = $derived(isNewBlock ? blockCount : runLength);
 	const blockCountDisabled = $derived(!isNewBlock || habitMode);
 	const statusDisabled = $derived(habitMode);
@@ -140,21 +126,18 @@
 			category = 'bad';
 			return;
 		}
-		status = next === 'completed' ? true : next === 'in_progress' ? false : null;
-		if (category === 'bad') {
-			category = null;
+		if (next === 'planned') {
+			status = false;
+			if (category === 'bad') category = null;
+			return;
 		}
+		status = null;
+		if (category === 'bad') category = null;
 	}
 
 	function cycleStatus() {
 		const next: StatusKind =
-			statusKind === 'planned'
-				? 'in_progress'
-				: statusKind === 'in_progress'
-					? 'completed'
-					: statusKind === 'completed'
-						? 'bad'
-						: 'planned';
+			statusKind === 'none' ? 'planned' : statusKind === 'planned' ? 'bad' : 'none';
 		setStatusKind(next);
 	}
 
@@ -531,6 +514,7 @@
 				<button
 					type="button"
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					class:bg-stone-100={statusKind !== 'none'}
 					class:opacity-50={statusDisabled}
 					class:cursor-not-allowed={statusDisabled}
 					onclick={cycleStatus}
@@ -548,17 +532,6 @@
 									d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
 								/>
 							</svg>
-						{:else if status === true}
-							<span class="absolute inset-0 rounded-full bg-stone-800" />
-							<svg viewBox="0 0 24 24" class="relative z-10 h-2.5 w-2.5 text-stone-50" fill="none">
-								<path
-									d="M7 12.5 L10.25 15.75 L16.75 9.25"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								/>
-							</svg>
 						{:else}
 							<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-700" fill="none">
 								<circle
@@ -568,8 +541,6 @@
 									stroke="currentColor"
 									stroke-width="2"
 									stroke-linecap="round"
-									class:status-ring-dashed={status === null}
-									class:status-ring-solid={status === false}
 								/>
 							</svg>
 						{/if}
@@ -704,13 +675,5 @@
 	}
 	select.no-chevron::-ms-expand {
 		display: none;
-	}
-
-	.status-ring-dashed {
-		stroke-dasharray: 3 3;
-	}
-
-	.status-ring-solid {
-		stroke-dasharray: 0;
 	}
 </style>

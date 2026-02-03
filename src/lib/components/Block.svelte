@@ -67,7 +67,8 @@
 	);
 
 	const showStatus = $derived(
-		showStatusProp === undefined ? isFilled && !isHabit : Boolean(showStatusProp)
+		(showStatusProp === undefined ? isFilled && !isHabit : Boolean(showStatusProp)) &&
+			(status !== null || isBadCategory)
 	);
 	const canToggleStatus = $derived(editable && isFilled && !isHabit && !isBadCategory);
 
@@ -385,8 +386,6 @@
 						stroke="currentColor"
 						stroke-width="2"
 						stroke-linecap="round"
-						class:status-ring-dashed={status === null}
-						class:status-ring-solid={status === false}
 						class:status-ring-progress={statusAnim === 'progress'}
 					/>
 				</svg>
@@ -442,14 +441,6 @@
 
 	.status-bad-shake {
 		animation: status-bad-shake 0.22s ease-in-out;
-	}
-
-	.status-ring-dashed {
-		stroke-dasharray: 3 3;
-	}
-
-	.status-ring-solid {
-		stroke-dasharray: 0;
 	}
 
 	.status-ring-progress {
