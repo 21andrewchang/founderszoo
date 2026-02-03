@@ -14,7 +14,8 @@
 	},
 	"dependencies": {
 		"@supabase/ssr": "^0.7.0",
-		"@supabase/supabase-js": "^2.58.5"
+		"@supabase/supabase-js": "^2.58.5",
+		"uiohook-napi": "^1.5.4"
 	},
 	"devDependencies": {
 		"@sveltejs/vite-plugin-svelte": "^6.2.1",

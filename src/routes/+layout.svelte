@@ -107,10 +107,8 @@
 	let heatmapLoading = $state(false);
 	let heatmapAnimated = $state(false);
 	let heatmapByDate = $state<Record<string, number>>({});
-	let heatmapCellPx = $state(14);
-	let heatmapGapPx = $state(4);
-	let heatmapGridEl = $state<HTMLDivElement | null>(null);
-	let heatmapResizeObserver: ResizeObserver | null = null;
+	let heatmapScrollEl = $state<HTMLDivElement | null>(null);
+	let heatmapTooltip = $state({ text: '', x: 0, y: 0, visible: false });
 	let calendarLockedDate = $state<string | null>(null);
 	let calendarHoverDate = $state<string | null>(null);
 	let calendarMonthIndex = $state<number>(new Date().getMonth());
@@ -430,18 +428,6 @@
 		return 'bg-stone-200';
 	}
 
-	function updateHeatmapSizing() {
-		if (!heatmapGridEl) return;
-		const columns = heatmapWeeks.length;
-		if (!columns) return;
-		const width = heatmapGridEl.getBoundingClientRect().width;
-		const gap = 4;
-		const rawCell = Math.floor((width - gap * (columns - 1)) / columns);
-		const nextCell = Math.max(8, Math.min(20, rawCell));
-		const nextGap = Math.max(2, Math.min(6, Math.round(nextCell * 0.25)));
-		heatmapCellPx = nextCell;
-		heatmapGapPx = nextGap;
-	}
 
 	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
@@ -576,6 +562,45 @@
 			parsed.setDate(0);
 		}
 		return formatDateString(parsed);
+	}
+
+	function handleHeatmapWheel(event: WheelEvent) {
+		if (!heatmapScrollEl) return;
+		const rect = heatmapScrollEl.getBoundingClientRect();
+		if (
+			event.clientX < rect.left ||
+			event.clientX > rect.right ||
+			event.clientY < rect.top ||
+			event.clientY > rect.bottom
+		) {
+			return;
+		}
+		if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+		if (heatmapScrollEl.scrollWidth <= heatmapScrollEl.clientWidth) return;
+		heatmapScrollEl.scrollLeft += event.deltaY;
+		event.preventDefault();
+	}
+
+	function showHeatmapTooltip(event: MouseEvent, label: string) {
+		heatmapTooltip = {
+			text: label,
+			x: event.clientX,
+			y: event.clientY - 10,
+			visible: true
+		};
+	}
+
+	function moveHeatmapTooltip(event: MouseEvent) {
+		if (!heatmapTooltip.visible) return;
+		heatmapTooltip = {
+			...heatmapTooltip,
+			x: event.clientX,
+			y: event.clientY - 10
+		};
+	}
+
+	function hideHeatmapTooltip() {
+		heatmapTooltip = { ...heatmapTooltip, visible: false };
 	}
 
 	const UPCOMING_EVENTS = [
@@ -1127,17 +1152,6 @@
 		return () => unsubscribe();
 	});
 
-	$effect(() => {
-		if (!browser || !heatmapGridEl) return;
-		heatmapResizeObserver?.disconnect();
-		heatmapResizeObserver = new ResizeObserver(() => updateHeatmapSizing());
-		heatmapResizeObserver.observe(heatmapGridEl);
-		updateHeatmapSizing();
-		return () => {
-			heatmapResizeObserver?.disconnect();
-			heatmapResizeObserver = null;
-		};
-	});
 
 	onMount(() => {
 		let mounted = true;
@@ -1549,38 +1563,40 @@
 	<div class="min-h-screen text-stone-800">
 		<div class="mx-auto flex h-full w-full max-w-[1200px] flex-col pt-16">
 			<div class="flex min-h-[calc(100vh-64px)] flex-1 gap-0 overflow-y-auto px-6 py-2">
-				<div class="relative z-30 flex min-w-0 flex-[2] flex-col gap-6 overflow-x-hidden pr-6">
+				<div
+					class="relative z-30 flex min-w-0 flex-[2] flex-col gap-6 overflow-x-hidden pr-6"
+					onwheel={handleHeatmapWheel}
+				>
 					<div class="flex w-full flex-col gap-6">
-						<div class="w-full overflow-visible pb-1">
+						<div
+							class="-mx-2 w-full overflow-x-auto overflow-y-visible pb-1 px-2"
+							bind:this={heatmapScrollEl}
+						>
 							<div class="flex min-w-max items-start justify-start gap-2">
 								<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-									<div class="heatmap-day-label"></div>
-									<div class="heatmap-day-label">M</div>
-									<div class="heatmap-day-label"></div>
-									<div class="heatmap-day-label">W</div>
-									<div class="heatmap-day-label"></div>
-									<div class="heatmap-day-label">F</div>
-									<div class="heatmap-day-label"></div>
+									<div class="h-3"></div>
+									<div class="h-3">M</div>
+									<div class="h-3"></div>
+									<div class="h-3">W</div>
+									<div class="h-3"></div>
+									<div class="h-3">F</div>
+									<div class="h-3"></div>
 								</div>
-								<div
-									class="heatmap-column flex w-full flex-col gap-2"
-									bind:this={heatmapGridEl}
-									style={`--heatmap-cell: ${heatmapCellPx}px; --heatmap-gap: ${heatmapGapPx}px;`}
-								>
-									<div class="heatmap-months flex h-3 items-center text-[10px] leading-3 text-stone-400">
-										{#each heatmapMonthLabels as label}
-											<div class="heatmap-month text-center">{label}</div>
-										{/each}
-									</div>
+								<div class="flex flex-col gap-2">
+										<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
+											{#each heatmapMonthLabels as label}
+												<div class="w-3 text-center">{label}</div>
+											{/each}
+										</div>
 									<div class="relative overflow-visible">
-										<div class="heatmap-grid flex">
+										<div class="flex gap-1">
 											{#each heatmapWeeks as week, weekIndex}
-												<div class="heatmap-week flex flex-col">
+												<div class="flex flex-col gap-1">
 													{#each week.days as day}
 														{@const dateKey = formatDateString(day)}
 														<button
 															type="button"
-															class={`heatmap-cell group relative rounded-xs transition-colors transition-opacity duration-300 ${
+															class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
 																heatmapLoading
 																	? 'bg-stone-200'
 																	: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
@@ -1592,14 +1608,12 @@
 															style={`transition-delay: ${heatmapLoading ? 0 : weekIndex * 40}ms`}
 															disabled={heatmapLoading}
 															onclick={() => handleCalendarSelect(dateKey)}
+															onmouseenter={(event) =>
+																showHeatmapTooltip(event, heatmapDateLabel(dateKey))
+															}
+															onmousemove={moveHeatmapTooltip}
+															onmouseleave={hideHeatmapTooltip}
 														>
-															{#if !heatmapLoading}
-																<span
-																	class="pointer-events-none absolute bottom-full left-1/2 z-[9999] mb-1 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
-																>
-																	{heatmapDateLabel(dateKey)}
-																</span>
-															{/if}
 														</button>
 													{/each}
 												</div>
@@ -1612,6 +1626,14 @@
 								</div>
 							</div>
 						</div>
+						{#if heatmapTooltip.visible}
+							<div
+								class="pointer-events-none fixed z-[9999] rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white shadow-lg"
+								style={`left: ${heatmapTooltip.x}px; top: ${heatmapTooltip.y}px; transform: translate(-50%, -100%);`}
+							>
+								{heatmapTooltip.text}
+							</div>
+						{/if}
 					</div>
 					<div class="grid w-full gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
 						<div class="rounded-2xl border border-stone-200 bg-white p-4">
@@ -1888,37 +1910,6 @@
 
 	.heatmap-sheen {
 		overflow: hidden;
-	}
-
-	.heatmap-column {
-		gap: var(--heatmap-gap);
-	}
-
-	.heatmap-months {
-		gap: var(--heatmap-gap);
-	}
-
-	.heatmap-month {
-		width: var(--heatmap-cell);
-	}
-
-	.heatmap-grid {
-		gap: var(--heatmap-gap);
-	}
-
-	.heatmap-week {
-		gap: var(--heatmap-gap);
-	}
-
-	.heatmap-cell {
-		width: var(--heatmap-cell);
-		height: var(--heatmap-cell);
-	}
-
-	.heatmap-day-label {
-		height: var(--heatmap-cell);
-		display: flex;
-		align-items: center;
 	}
 
 	.heatmap-sheen::after {

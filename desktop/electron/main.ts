@@ -1,4 +1,5 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { UiohookKey, uIOhook } from 'uiohook-napi';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -97,25 +98,17 @@ app.whenReady().then(async () => {
 		return panelWin;
 	};
 
-	ipcMain.on('desktop:hide-panel', () => {
+	const hidePanel = () => {
 		if (panelWin && !panelWin.isDestroyed()) {
 			panelWin.hide();
 		}
+	};
+
+	ipcMain.on('desktop:hide-panel', () => {
+		hidePanel();
 	});
 
-	let lastToggleAt = 0;
-	let toggleInFlight = false;
 	const togglePanel = async () => {
-		const now = Date.now();
-		if (toggleInFlight || now - lastToggleAt < 50) {
-			return;
-		}
-		lastToggleAt = now;
-		toggleInFlight = true;
-		setTimeout(() => {
-			toggleInFlight = false;
-		}, 40);
-
 		const win = await ensurePanelWindow();
 		if (win.isVisible()) {
 			win.hide();
@@ -126,12 +119,24 @@ app.whenReady().then(async () => {
 		win.focus();
 	};
 
-	const registered = globalShortcut.register('CommandOrControl+K', () => {
+	let pendingCmdK = false;
+	uIOhook.on('keydown', (event) => {
+		if (event.keycode === UiohookKey.K && event.metaKey && !pendingCmdK) {
+			pendingCmdK = true;
+		}
+	});
+	uIOhook.on('keyup', (event) => {
+		if (event.keycode !== UiohookKey.K || !pendingCmdK) return;
+		pendingCmdK = false;
+
+		if (panelWin && !panelWin.isDestroyed() && panelWin.isVisible()) {
+			hidePanel();
+			return;
+		}
+
 		void togglePanel();
 	});
-	if (!registered) {
-		console.warn('Global shortcut registration failed.');
-	}
+	uIOhook.start();
 
 	// Pre-warm panel window so toggle feels instant.
 	void ensurePanelWindow();
@@ -143,7 +148,7 @@ app.whenReady().then(async () => {
 	});
 
 	app.on('will-quit', () => {
-		globalShortcut.unregisterAll();
+		uIOhook.stop();
 	});
 });
 
