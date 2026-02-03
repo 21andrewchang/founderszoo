@@ -12,6 +12,7 @@
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
 	import { useGlobalPresence } from '$lib/presence';
+	import GrogathLogin from './grogath/+page.svelte';
 
 	type Person = { label: string; user_id: string };
 	type Goal = { id: string; title: string; goal_key: string | null };
@@ -70,6 +71,12 @@
 		}
 	};
 
+	const applyAuthState = (u: User | null) => {
+		applyUser(u);
+		authSet = u ? true : false;
+		authSetStore.set(authSet);
+	};
+
 	// tracked players, history, goals, etc.
 	let trackedDisplays = $state<Record<TrackedPlayerKey, PlayerDisplay>>({
 		andrew: { label: 'Andrew', user_id: null },
@@ -113,7 +120,6 @@
 	type GoalEntry = {
 		id: string | null;
 		title: string;
-		how: string;
 		goal_key: string;
 		due_date: string;
 	};
@@ -133,6 +139,20 @@
 		'October',
 		'November',
 		'December'
+	];
+	const MONTH_LABELS = [
+		'Jan',
+		'Feb',
+		'Mar',
+		'Apr',
+		'May',
+		'Jun',
+		'Jul',
+		'Aug',
+		'Sep',
+		'Oct',
+		'Nov',
+		'Dec'
 	];
 	const WEEKS = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
 	const QUARTER_MONTHS = [
@@ -158,15 +178,14 @@
 	const YEAR_ENTRY: GoalEntry = {
 		id: null,
 		title: '',
-		how: '',
 		goal_key: 'year',
 		due_date: `${CURRENT_YEAR}-12-31`
 	};
 	const QUARTER_STRUCTURE = QUARTERS.map((quarter, quarterIndex) => {
-		const months = QUARTER_MONTHS[quarterIndex].map((month) => {
+		const months = QUARTER_MONTHS[quarterIndex].map((month, monthIndex) => {
 			const monthKey = month.toLowerCase();
 			return {
-				label: month,
+				label: MONTH_LABELS[quarterIndex * 3 + monthIndex] ?? month,
 				key: monthKey,
 				weeks: WEEKS.map((week, weekIndex) => ({
 					label: week,
@@ -241,7 +260,6 @@
 			return {
 				id: null,
 				title: 'YC App',
-				how: '',
 				goal_key: 'yc-app',
 				due_date: YC_APP_DUE_DATE
 			};
@@ -251,10 +269,10 @@
 
 	function rangeLabelForGoalKey(goalKey: GoalRotationKey) {
 		if (goalKey === 'week') {
-			return `Now`;
+			return `W${CURRENT_WEEK_INDEX}`;
 		}
 		if (goalKey === 'month') {
-			return `${MONTHS[CURRENT_MONTH_INDEX]}`;
+			return `${MONTH_LABELS[CURRENT_MONTH_INDEX]}`;
 		}
 		if (goalKey === 'quarter') {
 			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
@@ -390,12 +408,11 @@
 		const existing = goalsByKey[goalKey];
 		const due_date = goalDueDateForKey(goalKey);
 		if (!existing) {
-			return { id: null, title: '', how: '', goal_key: goalKey, due_date };
+			return { id: null, title: '', goal_key: goalKey, due_date };
 		}
 		return {
 			id: existing.id,
 			title: existing.title,
-			how: existing.how ?? '',
 			goal_key: goalKey,
 			due_date: existing.due_date ?? due_date
 		};
@@ -546,6 +563,20 @@
 		return formatDateString(parsed);
 	}
 
+	const UPCOMING_EVENTS = [
+		{ id: 'yc-app', title: 'YC App Due', date: YC_APP_DUE_DATE },
+		{
+			id: 'yc-final-pass',
+			title: 'YC App Final Pass',
+			date: addDaysToDateString(YC_APP_DUE_DATE, -3)
+		},
+		{
+			id: 'yc-demo',
+			title: 'YC Demo Ready',
+			date: addDaysToDateString(YC_APP_DUE_DATE, 7)
+		}
+	];
+
 	function setCalendarMonthFromDate(dateStr: string) {
 		const parsed = parseLocalDate(dateStr);
 		if (!parsed) return;
@@ -685,18 +716,6 @@
 		};
 	}
 
-	function updateGoalHowDraft(goalKey: string, value: string) {
-		const existing = goalsByKey[goalKey] ?? mergeGoal(goalKey);
-		goalsByKey = {
-			...goalsByKey,
-			[goalKey]: {
-				...existing,
-				how: value,
-				goal_key: goalKey
-			}
-		};
-	}
-
 	function handleGoalKeydown(goalKey: string, event: KeyboardEvent) {
 		if (event.key !== 'Enter') return;
 		event.preventDefault();
@@ -706,7 +725,7 @@
 
 	async function saveGoal(goalKey: string) {
 		const entry = goalsByKey[goalKey] ?? mergeGoal(goalKey);
-		if (!entry.title.trim() && !entry.how.trim()) return;
+		if (!entry.title.trim()) return;
 		const dueDate = goalDueDateForKey(goalKey);
 		savingGoals = { ...savingGoals, [goalKey]: true };
 		try {
@@ -716,13 +735,12 @@
 					{
 						goal_key: goalKey,
 						title: entry.title.trim(),
-						how: entry.how?.trim() ?? '',
 						due_date: dueDate,
 						created_at: formatLocalTimestamp(new Date())
 					},
 					{ onConflict: 'goal_key' }
 				)
-				.select('id, title, how, goal_key, due_date')
+				.select('id, title, goal_key, due_date')
 				.single();
 			if (error) throw error;
 			if (data) {
@@ -731,7 +749,6 @@
 					[goalKey]: {
 						id: data.id as string,
 						title: (data.title ?? '').trim(),
-						how: (data.how ?? entry.how ?? '').toString(),
 						goal_key: (data.goal_key ?? goalKey).toString(),
 						due_date: (data.due_date as string | null) ?? dueDate
 					}
@@ -973,9 +990,7 @@
 
 	async function loadGoals() {
 		try {
-			const { data, error } = await supabase
-				.from('goals')
-				.select('id, title, how, goal_key, due_date');
+			const { data, error } = await supabase.from('goals').select('id, title, goal_key, due_date');
 			if (error) throw error;
 			const next: Record<string, GoalEntry> = {};
 			for (const row of data ?? []) {
@@ -985,7 +1000,6 @@
 				next[goalKey] = {
 					id: row.id as string,
 					title: (row.title ?? '').trim(),
-					how: (row.how ?? '').toString(),
 					goal_key: goalKey,
 					due_date: (row.due_date as string | null) ?? goalDueDateForKey(goalKey)
 				};
@@ -1095,6 +1109,7 @@
 	onMount(() => {
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
+		let authSubscription: { unsubscribe: () => void } | null = null;
 
 		const init = async () => {
 			let authUser: User | null = null;
@@ -1102,14 +1117,10 @@
 				const { data } = await supabase.auth.getUser();
 				if (!mounted) return;
 				authUser = data.user ?? null;
-				applyUser(authUser);
-				authSet = authUser ? true : false;
-				authSetStore.set(authSet);
+				applyAuthState(authUser);
 			} catch {
 				if (!mounted) return;
-				applyUser(null);
-				authSet = false;
-				authSetStore.set(authSet);
+				applyAuthState(null);
 				authUser = null;
 			}
 			if (!mounted) return;
@@ -1119,6 +1130,16 @@
 		};
 
 		void init();
+
+		const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+			if (!mounted) return;
+			const nextUser = session?.user ?? null;
+			applyAuthState(nextUser);
+			void loadGoals();
+			void loadHeatmap(nextUser?.id ?? null);
+			void refreshTrackedPlayers();
+		});
+		authSubscription = data.subscription;
 
 		currentProgressInterval = window.setInterval(() => {
 			void refreshCurrentCombined();
@@ -1187,6 +1208,7 @@
 				currentProgressInterval = null;
 			}
 			window.clearInterval(goalRotationInterval);
+			authSubscription?.unsubscribe();
 		};
 	});
 	$inspect(authSet);
@@ -1194,7 +1216,7 @@
 	$inspect(currentCombinedPct);
 	$inspect(presenceCounts.connected);
 
-	let { children } = $props();
+	let { children, suppressSpectator = false, desktopMode = false } = $props();
 </script>
 
 <svelte:head>
@@ -1205,7 +1227,7 @@
 
 {#if authSet == null}
 	<div></div>
-{:else if !authSet && presenceCounts.connected}
+{:else if !authSet && presenceCounts.connected && !suppressSpectator}
 	<div in:fly={{ y: 2, duration: 400 }}>
 		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<nav
@@ -1481,24 +1503,6 @@
 																onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
 																onblur={() => void saveGoal(week.goal.goal_key)}
 															/>
-															<div
-																class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
-															>
-																How
-															</div>
-															<input
-																class="w-full rounded-md border border-stone-200 p-2 text-sm text-stone-600 outline-none"
-																placeholder="Daily how"
-																value={week.goal.how}
-																oninput={(event) =>
-																	updateGoalHowDraft(
-																		week.goal.goal_key,
-																		(event.currentTarget as HTMLInputElement).value
-																	)}
-																onchange={() => void saveGoal(week.goal.goal_key)}
-																onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
-																onblur={() => void saveGoal(week.goal.goal_key)}
-															/>
 														</div>
 													{/each}
 												</div>
@@ -1533,10 +1537,10 @@
 					Close
 				</button>
 			</div>
-			<div class="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
-				<div class="flex justify-center">
-					<div class="flex w-full max-w-5xl flex-col gap-6">
-						<div class="flex items-start justify-center gap-2">
+			<div class="flex flex-1 gap-0 overflow-y-auto px-6 py-6">
+				<div class="flex min-w-0 flex-[2] flex-col gap-6 pr-6">
+					<div class="flex w-full flex-col gap-6">
+						<div class="flex items-start justify-start gap-2">
 							<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
 								<div class="h-3.5"></div>
 								<div class="h-3.5">M</div>
@@ -1592,9 +1596,7 @@
 							</div>
 						</div>
 					</div>
-				</div>
-				<div class="flex justify-center">
-					<div class="grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+					<div class="grid w-full gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
 						<div class="rounded-2xl border border-stone-200 bg-white p-4">
 							<div class="flex items-center justify-between">
 								<div class="text-sm font-semibold text-stone-900">{calendarMonthLabel}</div>
@@ -1817,12 +1819,37 @@
 						</div>
 					</div>
 				</div>
+				<div class="flex min-w-0 flex-1 flex-col gap-4 border-l border-stone-100 pl-6">
+					<div class="text-base font-medium text-stone-800">Upcoming</div>
+					<div class="space-y-3">
+						{#each UPCOMING_EVENTS as event}
+							<div class="rounded-xl bg-stone-50 p-4">
+								<div class="text-sm font-semibold text-stone-800">{event.title}</div>
+								<div class="mt-1 text-xs text-stone-500">
+									{formatDisplayDate(event.date, {
+										month: 'short',
+										day: 'numeric',
+										year: 'numeric'
+									})}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
 			</div>
 		</div>
 	</div>
 {/if}
 
-{@render children()}
+{#if desktopMode}
+	{#if authSet && $session.user}
+		{@render children()}
+	{:else}
+		<GrogathLogin />
+	{/if}
+{:else}
+	{@render children()}
+{/if}
 
 <style>
 	:global(:root) {
