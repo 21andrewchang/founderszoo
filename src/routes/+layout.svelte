@@ -1569,34 +1569,34 @@
 				>
 					<div class="flex w-full flex-col gap-6">
 						<div
-							class="-mx-2 w-full overflow-x-auto overflow-y-visible pb-1 px-2"
+							class="flex w-full justify-center overflow-x-auto overflow-y-visible p-2 rounded-2xl"
 							bind:this={heatmapScrollEl}
 						>
-							<div class="flex min-w-max items-start justify-start gap-2">
-								<div class="flex flex-col gap-1 pt-[20px] text-[10px] text-stone-400">
-									<div class="h-3"></div>
-									<div class="h-3">M</div>
-									<div class="h-3"></div>
-									<div class="h-3">W</div>
-									<div class="h-3"></div>
-									<div class="h-3">F</div>
-									<div class="h-3"></div>
+							<div class="mx-auto flex min-w-max items-start justify-start gap-2">
+								<div class="flex flex-col gap-1 pt-[20px] text-[9px] text-stone-400">
+									<div class="h-2.5"></div>
+									<div class="h-2.5 leading-none">M</div>
+									<div class="h-2.5"></div>
+									<div class="h-2.5 leading-none">W</div>
+									<div class="h-2.5"></div>
+									<div class="h-2.5 leading-none">F</div>
+									<div class="h-2.5"></div>
 								</div>
 								<div class="flex flex-col gap-2">
-										<div class="flex h-3 items-center gap-1 text-[10px] leading-3 text-stone-400">
+									<div class="flex h-2.5 items-center gap-0.5 text-[9px] leading-3 text-stone-400">
 											{#each heatmapMonthLabels as label}
-												<div class="w-3 text-center">{label}</div>
+												<div class="w-2.5 text-center">{label}</div>
 											{/each}
 										</div>
 									<div class="relative overflow-visible">
-										<div class="flex gap-1">
+										<div class="flex gap-0.5">
 											{#each heatmapWeeks as week, weekIndex}
-												<div class="flex flex-col gap-1">
+												<div class="flex flex-col gap-0.5">
 													{#each week.days as day}
 														{@const dateKey = formatDateString(day)}
 														<button
 															type="button"
-															class={`group relative h-3 w-3 rounded-xs transition-colors transition-opacity duration-300 ${
+															class={`group relative h-2.5 w-2.5 rounded-xs transition-colors transition-opacity duration-300 ${
 																heatmapLoading
 																	? 'bg-stone-200'
 																	: heatmapColorClass(heatmapByDate[dateKey] ?? 0)
@@ -1858,13 +1858,13 @@
 						</div>
 					</div>
 				</div>
-				<div class="relative z-0 flex min-h-full min-w-0 flex-1 flex-col gap-4 border-l border-stone-100 pl-6">
+				<div class="relative z-0 flex min-h-full min-w-0 flex-[0.8] flex-col gap-4 border-l border-stone-100 pl-6">
 					<div class="text-base font-medium text-stone-800">Upcoming</div>
 					<div class="space-y-3">
 						{#each UPCOMING_EVENTS as event}
-							<div class="rounded-xl bg-stone-50 p-4">
-								<div class="text-sm font-semibold text-stone-800">{event.title}</div>
-								<div class="mt-1 text-xs text-stone-500">
+							<div class="rounded-xl bg-stone-50 p-4 flex flex-row justify-between">
+								<div class="text-xs font-medium text-stone-800">{event.title}</div>
+								<div class="text-xs text-stone-500">
 									{formatDisplayDate(event.date, {
 										month: 'short',
 										day: 'numeric',

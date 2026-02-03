@@ -1,5 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import { UiohookKey, uIOhook } from 'uiohook-napi';
+import { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +21,8 @@ const createWindow = async () => {
 		}
 	});
 
-	win.maximize();
+	win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+	win.setFullScreenable(false);
 
 	win.once('ready-to-show', () => win.show());
 
@@ -43,25 +43,25 @@ const createWindow = async () => {
 
 app.whenReady().then(async () => {
 	const mainWin = await createWindow();
-	let panelWin: BrowserWindow | null = null;
+	let hudWin: BrowserWindow | null = null;
 
-	const ensurePanelWindow = async () => {
-		if (panelWin && !panelWin.isDestroyed()) {
-			return panelWin;
+	const ensureHudWindow = async () => {
+		if (hudWin && !hudWin.isDestroyed()) {
+			return hudWin;
 		}
 
-		panelWin = new BrowserWindow({
-			width: 720,
-			height: 520,
+		hudWin = new BrowserWindow({
+			width: 320,
+			height: 120,
 			resizable: false,
 			show: false,
 			frame: false,
 			transparent: true,
 			alwaysOnTop: true,
 			skipTaskbar: true,
-			focusable: true,
-			title: 'Quick Panel',
-			vibrancy: 'popover',
+			focusable: false,
+			title: 'Reminder HUD',
+			backgroundColor: '#00000000',
 			webPreferences: {
 				preload: path.join(__dirname, 'preload.cjs'),
 				contextIsolation: true,
@@ -69,77 +69,98 @@ app.whenReady().then(async () => {
 			}
 		});
 
+		hudWin.setHasShadow(false);
+
 		if (process.platform === 'darwin') {
-			panelWin.setWindowButtonVisibility(false);
+			hudWin.setWindowButtonVisibility(false);
 		}
 
-		panelWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-		panelWin.setFullScreenable(false);
-
-		panelWin.on('blur', () => {
-			if (panelWin && panelWin.isVisible()) {
-				panelWin.hide();
-			}
-		});
+		hudWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+		hudWin.setFullScreenable(false);
 
 		if (devServerUrl) {
-			await panelWin.loadURL(`${devServerUrl}?view=panel`);
+			await hudWin.loadURL(`${devServerUrl}?view=panel`);
 		} else {
-			await panelWin.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
+			await hudWin.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
 				query: { view: 'panel' }
 			});
 		}
 
-		panelWin.webContents.setWindowOpenHandler(({ url }) => {
+		hudWin.webContents.setWindowOpenHandler(({ url }) => {
 			shell.openExternal(url);
 			return { action: 'deny' };
 		});
 
-		return panelWin;
+		return hudWin;
 	};
 
-	const hidePanel = () => {
-		if (panelWin && !panelWin.isDestroyed()) {
-			panelWin.hide();
+	const positionHudTopRight = () => {
+		if (!hudWin || hudWin.isDestroyed()) return;
+		const display = screen.getPrimaryDisplay();
+		const { x, y, width } = display.workArea;
+		const { width: winWidth, height: winHeight } = hudWin.getBounds();
+		const margin = 20;
+		const targetX = x + width - winWidth - margin;
+		const targetY = y + margin;
+		hudWin.setPosition(targetX, targetY, false);
+	};
+
+	ipcMain.on('hud:set-size', (_event, payload: { width: number; height: number }) => {
+		if (!hudWin || hudWin.isDestroyed()) return;
+		const width = Math.max(200, Math.ceil(payload.width) + 8);
+		const height = Math.max(80, Math.ceil(payload.height) + 8);
+		hudWin.setContentSize(width, height, false);
+		positionHudTopRight();
+	});
+
+	const showHud = async (focus = false) => {
+		const hud = await ensureHudWindow();
+		positionHudTopRight();
+		if (focus) {
+			hud.setFocusable(true);
+			hud.show();
+			hud.focus();
+		} else {
+			hud.setFocusable(false);
+			hud.showInactive();
 		}
 	};
 
-	ipcMain.on('desktop:hide-panel', () => {
-		hidePanel();
-	});
+	const hideHud = () => {
+		if (hudWin && !hudWin.isDestroyed()) {
+			hudWin.hide();
+		}
+	};
 
-	const togglePanel = async () => {
-		const win = await ensurePanelWindow();
-		if (win.isVisible()) {
-			win.hide();
+	const focusMainWindow = () => {
+		if (mainWin.isMinimized()) {
+			mainWin.restore();
+		}
+		if (!mainWin.isVisible()) {
+			mainWin.show();
+		}
+		app.focus({ steal: true });
+		mainWin.moveTop();
+		// Toggle always-on-top to ensure focus on macOS.
+		mainWin.setAlwaysOnTop(true);
+		mainWin.focus();
+		mainWin.setAlwaysOnTop(false);
+	};
+
+	const handleCtrlK = () => {
+		if (mainWin.isVisible() && !mainWin.isMinimized() && mainWin.isFocused()) {
+			mainWin.hide();
+			void showHud(true);
 			return;
 		}
-		win.center();
-		win.show();
-		win.focus();
+
+		hideHud();
+		focusMainWindow();
 	};
+	globalShortcut.register('Control+K', handleCtrlK);
 
-	let pendingCmdK = false;
-	uIOhook.on('keydown', (event) => {
-		if (event.keycode === UiohookKey.K && event.metaKey && !pendingCmdK) {
-			pendingCmdK = true;
-		}
-	});
-	uIOhook.on('keyup', (event) => {
-		if (event.keycode !== UiohookKey.K || !pendingCmdK) return;
-		pendingCmdK = false;
-
-		if (panelWin && !panelWin.isDestroyed() && panelWin.isVisible()) {
-			hidePanel();
-			return;
-		}
-
-		void togglePanel();
-	});
-	uIOhook.start();
-
-	// Pre-warm panel window so toggle feels instant.
-	void ensurePanelWindow();
+	// Pre-warm reminder HUD and keep it visible.
+	await showHud(false);
 
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0) {
@@ -148,7 +169,7 @@ app.whenReady().then(async () => {
 	});
 
 	app.on('will-quit', () => {
-		uIOhook.stop();
+		globalShortcut.unregisterAll();
 	});
 });
 
