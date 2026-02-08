@@ -45,7 +45,7 @@
 	type ModalMode = 'insert' | 'normal';
 
 	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad';
-	type StatusKind = 'none' | 'planned' | 'bad';
+	type StatusKind = 'none' | 'bad';
 	type HabitConfig = { id: string; repeatDays: number[] };
 	type HabitSaveConfig = { id: string | null; repeatDays: number[] };
 	type CategoryPreset = {
@@ -82,12 +82,8 @@
 	let habitMenuIndex = $state(0);
 	let habitDays = $state<number[]>([]);
 	let habitId = $state<string | null>(null);
-	const statusKind = $derived<StatusKind>(
-		category === 'bad' ? 'bad' : status === false ? 'planned' : 'none'
-	);
-	const statusLabel = $derived(statusKind === 'bad' ? 'Bad' : 'Planned');
-	const displayedBlockCount = $derived(isNewBlock ? blockCount : runLength);
-	const blockCountDisabled = $derived(!isNewBlock || habitMode);
+	const statusKind = $derived<StatusKind>(category === 'bad' ? 'bad' : 'none');
+	const statusLabel = $derived('Bad');
 	const statusDisabled = $derived(habitMode);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
@@ -126,18 +122,12 @@
 			category = 'bad';
 			return;
 		}
-		if (next === 'planned') {
-			status = false;
-			if (category === 'bad') category = null;
-			return;
-		}
 		status = null;
 		if (category === 'bad') category = null;
 	}
 
 	function cycleStatus() {
-		const next: StatusKind =
-			statusKind === 'none' ? 'planned' : statusKind === 'planned' ? 'bad' : 'none';
+		const next: StatusKind = statusKind === 'none' ? 'bad' : 'none';
 		setStatusKind(next);
 	}
 
@@ -165,12 +155,6 @@
 	function maxBlockCount() {
 		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
-	}
-
-	function cycleBlockCount() {
-		if (!isNewBlock) return;
-		const maxCount = maxBlockCount();
-		blockCount = blockCount >= maxCount ? 1 : blockCount + 1;
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -213,12 +197,6 @@
 		if (mode === 'normal' && key === 'i') {
 			enterInsertMode();
 			e.preventDefault();
-			return;
-		}
-
-		if (mode === 'normal' && key === 'b') {
-			e.preventDefault();
-			cycleBlockCount();
 			return;
 		}
 
@@ -305,7 +283,7 @@
 		hour = (initialHour ?? fallback.hour) as number;
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
-		status = initialStatus ?? null;
+		status = initialStatus === false ? null : (initialStatus ?? null);
 		category = initialCategory ?? null;
 		habitId = initialHabit?.id ?? null;
 		habitDays = initialHabit?.repeatDays ?? [];
@@ -484,36 +462,6 @@
 				<button
 					type="button"
 					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					class:opacity-50={blockCountDisabled}
-					class:cursor-not-allowed={blockCountDisabled}
-					onclick={cycleBlockCount}
-					disabled={blockCountDisabled}
-				>
-					<span class="relative flex h-3 w-3 items-center justify-center">
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 16 16"
-							class="h-3 w-3 text-stone-700"
-							fill="currentColor"
-						>
-							<path
-								d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71z"
-							/>
-						</svg>
-						{#if mode === 'normal' && !blockCountDisabled}
-							<span
-								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
-								in:fly={{ y: 6, duration: 200 }}
-							>
-								b
-							</span>
-						{/if}
-					</span>
-					{displayedBlockCount} Block{displayedBlockCount === 1 ? '' : 's'}
-				</button>
-				<button
-					type="button"
-					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 					class:bg-stone-100={statusKind !== 'none'}
 					class:opacity-50={statusDisabled}
 					class:cursor-not-allowed={statusDisabled}
@@ -521,29 +469,16 @@
 					disabled={statusDisabled}
 				>
 					<span class="relative flex h-3 w-3 items-center justify-center">
-						{#if statusKind === 'bad'}
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 16 16"
-								class="h-3 w-3 text-rose-500"
-								fill="currentColor"
-							>
-								<path
-									d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
-								/>
-							</svg>
-						{:else}
-							<svg viewBox="0 0 24 24" class="h-3 w-3 text-stone-700" fill="none">
-								<circle
-									cx="12"
-									cy="12"
-									r="9"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-								/>
-							</svg>
-						{/if}
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-3 w-3 text-rose-500"
+							fill="currentColor"
+						>
+							<path
+								d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+							/>
+						</svg>
 						{#if mode === 'normal'}
 							<span
 								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"

@@ -34,6 +34,7 @@
 	"build": {
 		"appId": "com.founderszoo.desktop",
 		"productName": "Founders Zoo",
+		"icon": "../static/icon.png",
 		"directories": {
 			"output": "release"
 		},
@@ -43,6 +44,7 @@
 		"asar": true,
 		"mac": {
 			"category": "public.app-category.productivity",
+			"icon": "../static/icon.png",
 			"target": [
 				"dmg"
 			]

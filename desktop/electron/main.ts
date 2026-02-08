@@ -1,9 +1,46 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const DEFAULT_SHORTCUT = 'Command+Control+Alt+Shift+K';
+
+type DesktopSettings = {
+	shortcut?: string;
+};
+
+const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
+
+const readSettings = async (): Promise<DesktopSettings> => {
+	try {
+		const raw = await fs.readFile(settingsPath(), 'utf8');
+		return JSON.parse(raw) as DesktopSettings;
+	} catch {
+		return {};
+	}
+};
+
+const writeSettings = async (next: DesktopSettings) => {
+	try {
+		await fs.writeFile(settingsPath(), JSON.stringify(next, null, 2), 'utf8');
+	} catch (error) {
+		console.error('settings write error', error);
+	}
+};
+
+const hasModifier = (accelerator: string) =>
+	/(Command|Control|CommandOrControl|Alt|Option|Shift|Super)/.test(accelerator);
+
+const isAscii = (value: string) => /^[\x20-\x7E]+$/.test(value);
+
+const isValidAccelerator = (accelerator: string) =>
+	Boolean(
+		accelerator && accelerator.trim().length > 0 && hasModifier(accelerator) && isAscii(accelerator)
+	);
+
+let currentShortcut: string | null = null;
 
 const createWindow = async () => {
 	const win = new BrowserWindow({
@@ -24,7 +61,10 @@ const createWindow = async () => {
 	win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 	win.setFullScreenable(false);
 
-	win.once('ready-to-show', () => win.show());
+	win.once('ready-to-show', () => {
+		win.show();
+		win.maximize();
+	});
 
 	if (devServerUrl) {
 		await win.loadURL(devServerUrl);
@@ -42,95 +82,13 @@ const createWindow = async () => {
 };
 
 app.whenReady().then(async () => {
-	const mainWin = await createWindow();
-	let hudWin: BrowserWindow | null = null;
-
-	const ensureHudWindow = async () => {
-		if (hudWin && !hudWin.isDestroyed()) {
-			return hudWin;
-		}
-
-		hudWin = new BrowserWindow({
-			width: 320,
-			height: 120,
-			resizable: false,
-			show: false,
-			frame: false,
-			transparent: true,
-			alwaysOnTop: true,
-			skipTaskbar: true,
-			focusable: false,
-			title: 'Reminder HUD',
-			backgroundColor: '#00000000',
-			webPreferences: {
-				preload: path.join(__dirname, 'preload.cjs'),
-				contextIsolation: true,
-				nodeIntegration: false
-			}
-		});
-
-		hudWin.setHasShadow(false);
-
-		if (process.platform === 'darwin') {
-			hudWin.setWindowButtonVisibility(false);
-		}
-
-		hudWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-		hudWin.setFullScreenable(false);
-
-		if (devServerUrl) {
-			await hudWin.loadURL(`${devServerUrl}?view=panel`);
-		} else {
-			await hudWin.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
-				query: { view: 'panel' }
-			});
-		}
-
-		hudWin.webContents.setWindowOpenHandler(({ url }) => {
-			shell.openExternal(url);
-			return { action: 'deny' };
-		});
-
-		return hudWin;
-	};
-
-	const positionHudTopRight = () => {
-		if (!hudWin || hudWin.isDestroyed()) return;
-		const display = screen.getPrimaryDisplay();
-		const { x, y, width } = display.workArea;
-		const { width: winWidth, height: winHeight } = hudWin.getBounds();
-		const margin = 20;
-		const targetX = x + width - winWidth - margin;
-		const targetY = y + margin;
-		hudWin.setPosition(targetX, targetY, false);
-	};
-
-	ipcMain.on('hud:set-size', (_event, payload: { width: number; height: number }) => {
-		if (!hudWin || hudWin.isDestroyed()) return;
-		const width = Math.max(200, Math.ceil(payload.width) + 8);
-		const height = Math.max(80, Math.ceil(payload.height) + 8);
-		hudWin.setContentSize(width, height, false);
-		positionHudTopRight();
+	if (process.platform === 'darwin') {
+		app.dock?.show();
+	}
+	app.setLoginItemSettings({
+		openAtLogin: true
 	});
-
-	const showHud = async (focus = false) => {
-		const hud = await ensureHudWindow();
-		positionHudTopRight();
-		if (focus) {
-			hud.setFocusable(true);
-			hud.show();
-			hud.focus();
-		} else {
-			hud.setFocusable(false);
-			hud.showInactive();
-		}
-	};
-
-	const hideHud = () => {
-		if (hudWin && !hudWin.isDestroyed()) {
-			hudWin.hide();
-		}
-	};
+	const mainWin = await createWindow();
 
 	const focusMainWindow = () => {
 		if (mainWin.isMinimized()) {
@@ -141,7 +99,6 @@ app.whenReady().then(async () => {
 		}
 		app.focus({ steal: true });
 		mainWin.moveTop();
-		// Toggle always-on-top to ensure focus on macOS.
 		mainWin.setAlwaysOnTop(true);
 		mainWin.focus();
 		mainWin.setAlwaysOnTop(false);
@@ -150,17 +107,56 @@ app.whenReady().then(async () => {
 	const handleCtrlK = () => {
 		if (mainWin.isVisible() && !mainWin.isMinimized() && mainWin.isFocused()) {
 			mainWin.hide();
-			void showHud(true);
 			return;
 		}
-
-		hideHud();
 		focusMainWindow();
 	};
-	globalShortcut.register('Control+K', handleCtrlK);
 
-	// Pre-warm reminder HUD and keep it visible.
-	await showHud(false);
+	const applyShortcut = (nextShortcut: string) => {
+		if (!isValidAccelerator(nextShortcut)) return false;
+		const previous = currentShortcut;
+		if (previous) {
+			globalShortcut.unregister(previous);
+		}
+		const ok = globalShortcut.register(nextShortcut, handleCtrlK);
+		if (!ok) {
+			if (previous) {
+				globalShortcut.register(previous, handleCtrlK);
+			}
+			return false;
+		}
+		currentShortcut = nextShortcut;
+		return true;
+	};
+
+	const settings = await readSettings();
+	const initialShortcut =
+		settings.shortcut && isValidAccelerator(settings.shortcut)
+			? settings.shortcut
+			: DEFAULT_SHORTCUT;
+	applyShortcut(initialShortcut);
+
+	ipcMain.handle('desktop-shortcut:get', () => currentShortcut ?? DEFAULT_SHORTCUT);
+	ipcMain.handle('desktop-shortcut:set', async (_event, shortcut: string) => {
+		const nextShortcut = String(shortcut ?? '').trim();
+		if (!isValidAccelerator(nextShortcut)) {
+			return {
+				ok: false,
+				shortcut: currentShortcut ?? DEFAULT_SHORTCUT,
+				message: 'Shortcut must include a modifier key.'
+			};
+		}
+		const ok = applyShortcut(nextShortcut);
+		if (!ok) {
+			return {
+				ok: false,
+				shortcut: currentShortcut ?? DEFAULT_SHORTCUT,
+				message: 'That shortcut is unavailable.'
+			};
+		}
+		await writeSettings({ shortcut: currentShortcut ?? DEFAULT_SHORTCUT });
+		return { ok: true, shortcut: currentShortcut ?? DEFAULT_SHORTCUT };
+	});
 
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0) {

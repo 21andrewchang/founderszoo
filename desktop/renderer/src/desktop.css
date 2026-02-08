@@ -13,14 +13,6 @@ body {
 }
 
 
-html,
-body {
-	background: transparent;
-}
-
-body.panel-mode {
-	background: transparent;
-}
 
 body.panel-mode {
 	background: #ffffff;

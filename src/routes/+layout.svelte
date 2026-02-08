@@ -204,6 +204,8 @@
 
 	let goalsByKey = $state<Record<string, GoalEntry>>({});
 	let isGoalModalOpen = $state(false);
+	let pendingNavG = false;
+	let navGTimeout: number | null = null;
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
 	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
@@ -428,7 +430,6 @@
 		return 'bg-stone-200';
 	}
 
-
 	const CALENDAR_WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
 		admin: 'var(--summary-admin)',
@@ -475,7 +476,8 @@
 	}
 
 	function computeSummaryStats(
-		hours: { title: string | null; status: boolean | null; category: string | null }[]
+		hours: { title: string | null; status: boolean | null; category: string | null }[],
+		habitCompleted = 0
 	): SummaryStats {
 		let planned = 0;
 		let completed = 0;
@@ -494,13 +496,14 @@
 			if (title.length > 0 && isBad) badBlocks += 1;
 			if (!isBad) {
 				if (title.length > 0) planned += 1;
-				if (row.status === true) completed += 1;
+				if (title.length > 0 && row.status !== false) completed += 1;
 			}
 			if (title.length > 0 && category) {
 				categoryCounts[category] += 1;
 			}
 		}
 		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const totalCompleted = completed + habitCompleted;
 		const categoryBreakdown: SummaryCategory[] = (
 			[
 				{ key: 'body', label: 'Body' },
@@ -515,11 +518,14 @@
 				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
 			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
 		}));
-		const score = planned === 0 ? 0 : Math.round((completed / planned) * 100);
+		const score = Math.max(
+			0,
+			Math.min(100, Math.round((totalCompleted / TOTAL_BLOCKS_PER_DAY) * 100))
+		);
 		return {
 			planned,
-			completed,
-			productiveHours: completed / 2,
+			completed: totalCompleted,
+			productiveHours: totalCompleted / 2,
 			score,
 			badBlocks,
 			categoryBreakdown
@@ -631,6 +637,16 @@
 		calendarSummaryDate = dateStr;
 		calendarSummaryLabel = heatmapDateLabel(dateStr);
 		try {
+			let habitCompleted = 0;
+			const { data: habitRows, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('completed')
+				.eq('user_id', viewerId)
+				.eq('day', dateStr)
+				.eq('completed', true);
+			if (habitError) throw habitError;
+			habitCompleted = (habitRows ?? []).length;
+
 			const { data: dayRow, error: dayError } = await supabase
 				.from('days')
 				.select('id')
@@ -648,11 +664,11 @@
 				rows = (hoursRows ?? []) as typeof rows;
 			}
 			if (requestId !== calendarSummaryRequestId) return;
-			calendarSummary = computeSummaryStats(rows);
+			calendarSummary = computeSummaryStats(rows, habitCompleted);
 		} catch (error) {
 			console.error('calendar summary load error', error);
 			if (requestId !== calendarSummaryRequestId) return;
-			calendarSummary = computeSummaryStats([]);
+			calendarSummary = computeSummaryStats([], 0);
 		} finally {
 			if (requestId === calendarSummaryRequestId) {
 				calendarSummaryLoading = false;
@@ -748,6 +764,14 @@
 
 	function closeGoalModal() {
 		isGoalModalOpen = false;
+	}
+
+	function resetNavG() {
+		pendingNavG = false;
+		if (navGTimeout !== null) {
+			window.clearTimeout(navGTimeout);
+			navGTimeout = null;
+		}
 	}
 
 	function updateGoalDraft(goalKey: string, value: string) {
@@ -1099,14 +1123,18 @@
 				const dayIds = Array.from(dayIdByDate.keys());
 				const { data: hoursData, error: hoursError } = await supabase
 					.from('hours')
-					.select('day_id, status')
+					.select('day_id, status, title')
 					.in('day_id', dayIds)
-					.eq('status', true);
+					.or('status.is.null,status.eq.true');
 				if (hoursError) throw hoursError;
 
 				for (const row of hoursData ?? []) {
 					const dayId = (row.day_id as string | null) ?? null;
+					const title = (row.title as string | null) ?? '';
+					const status = row.status as boolean | null;
 					if (!dayId) continue;
+					if (title.trim().length === 0) continue;
+					if (status === false) continue;
 					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
 				}
 			}
@@ -1151,7 +1179,6 @@
 		});
 		return () => unsubscribe();
 	});
-
 
 	onMount(() => {
 		let mounted = true;
@@ -1203,16 +1230,38 @@
 				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
 			}
 			const normalized = event.key.toLowerCase();
-			if (normalized === 't') {
-				const nextOpen = !heatmapOpen;
-				heatmapOpen = nextOpen;
-				if (nextOpen) {
-					isGoalModalOpen = false;
-					void loadHeatmap(viewerId);
-				}
+			if (event.key === 'T') {
+				activeDayDateStore.set(localToday());
 				event.preventDefault();
 				return;
 			}
+			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+				if (normalized === 'g') {
+					pendingNavG = true;
+					if (navGTimeout !== null) window.clearTimeout(navGTimeout);
+					navGTimeout = window.setTimeout(() => {
+						pendingNavG = false;
+						navGTimeout = null;
+					}, 900);
+					return;
+				}
+				if (pendingNavG && (normalized === 't' || normalized === 'm')) {
+					if (normalized === 't') {
+						const nextOpen = !heatmapOpen;
+						heatmapOpen = nextOpen;
+						if (nextOpen) {
+							isGoalModalOpen = false;
+							void loadHeatmap(viewerId);
+						}
+					} else {
+						openGoalModal();
+					}
+					resetNavG();
+					event.preventDefault();
+					return;
+				}
+			}
+			if (pendingNavG) resetNavG();
 			if (event.key === 'Escape' && heatmapOpen) {
 				heatmapOpen = false;
 				return;
@@ -1569,7 +1618,7 @@
 				>
 					<div class="flex w-full flex-col gap-6">
 						<div
-							class="flex w-full justify-center overflow-x-auto overflow-y-visible p-2 rounded-2xl"
+							class="flex w-full justify-center overflow-x-auto overflow-y-visible rounded-2xl p-2"
 							bind:this={heatmapScrollEl}
 						>
 							<div class="mx-auto flex min-w-max items-start justify-start gap-2">
@@ -1584,10 +1633,10 @@
 								</div>
 								<div class="flex flex-col gap-2">
 									<div class="flex h-2.5 items-center gap-0.5 text-[9px] leading-3 text-stone-400">
-											{#each heatmapMonthLabels as label}
-												<div class="w-2.5 text-center">{label}</div>
-											{/each}
-										</div>
+										{#each heatmapMonthLabels as label}
+											<div class="w-2.5 text-center">{label}</div>
+										{/each}
+									</div>
 									<div class="relative overflow-visible">
 										<div class="flex gap-0.5">
 											{#each heatmapWeeks as week, weekIndex}
@@ -1609,8 +1658,7 @@
 															disabled={heatmapLoading}
 															onclick={() => handleCalendarSelect(dateKey)}
 															onmouseenter={(event) =>
-																showHeatmapTooltip(event, heatmapDateLabel(dateKey))
-															}
+																showHeatmapTooltip(event, heatmapDateLabel(dateKey))}
 															onmousemove={moveHeatmapTooltip}
 															onmouseleave={hideHeatmapTooltip}
 														>
@@ -1858,11 +1906,13 @@
 						</div>
 					</div>
 				</div>
-				<div class="relative z-0 flex min-h-full min-w-0 flex-[0.8] flex-col gap-4 border-l border-stone-100 pl-6">
+				<div
+					class="relative z-0 flex min-h-full min-w-0 flex-[0.8] flex-col gap-4 border-l border-stone-100 pl-6"
+				>
 					<div class="text-base font-medium text-stone-800">Upcoming</div>
 					<div class="space-y-3">
 						{#each UPCOMING_EVENTS as event}
-							<div class="rounded-xl bg-stone-50 p-4 flex flex-row justify-between">
+							<div class="flex flex-row justify-between rounded-xl bg-stone-50 p-4">
 								<div class="text-xs font-medium text-stone-800">{event.title}</div>
 								<div class="text-xs text-stone-500">
 									{formatDisplayDate(event.date, {
@@ -1888,10 +1938,8 @@
 	{:else}
 		<GrogathLogin />
 	{/if}
-{:else}
-	{#if !heatmapOpen && !isGoalModalOpen}
-		{@render children()}
-	{/if}
+{:else if !heatmapOpen && !isGoalModalOpen}
+	{@render children()}
 {/if}
 
 <style>

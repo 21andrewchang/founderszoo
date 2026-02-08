@@ -3415,6 +3415,46 @@
 	}
 
 	const ENABLE_NOTIFS = true;
+	let alarmAudioCtx: AudioContext | null = null;
+	let isDesktop = $state(false);
+
+	function isDesktopApp() {
+		if (typeof window === 'undefined') return false;
+		return Boolean((window as { desktop?: { isDesktop?: boolean } }).desktop?.isDesktop);
+	}
+
+	function playDesktopAlarm() {
+		if (!isDesktopApp()) return;
+		const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		if (!AudioCtx) return;
+		try {
+			if (!alarmAudioCtx) {
+				alarmAudioCtx = new AudioCtx();
+			}
+			void alarmAudioCtx.resume();
+
+			const now = alarmAudioCtx.currentTime;
+			const osc = alarmAudioCtx.createOscillator();
+			const gain = alarmAudioCtx.createGain();
+
+			osc.type = 'sine';
+			osc.frequency.value = 880;
+
+			gain.gain.setValueAtTime(0.0001, now);
+			gain.gain.exponentialRampToValueAtTime(0.2, now + 0.02);
+			gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+
+			osc.connect(gain);
+			gain.connect(alarmAudioCtx.destination);
+			osc.start(now);
+			osc.stop(now + 0.5);
+		} catch {
+			// Ignore audio errors (autoplay policies, device issues, etc.)
+		}
+	}
+
+
+
 
 	async function ensureNotifPermission() {
 		if (!('Notification' in window) || !ENABLE_NOTIFS) return false;
@@ -3477,6 +3517,7 @@
 			requireInteraction: false,
 			silent: false
 		});
+		playDesktopAlarm();
 	}
 
 	let notifTimer: number | null = null;
@@ -3607,6 +3648,7 @@
 	}
 
 	onMount(() => {
+		isDesktop = isDesktopApp();
 		updateCurrentTime();
 		scheduleClockTick();
 		init();
@@ -3996,4 +4038,6 @@
 			transform: translateX(100%);
 		}
 	}
+
+
 </style>
