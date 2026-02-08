@@ -11,14 +11,18 @@
 	const total = $derived(dedupe ? counts.unique : counts.tabs);
 </script>
 
-{#if counts.connected}
 	<div
 		class="group fixed top-5 right-6 z-68 flex h-4 select-none"
+		class:opacity-60={!counts.connected}
 		aria-live="polite"
 		aria-label="Live spectator count"
 	>
 		<div class="relative inline-flex">
-			<div class="flex flex-row items-center gap-1 text-[12px] text-red-400">
+			<div
+				class="flex flex-row items-center gap-1 text-[12px] transition-colors duration-150"
+				class:text-red-400={counts.connected}
+				class:text-stone-400={!counts.connected}
+			>
 				<svg
 					viewBox="0 0 24 24"
 					fill="currentColor"
@@ -42,4 +46,3 @@
 			Live spectator count
 		</div>
 	</div>
-{/if}
