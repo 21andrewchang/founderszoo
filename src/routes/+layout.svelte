@@ -208,6 +208,7 @@
 	let navGTimeout: number | null = null;
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
+	let pinnedGoalKey = $state<GoalRotationKey | null>(null);
 	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
 	type GoalRotationKey = 'year' | 'quarter' | 'month' | 'week' | 'yc-app';
 	const msPerDay = 24 * 60 * 60 * 1000;
@@ -255,6 +256,7 @@
 	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
 	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
 	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+	const displayGoalKey = $derived(pinnedGoalKey ?? currentGoalKey);
 
 	function entryForGoalKey(goalKey: GoalRotationKey) {
 		if (goalKey === 'week') return currentWeekEntry;
@@ -293,7 +295,9 @@
 	}
 
 	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
+	const displayGoalEntry = $derived(entryForGoalKey(displayGoalKey));
 	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
+	const displayRangeLabel = $derived(rangeLabelForGoalKey(displayGoalKey));
 
 	const localToday = () => formatDateString(new Date());
 	const dateStringNDaysAgo = (days: number) => {
@@ -355,6 +359,18 @@
 		if (days === 0) return 'Due today';
 		if (days === -1) return '1 day overdue';
 		return `${Math.abs(days)} days overdue`;
+	}
+
+	function togglePinnedGoal(goalKey: GoalRotationKey) {
+		if (pinnedGoalKey === goalKey) {
+			pinnedGoalKey = null;
+			return;
+		}
+		pinnedGoalKey = goalKey;
+		const nextIndex = GOAL_ROTATION.findIndex((key) => key === goalKey);
+		if (nextIndex !== -1) {
+			goalRotationIndex = nextIndex;
+		}
 	}
 
 	function endOfMonthDate(year: number, monthIndex: number) {
@@ -1223,6 +1239,7 @@
 		}, CURRENT_PROGRESS_POLL_MS);
 
 		const rotateGoal = () => {
+			if (pinnedGoalKey) return;
 			if (document.visibilityState !== 'visible') return;
 			const now = Date.now();
 			if (now - lastGoalRotationAt < goalRotationIntervalMs * 0.9) return;
@@ -1488,26 +1505,33 @@
 
 		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
 			{#if viewerId}
-				<button
-					type="button"
-					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition"
-					onclick={openGoalModal}
-				>
-					{#key currentGoalKey}
+				<div class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition">
+					{#key displayGoalKey}
 						<span
 							in:fly={{ y: 4, delay: 400, duration: 200 }}
 							out:fade={{ duration: 160 }}
-							class="flex gap-1 rounded-md px-2 py-1 hover:bg-stone-100"
+							class="flex gap-1 rounded-md px-2 py-1"
 						>
-							<span class="font-semibold tracking-wide text-stone-400">
-								{currentRangeLabel}
-							</span>
-							<span>
-								{currentGoalEntry.title || 'Milestone'}
-							</span>
+							<button
+								type="button"
+								class="rounded-md hover:bg-stone-100"
+								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
+								onclick={() => togglePinnedGoal(displayGoalKey)}
+							>
+								<span class="font-semibold tracking-wide text-stone-400">
+									{displayRangeLabel}
+								</span>
+							</button>
+							<button
+								type="button"
+								class="rounded-md hover:bg-stone-100"
+								onclick={openGoalModal}
+							>
+								{displayGoalEntry.title || 'Milestone'}
+							</button>
 						</span>
 					{/key}
-				</button>
+				</div>
 			{:else}
 				<div
 					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase"
