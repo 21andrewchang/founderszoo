@@ -1184,6 +1184,9 @@
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
 		let authSubscription: { unsubscribe: () => void } | null = null;
+		let goalRotationInterval: number | null = null;
+		const goalRotationIntervalMs = 10000;
+		let lastGoalRotationAt = Date.now();
 
 		const init = async () => {
 			let authUser: User | null = null;
@@ -1219,9 +1222,40 @@
 			void refreshCurrentCombined();
 		}, CURRENT_PROGRESS_POLL_MS);
 
-		const goalRotationInterval = window.setInterval(() => {
-			goalRotationIndex = (goalRotationIndex + 1) % GOAL_ROTATION.length;
-		}, 10000);
+		const rotateGoal = () => {
+			if (document.visibilityState !== 'visible') return;
+			const now = Date.now();
+			if (now - lastGoalRotationAt < goalRotationIntervalMs * 0.9) return;
+			lastGoalRotationAt = now;
+			const total = GOAL_ROTATION.length;
+			if (total === 0) return;
+			goalRotationIndex = (goalRotationIndex + 1) % total;
+		};
+
+		const startGoalRotation = () => {
+			if (goalRotationInterval !== null) return;
+			lastGoalRotationAt = Date.now();
+			goalRotationInterval = window.setInterval(rotateGoal, goalRotationIntervalMs);
+		};
+
+		const stopGoalRotation = () => {
+			if (goalRotationInterval === null) return;
+			window.clearInterval(goalRotationInterval);
+			goalRotationInterval = null;
+		};
+
+		const handleGoalVisibility = () => {
+			if (document.visibilityState === 'visible') {
+				startGoalRotation();
+			} else {
+				stopGoalRotation();
+			}
+		};
+
+		handleGoalVisibility();
+		document.addEventListener('visibilitychange', handleGoalVisibility);
+		window.addEventListener('focus', handleGoalVisibility);
+		window.addEventListener('blur', handleGoalVisibility);
 
 		const handleKeyDown = (event: KeyboardEvent) => {
 			const target = event.target as HTMLElement | null;
@@ -1312,7 +1346,10 @@
 				window.clearInterval(currentProgressInterval);
 				currentProgressInterval = null;
 			}
-			window.clearInterval(goalRotationInterval);
+			document.removeEventListener('visibilitychange', handleGoalVisibility);
+			window.removeEventListener('focus', handleGoalVisibility);
+			window.removeEventListener('blur', handleGoalVisibility);
+			stopGoalRotation();
 			authSubscription?.unsubscribe();
 		};
 	});

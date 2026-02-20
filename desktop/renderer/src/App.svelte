@@ -21,7 +21,7 @@
 	const view = new URLSearchParams(window.location.search).get('view');
 	const isPanel = view === 'panel';
 	const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-	const defaultShortcut = isMac ? 'Command+Control+Alt+Shift+K' : 'Control+Alt+Shift+K';
+	const defaultShortcut = '';
 	const modifierHint = isMac ? 'Ctrl, Alt, Shift, Command' : 'Ctrl, Alt, Shift, Super';
 
 	let settingsOpen = false;

@@ -14,8 +14,8 @@
 		second: BlockValue;
 	};
 
-	const START_HOUR = 8;
-	const END_HOUR = 24;
+	const START_HOUR = 6;
+	const END_HOUR = START_HOUR + 16;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;

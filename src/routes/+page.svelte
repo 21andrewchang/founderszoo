@@ -98,13 +98,14 @@
 		return null;
 	}
 
-	const START_HOUR = 8;
-	const END_HOUR = 24;
+	const START_HOUR = 6;
+	const END_HOUR = START_HOUR + 16;
 	const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
 	const TOTAL_BLOCKS_PER_DAY = hours.length * 2;
 	const STREAK_LOOKBACK_DAYS = 365;
 	const COMPLETION_STREAK_LOOKBACK_DAYS = 365;
 	const COMPLETION_STREAK_THRESHOLD = 0.75;
+	const STREAK_TOP_BRACKET_PCT = Math.round(COMPLETION_STREAK_THRESHOLD * 100);
 	const DAY_MS = 86_400_000;
 	const MONTHS = [
 		'January',
@@ -842,47 +843,31 @@
 		return date.getTime();
 	}
 
-	function parseStreakValue(value: unknown): number | null {
-		if (value === null || value === undefined) return null;
-		const parsed = Number(value);
-		if (!Number.isFinite(parsed)) return null;
-		return parsed;
-	}
-
-	function streakFromValues(
-		currentValue: number | string | null | undefined,
-		bestValue: number | string | null | undefined
-	): PlayerStreak | null {
-		const currentParsed = parseStreakValue(currentValue);
-		if (currentParsed !== null) {
-			if (currentParsed <= 0) return null;
-			return { kind: 'positive', length: currentParsed, missesOnLatest: 0 };
-		}
-		const bestParsed = parseStreakValue(bestValue);
-		if (bestParsed !== null && bestParsed > 0) {
-			return { kind: 'positive', length: bestParsed, missesOnLatest: 0 };
-		}
-		return null;
-	}
-
-	function completionPctFromBlocks(value: unknown): number | null {
-		const filled = Number(value ?? 0);
-		if (!Number.isFinite(filled)) return null;
-		if (!TOTAL_BLOCKS_PER_DAY) return 0;
-		return Math.max(0, Math.min(1, filled / TOTAL_BLOCKS_PER_DAY));
-	}
-
-	function computeCompletionStreak(days: Map<string, number>): number {
+	function computeBracketStreak(days: Map<string, number>): PlayerStreak | null {
+		const today = localToday();
 		const yesterday = dateStringNDaysAgo(1);
+		if (days.size === 0) return null;
+		const hasHistory = Array.from(days.keys()).some((date) => date < today);
+		if (!hasHistory) return null;
+		const anchorPct = days.get(yesterday) ?? 0;
+		const isPositive = anchorPct >= STREAK_TOP_BRACKET_PCT;
 		let streakLength = 0;
 		let cursor = yesterday;
 		for (let offset = 0; offset < COMPLETION_STREAK_LOOKBACK_DAYS; offset += 1) {
-			const pct = days.get(cursor);
-			if (pct === undefined || pct < COMPLETION_STREAK_THRESHOLD) break;
-			streakLength += 1;
-			cursor = addDaysToDateString(cursor, -1);
+			const pct = days.get(cursor) ?? 0;
+			if (isPositive ? pct >= STREAK_TOP_BRACKET_PCT : pct < STREAK_TOP_BRACKET_PCT) {
+				streakLength += 1;
+				cursor = addDaysToDateString(cursor, -1);
+				continue;
+			}
+			break;
 		}
-		return streakLength;
+		if (streakLength === 0) return null;
+		return {
+			kind: isPositive ? 'positive' : 'negative',
+			length: streakLength,
+			missesOnLatest: 0
+		};
 	}
 
 	async function startNextDayPlanning() {
@@ -2070,12 +2055,6 @@
 		const row = (payload.new ?? payload.old) as SelectedBlockRowPayload | null;
 		if (!row || row.id !== user_id) return;
 		applyRemoteSelectionFromDb(user_id, row.selected_block_hour, row.selected_block_half);
-		if (row.current_streak !== undefined || row.best_streak !== undefined) {
-			streakByUser = {
-				...streakByUser,
-				[user_id]: streakFromValues(row.current_streak, row.best_streak)
-			};
-		}
 	}
 	function ensureSelectedBlockRealtime(user_id: string) {
 		const existing = selectedBlockRealtimeByUser[user_id];
@@ -2218,51 +2197,85 @@
 		}
 	}
 
-	async function loadCompletionStreakForUser(
-		user_id: string,
-		currentValue: number | null,
-		bestValue: number | null
-	) {
+	async function loadCompletionStreakForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(COMPLETION_STREAK_LOOKBACK_DAYS);
 		try {
-			const { data, error } = await supabase
-				.from('day_block_stats')
-				.select('date, filled_blocks')
+			const today = localToday();
+			const { data: daysData, error: daysError } = await supabase
+				.from('days')
+				.select('id, date')
 				.eq('user_id', user_id)
 				.gte('date', lookbackStart)
 				.order('date', { ascending: true });
-			if (error) throw error;
+			if (daysError) throw daysError;
 
-			const today = localToday();
-			const days = new Map<string, number>();
-			for (const row of data ?? []) {
+			const dayIdByDate = new Map<string, string>();
+			for (const row of daysData ?? []) {
 				const date = (row.date as string | null) ?? null;
-				if (!date || date === today) continue;
-				const pct = completionPctFromBlocks(row.filled_blocks);
-				if (pct === null) continue;
+				const id = (row.id as string | null) ?? null;
+				if (!date || !id) continue;
+				dayIdByDate.set(id, date);
+			}
+
+			const { data: habitData, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('day, completed')
+				.eq('user_id', user_id)
+				.gte('day', lookbackStart);
+			if (habitError) throw habitError;
+
+			const habitCounts = new Map<string, number>();
+			for (const row of habitData ?? []) {
+				const day = (row.day as string | null) ?? null;
+				if (!day || !row.completed) continue;
+				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
+			}
+
+			const completedCounts = new Map<string, number>();
+			if (dayIdByDate.size > 0) {
+				const dayIds = Array.from(dayIdByDate.keys());
+				const { data: hoursData, error: hoursError } = await supabase
+					.from('hours')
+					.select('day_id, status, title')
+					.in('day_id', dayIds)
+					.or('status.is.null,status.eq.true');
+				if (hoursError) throw hoursError;
+
+				for (const row of hoursData ?? []) {
+					const dayId = (row.day_id as string | null) ?? null;
+					const title = (row.title as string | null) ?? '';
+					const status = row.status as boolean | null;
+					if (!dayId) continue;
+					if (title.trim().length === 0) continue;
+					if (status === false) continue;
+					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
+				}
+			}
+
+			const days = new Map<string, number>();
+			for (const [dayId, date] of dayIdByDate.entries()) {
+				if (date === today) continue;
+				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
+				const pct = Math.max(
+					0,
+					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+				);
 				days.set(date, pct);
 			}
 
-			const streakLength = computeCompletionStreak(days);
-			const current = currentValue ?? 0;
-			const best = bestValue ?? 0;
-			const nextBest = Math.max(best, streakLength);
-			const shouldUpdate = current !== streakLength || best !== nextBest;
-			if (shouldUpdate) {
-				const { error: updateError } = await supabase
-					.from('users')
-					.update({
-						current_streak: streakLength > 0 ? streakLength : null,
-						best_streak: nextBest > 0 ? nextBest : null
-					})
-					.eq('id', user_id);
-				if (updateError) throw updateError;
+			for (const [date, completed] of habitCounts.entries()) {
+				if (date === today) continue;
+				if (days.has(date)) continue;
+				const pct = Math.max(
+					0,
+					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+				);
+				days.set(date, pct);
 			}
 
 			streakByUser = {
 				...streakByUser,
-				[user_id]:
-					streakLength > 0 ? { kind: 'positive', length: streakLength, missesOnLatest: 0 } : null
+				[user_id]: computeBracketStreak(days)
 			};
 		} catch (error) {
 			console.error('load completion streak error', { user_id, error });
@@ -3425,7 +3438,9 @@
 
 	function playDesktopAlarm() {
 		if (!isDesktopApp()) return;
-		const AudioCtx = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		const AudioCtx =
+			window.AudioContext ||
+			(window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 		if (!AudioCtx) return;
 		try {
 			if (!alarmAudioCtx) {
@@ -3452,9 +3467,6 @@
 			// Ignore audio errors (autoplay policies, device issues, etc.)
 		}
 	}
-
-
-
 
 	async function ensureNotifPermission() {
 		if (!('Notification' in window) || !ENABLE_NOTIFS) return false;
@@ -3568,23 +3580,17 @@
 		try {
 			const { data: rows, error: uerr } = await supabase
 				.from('users')
-				.select(
-					'id, display_name, selected_block_hour, selected_block_half, active_day_date, current_streak, best_streak'
-				)
+				.select('id, display_name, selected_block_hour, selected_block_half, active_day_date')
 				.order('display_name', { ascending: true });
 			if (uerr) throw uerr;
 
 			const nextActiveDayDates: Record<string, string | null> = {};
 			const nextStreaks: Record<string, PlayerStreak | null> = {};
-			const currentStreakValues: Record<string, number | null> = {};
-			const bestStreakValues: Record<string, number | null> = {};
 			people = (rows ?? []).map((r) => {
 				const user_id = r.id as string;
 				applyRemoteSelectionFromDb(user_id, r.selected_block_hour, r.selected_block_half);
 				nextActiveDayDates[user_id] = (r.active_day_date as string | null) ?? null;
-				currentStreakValues[user_id] = parseStreakValue(r.current_streak);
-				bestStreakValues[user_id] = parseStreakValue(r.best_streak);
-				nextStreaks[user_id] = streakFromValues(r.current_streak, r.best_streak);
+				nextStreaks[user_id] = null;
 				return {
 					label: r.display_name as string,
 					user_id
@@ -3621,11 +3627,7 @@
 				const tasks: Promise<void>[] = [
 					loadHabitsForUser(user_id),
 					loadHabitStatusForUser(user_id),
-					loadCompletionStreakForUser(
-						user_id,
-						currentStreakValues[user_id] ?? null,
-						bestStreakValues[user_id] ?? null
-					)
+					loadCompletionStreakForUser(user_id)
 				];
 				if (dayId) tasks.push(loadHoursForDay(user_id, dayId));
 				await Promise.all(tasks);
@@ -3883,6 +3885,8 @@
 	initialHabit={draft.habit ? { id: draft.habit.id, repeatDays: draft.habit.repeatDays } : null}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
+	startHour={START_HOUR}
+	endHour={END_HOUR}
 />
 
 {#if carryoverPrompt}
@@ -4038,6 +4042,4 @@
 			transform: translateX(100%);
 		}
 	}
-
-
 </style>

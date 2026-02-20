@@ -1,11 +1,6 @@
 <script lang="ts">
 	import { fade, fly, scale } from 'svelte/transition';
 
-	const START = 8;
-	const END = 23;
-	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
-	const hh = (n: number) => n.toString().padStart(2, '0');
-
 	let {
 		normal,
 		open = false,
@@ -18,7 +13,9 @@
 		initialCategory = null,
 		initialHabit = null,
 		maxBlockCountFor = null,
-		runLengthFor = null
+		runLengthFor = null,
+		startHour = 8,
+		endHour = 24
 	} = $props<{
 		normal?: boolean;
 		open?: boolean;
@@ -40,7 +37,14 @@
 		initialHabit?: HabitConfig | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
+		startHour?: number;
+		endHour?: number;
 	}>();
+
+	const START = startHour;
+	const END = Math.max(startHour, endHour - 1);
+	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
+	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	type ModalMode = 'insert' | 'normal';
 
@@ -82,16 +86,26 @@
 	let habitMenuIndex = $state(0);
 	let habitDays = $state<number[]>([]);
 	let habitId = $state<string | null>(null);
+	let hourMenuOpen = $state(false);
+	let hourMenuIndex = $state(0);
 	const statusKind = $derived<StatusKind>(category === 'bad' ? 'bad' : 'none');
 	const statusLabel = $derived('Bad');
 	const statusDisabled = $derived(habitMode);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
+	let commandHintVisible = $state(false);
+	let commandHoldTimer: number | null = $state(null);
 	let hour = $state<number>((initialHour ?? currentBlock().hour) as number);
 	let half = $state<0 | 1>((initialHalf ?? currentBlock().half) as 0 | 1);
 	let mode = $state<ModalMode>(normal ? 'normal' : 'insert');
 	let didInit = $state(false);
+
+	function clampHour(value: number) {
+		if (value < START) return START;
+		if (value > END) return END;
+		return value;
+	}
 
 	function focusInputSoon() {
 		queueMicrotask(() => inputEl?.focus());
@@ -152,6 +166,14 @@
 			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
 		}
 	}
+	function toggleHourMenu() {
+		hourMenuOpen = !hourMenuOpen;
+		habitMenuOpen = false;
+		if (hourMenuOpen) {
+			const idx = HOURS.findIndex((value) => value === hour);
+			hourMenuIndex = idx === -1 ? 0 : idx;
+		}
+	}
 	function maxBlockCount() {
 		if (!isNewBlock) return 1;
 		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
@@ -159,6 +181,37 @@
 
 	function handleKeydown(e: KeyboardEvent) {
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+		if (e.metaKey && commandHoldTimer === null && !commandHintVisible) {
+			commandHoldTimer = window.setTimeout(() => {
+				commandHintVisible = true;
+				commandHoldTimer = null;
+			}, 1000);
+		}
+
+		if (hourMenuOpen) {
+			if (key === 'Escape') {
+				hourMenuOpen = false;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'j' || key === 'ArrowDown') {
+				hourMenuIndex = (hourMenuIndex + 1) % HOURS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'k' || key === 'ArrowUp') {
+				hourMenuIndex = (hourMenuIndex - 1 + HOURS.length) % HOURS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'Enter') {
+				const next = HOURS[hourMenuIndex];
+				if (next !== undefined) hour = next;
+				hourMenuOpen = false;
+				e.preventDefault();
+				return;
+			}
+		}
 
 		if (habitMenuOpen) {
 			if (key === 'Escape') {
@@ -200,26 +253,26 @@
 			return;
 		}
 
-		if (mode === 'normal' && key === 's') {
-			if (statusDisabled) return;
-			e.preventDefault();
-			cycleStatus();
-			return;
-		}
-
 		if (mode === 'normal' && key === 'h') {
 			e.preventDefault();
 			toggleHabitMenu();
 			return;
 		}
 
-		// normal-mode numeric category shortcuts
-		if (mode === 'normal') {
+		// command numeric category shortcuts
+		if (e.metaKey) {
 			const preset = CATEGORY_PRESETS.find((p) => p.key === key);
 			if (preset) {
 				e.preventDefault();
-				selectCategory(preset.value);
-				enterInsertMode();
+				category = preset.value;
+				void handleSubmit();
+				return;
+			}
+			if (key === '5') {
+				if (statusDisabled) return;
+				e.preventDefault();
+				setStatusKind('bad');
+				void handleSubmit();
 				return;
 			}
 		}
@@ -230,6 +283,16 @@
 		} else if (key === 'Enter' && mode === 'normal') {
 			e.preventDefault();
 			void handleSubmit();
+		}
+	}
+
+	function handleKeyup(e: KeyboardEvent) {
+		if (e.key === 'Meta' || !e.metaKey) {
+			if (commandHoldTimer !== null) {
+				window.clearTimeout(commandHoldTimer);
+				commandHoldTimer = null;
+			}
+			commandHintVisible = false;
 		}
 	}
 
@@ -270,6 +333,15 @@
 		} else {
 			mode = 'insert';
 		}
+		if (!open) {
+			hourMenuOpen = false;
+			habitMenuOpen = false;
+			if (commandHoldTimer !== null) {
+				window.clearTimeout(commandHoldTimer);
+				commandHoldTimer = null;
+			}
+			commandHintVisible = false;
+		}
 	});
 
 	$effect(() => {
@@ -280,7 +352,7 @@
 		if (didInit) return;
 		didInit = true;
 		const fallback = currentBlock();
-		hour = (initialHour ?? fallback.hour) as number;
+		hour = clampHour((initialHour ?? fallback.hour) as number);
 		half = (initialHalf ?? fallback.half) as 0 | 1;
 		text = initialTitle ?? '';
 		status = initialStatus === false ? null : (initialStatus ?? null);
@@ -336,28 +408,65 @@
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
+		onkeyup={handleKeyup}
 	>
 		<div
 			in:scale={{ start: 0.95, duration: 160 }}
 			class="w-full max-w-lg rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
-			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
-				<select
-					class="no-chevron inline-flex items-center rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-					value={hour}
-					onchange={(event) => (hour = Number((event.currentTarget as HTMLSelectElement).value))}
-				>
-					{#each HOURS as h}
-						<option value={h}>Hour {hh(h)}</option>
-					{/each}
-				</select>
+		<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
+			<div class="relative">
 				<button
+					type="button"
 					class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-					onclick={() => (half = half ? 0 : 1)}
+					onclick={toggleHourMenu}
 				>
-					Block
-					<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
-						{#key half}
+					Hour {hh(hour)}
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="0 0 16 16"
+						class="h-3 w-3 text-stone-400"
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<path
+							d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
+						/>
+					</svg>
+				</button>
+				{#if hourMenuOpen}
+					<div
+						class="absolute top-full left-0 z-20 mt-2 w-28 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+					>
+						<div class="max-h-48 space-y-1 overflow-auto">
+							{#each HOURS as h, index}
+								<button
+									type="button"
+									class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+									class:bg-stone-100={hourMenuIndex === index}
+									onclick={() => {
+										hour = h;
+										hourMenuOpen = false;
+									}}
+									onmouseenter={() => (hourMenuIndex = index)}
+								>
+									<span>Hour {hh(h)}</span>
+									{#if h === hour}
+										<span class="text-[10px] font-semibold text-stone-900">✓</span>
+									{/if}
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			</div>
+			<button
+				class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+				onclick={() => (half = half ? 0 : 1)}
+			>
+				Block
+				<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
+					{#key half}
 							<span
 								class="absolute inset-0 flex items-center justify-center leading-none"
 								in:fly={{ y: half ? -10 : 10, duration: 180 }}
@@ -446,7 +555,7 @@
 									/>
 								</svg>
 							{/if}
-							{#if mode === 'normal'}
+							{#if commandHintVisible}
 								<span
 									class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 									in:fly={{ y: 6, duration: 200 }}
@@ -479,12 +588,12 @@
 								d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
 							/>
 						</svg>
-						{#if mode === 'normal'}
+						{#if commandHintVisible}
 							<span
 								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
-								s
+								5
 							</span>
 						{/if}
 					</span>
@@ -600,15 +709,3 @@
 		</div>
 	</div>
 {/if}
-
-<style>
-	select.no-chevron {
-		-webkit-appearance: none;
-		-moz-appearance: none;
-		appearance: none;
-		background-image: none;
-	}
-	select.no-chevron::-ms-expand {
-		display: none;
-	}
-</style>
