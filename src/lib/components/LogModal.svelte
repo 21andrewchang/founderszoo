@@ -12,6 +12,8 @@
 		initialStatus = null,
 		initialCategory = null,
 		initialHabit = null,
+		initialEventMode = false,
+		initialDueDate = null,
 		maxBlockCountFor = null,
 		runLengthFor = null,
 		startHour = 8,
@@ -27,7 +29,9 @@
 			half: 0 | 1,
 			blockCount: number,
 			category: BlockCategory | null,
-			habitConfig: HabitSaveConfig | null
+			habitConfig: HabitSaveConfig | null,
+			eventMode: boolean,
+			dueDate: string
 		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
@@ -35,6 +39,8 @@
 		initialStatus?: boolean | null;
 		initialCategory?: BlockCategory | null;
 		initialHabit?: HabitConfig | null;
+		initialEventMode?: boolean;
+		initialDueDate?: string | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
 		startHour?: number;
@@ -45,6 +51,7 @@
 	const END = Math.max(startHour, endHour - 1);
 	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
 	const hh = (n: number) => n.toString().padStart(2, '0');
+	const CURRENT_YEAR = new Date().getFullYear();
 
 	type ModalMode = 'insert' | 'normal';
 
@@ -82,6 +89,12 @@
 	let isNewBlock = $state(true);
 	let runLength = $state(1);
 	let habitMode = $state(false);
+	let eventMode = $state(false);
+	let dueDate = $state('');
+	let dueMonth = $state('');
+	let dueDay = $state('');
+	let dueMonthEl: HTMLInputElement | null = $state(null);
+	let dueDayEl: HTMLInputElement | null = $state(null);
 	let habitMenuOpen = $state(false);
 	let habitMenuIndex = $state(0);
 	let habitDays = $state<number[]>([]);
@@ -165,6 +178,42 @@
 		if (habitMenuOpen) {
 			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
 		}
+	}
+	function toggleEventMode() {
+		eventMode = !eventMode;
+		if (eventMode) {
+			habitDays = [];
+			habitMode = false;
+			status = null;
+			blockCount = 1;
+			queueMicrotask(() => dueMonthEl?.focus());
+		}
+	}
+
+	function initDueDate(next: string | null) {
+		const fallback = new Date();
+		const raw = (next ?? '').trim();
+		const parts = raw.split('-');
+		if (parts.length === 3) {
+			dueMonth = parts[1] ?? '';
+			dueDay = parts[2] ?? '';
+			return;
+		}
+		dueMonth = String(fallback.getMonth() + 1).padStart(2, '0');
+		dueDay = String(fallback.getDate()).padStart(2, '0');
+	}
+
+	function syncDueDate() {
+		if (dueMonth.length !== 2 || dueDay.length !== 2) {
+			dueDate = '';
+			return;
+		}
+		dueDate = `${CURRENT_YEAR}-${dueMonth}-${dueDay}`;
+	}
+
+	function digitsOnly(value: string, max: number) {
+		const digits = value.replace(/\D/g, '').slice(0, max);
+		return digits;
 	}
 	function toggleHourMenu() {
 		hourMenuOpen = !hourMenuOpen;
@@ -306,6 +355,7 @@
 	async function handleSubmit() {
 		const value = text.trim();
 		if (!value || saving) return;
+		if (eventMode && !dueDate.trim()) return;
 
 		saving = true;
 		try {
@@ -316,7 +366,9 @@
 						repeatDays: habitDays
 					}
 				: null;
-			await Promise.resolve(onSave(value, status, hour, half, saveCount, category, habitConfig));
+			await Promise.resolve(
+				onSave(value, status, hour, half, saveCount, category, habitConfig, eventMode, dueDate)
+			);
 			text = '';
 			status = null;
 			onClose();
@@ -360,6 +412,9 @@
 		habitId = initialHabit?.id ?? null;
 		habitDays = initialHabit?.repeatDays ?? [];
 		habitMode = habitDays.length > 0;
+		eventMode = initialEventMode ?? false;
+		initDueDate(initialDueDate ?? null);
+		syncDueDate();
 		habitMenuOpen = false;
 		habitMenuIndex = 0;
 		isNewBlock = (initialTitle ?? '').trim().length === 0 && !initialHabit;
@@ -391,6 +446,13 @@
 		}
 	});
 
+	$effect(() => {
+		if (!open) return;
+		void dueMonth;
+		void dueDay;
+		syncDueDate();
+	});
+
 	function selectCategory(next: BlockCategory) {
 		category = category === next ? null : next;
 		queueMicrotask(() => inputEl?.focus());
@@ -414,70 +476,114 @@
 			in:scale={{ start: 0.95, duration: 160 }}
 			class="w-full max-w-lg rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
-		<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
-			<div class="relative">
-				<button
-					type="button"
-					class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-					onclick={toggleHourMenu}
-				>
-					Hour {hh(hour)}
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						viewBox="0 0 16 16"
-						class="h-3 w-3 text-stone-400"
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<path
-							d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
-						/>
-					</svg>
-				</button>
-				{#if hourMenuOpen}
-					<div
-						class="absolute top-full left-0 z-20 mt-2 w-28 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
-					>
-						<div class="max-h-48 space-y-1 overflow-auto">
-							{#each HOURS as h, index}
-								<button
-									type="button"
-									class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
-									class:bg-stone-100={hourMenuIndex === index}
-									onclick={() => {
-										hour = h;
-										hourMenuOpen = false;
-									}}
-									onmouseenter={() => (hourMenuIndex = index)}
-								>
-									<span>Hour {hh(h)}</span>
-									{#if h === hour}
-										<span class="text-[10px] font-semibold text-stone-900">✓</span>
-									{/if}
-								</button>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-			<button
-				class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-				onclick={() => (half = half ? 0 : 1)}
-			>
-				Block
-				<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
-					{#key half}
-							<span
-								class="absolute inset-0 flex items-center justify-center leading-none"
-								in:fly={{ y: half ? -10 : 10, duration: 180 }}
-								out:fly={{ y: half ? 10 : -10, duration: 180 }}
+			{#if !eventMode}
+				<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
+					<div class="relative">
+						<button
+							type="button"
+							class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+							onclick={toggleHourMenu}
+						>
+							Hour {hh(hour)}
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-3 w-3 text-stone-400"
+								fill="currentColor"
+								aria-hidden="true"
 							>
-								{half ? 'B' : 'A'}
-							</span>
-						{/key}
-					</span>
-				</button>
-			</div>
+								<path
+									d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
+								/>
+							</svg>
+						</button>
+						{#if hourMenuOpen}
+							<div
+								class="absolute top-full left-0 z-20 mt-2 w-28 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+							>
+								<div class="max-h-48 space-y-1 overflow-auto">
+									{#each HOURS as h, index}
+										<button
+											type="button"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+											class:bg-stone-100={hourMenuIndex === index}
+											onclick={() => {
+												hour = h;
+												hourMenuOpen = false;
+											}}
+											onmouseenter={() => (hourMenuIndex = index)}
+										>
+											<span>Hour {hh(h)}</span>
+											{#if h === hour}
+												<span class="text-[10px] font-semibold text-stone-900">✓</span>
+											{/if}
+										</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</div>
+					<button
+						class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+						onclick={() => (half = half ? 0 : 1)}
+					>
+						Block
+						<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
+							{#key half}
+								<span
+									class="absolute inset-0 flex items-center justify-center leading-none"
+									in:fly={{ y: half ? -10 : 10, duration: 180 }}
+									out:fly={{ y: half ? 10 : -10, duration: 180 }}
+								>
+									{half ? 'B' : 'A'}
+								</span>
+							{/key}
+						</span>
+					</button>
+				</div>
+			{:else}
+				<div class="flex flex-row items-center gap-1 p-3 pb-0 text-xs text-stone-600">
+					<div
+						class="flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500"
+					>
+						<input
+							bind:this={dueMonthEl}
+							type="text"
+							inputmode="numeric"
+							placeholder="MM"
+							class="w-6 border-none bg-transparent p-0 text-center text-[11px] tracking-wide text-stone-500 outline-none focus:outline-none"
+							value={dueMonth}
+							oninput={(event) => {
+								dueMonth = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
+								if (dueMonth.length === 2) dueDayEl?.focus();
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Backspace' && !dueMonth) {
+									dueMonthEl?.blur();
+								}
+							}}
+						/>
+						<span class="text-stone-300">/</span>
+						<input
+							bind:this={dueDayEl}
+							type="text"
+							inputmode="numeric"
+							placeholder="DD"
+							class="w-6 border-none bg-transparent p-0 text-center text-[11px] tracking-wide text-stone-500 outline-none focus:outline-none"
+							value={dueDay}
+							oninput={(event) => {
+								dueDay = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
+								if (dueDay.length === 2) inputEl?.focus();
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Backspace' && !dueDay) {
+									dueMonthEl?.focus();
+								}
+							}}
+						/>
+					</div>
+				</div>
+			{/if}
 
 			<div class="flex w-full flex-row items-center">
 				<input
@@ -608,7 +714,13 @@
 							type="button"
 							class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
 							class:bg-stone-100={habitMode}
-							onclick={toggleHabitMenu}
+							class:opacity-50={eventMode}
+							class:cursor-not-allowed={eventMode}
+							onclick={() => {
+								if (eventMode) return;
+								toggleHabitMenu();
+							}}
+							disabled={eventMode}
 						>
 							<span class="relative flex h-3 w-3 items-center justify-center">
 								<svg
@@ -662,6 +774,8 @@
 					<button
 						type="button"
 						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class:bg-stone-100={eventMode}
+						onclick={toggleEventMode}
 					>
 						<span class="flex h-3 w-3 items-center justify-center">
 							<svg
@@ -677,25 +791,6 @@
 							</svg>
 						</span>
 						Event
-					</button>
-					<button
-						type="button"
-						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					>
-						<span class="flex h-3 w-3 items-center justify-center">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 16 16"
-								class="h-3 w-3 text-stone-700"
-								fill="currentColor"
-								aria-hidden="true"
-							>
-								<path
-									d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M8 4a.905.905 0 0 0-.9.995l.35 3.507a.552.552 0 0 0 1.1 0l.35-3.507A.905.905 0 0 0 8 4m.002 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2"
-								/>
-							</svg>
-						</span>
-						Prio
 					</button>
 				</div>
 				<button

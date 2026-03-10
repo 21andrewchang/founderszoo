@@ -1369,12 +1369,64 @@
 	</div>
 {:else if authSet && $session.user}
 	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
-		<OnlineCount dedupe={false} counts={presenceCounts} />
 		<div
 			class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start"
 			bind:this={dateMenuEl}
 		>
-			<div class="pointer-events-auto relative flex items-center">
+			<div class="pointer-events-auto relative flex items-center gap-2">
+				<div class="flex items-center">
+					<button
+						type="button"
+						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+						aria-label="Previous day"
+						onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="10"
+							height="10"
+							fill="currentColor"
+							class="bi bi-chevron-left"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
+							/>
+						</svg>
+					</button>
+					<button
+						type="button"
+						class="flex w-22 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-stone-200/50"
+						disabled={isActiveDayToday}
+						onclick={() => {
+							activeDayDateStore.set(localToday());
+						}}
+						aria-label="Jump to today"
+					>
+						<span>{activeDayLabel}</span>
+					</button>
+					<button
+						type="button"
+						class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+						aria-label="Next day"
+						onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="10"
+							height="10"
+							fill="currentColor"
+							class="bi bi-chevron-right"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
+							/>
+						</svg>
+					</button>
+				</div>
 				<button
 					type="button"
 					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
@@ -1401,61 +1453,6 @@
 						/>
 					</svg>
 				</button>
-				<div class="flex items-center">
-					<button
-						type="button"
-						class="flex w-22 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-stone-200/50"
-						disabled={isActiveDayToday}
-						onclick={() => {
-							activeDayDateStore.set(localToday());
-						}}
-						aria-label="Jump to today"
-					>
-						<span>{activeDayLabel}</span>
-					</button>
-					<div class="flex items-center">
-						<button
-							type="button"
-							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
-							aria-label="Previous day"
-							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="10"
-								height="10"
-								fill="currentColor"
-								class="bi bi-chevron-left"
-								viewBox="0 0 16 16"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
-								/>
-							</svg>
-						</button>
-						<button
-							type="button"
-							class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
-							aria-label="Next day"
-							onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="10"
-								height="10"
-								fill="currentColor"
-								class="bi bi-chevron-right"
-								viewBox="0 0 16 16"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-								/>
-							</svg>
-						</button>
-					</div>
-				</div>
 			</div>
 		</div>
 
@@ -1468,11 +1465,11 @@
 						<span
 							in:fly={{ y: 4, delay: 400, duration: 200 }}
 							out:fade={{ duration: 160 }}
-							class="flex gap-1 rounded-md px-2 py-1"
+							class="flex gap-0 rounded-sm px-3 py-2"
 						>
 							<button
 								type="button"
-								class="rounded-md hover:bg-stone-100"
+								class="rounded-sm px-1.5 py-0.5 hover:bg-stone-100"
 								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
 								onclick={() => togglePinnedGoal(displayGoalKey)}
 							>
@@ -1480,7 +1477,11 @@
 									{displayRangeLabel}
 								</span>
 							</button>
-							<button type="button" class="rounded-md hover:bg-stone-100" onclick={openGoalModal}>
+							<button
+								type="button"
+								class="rounded-sm px-1.5 py-0.5 hover:bg-stone-100"
+								onclick={openGoalModal}
+							>
 								{displayGoalEntry.title || 'Milestone'}
 							</button>
 						</span>

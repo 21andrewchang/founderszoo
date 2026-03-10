@@ -3,6 +3,7 @@
 	import LogModal from '$lib/components/LogModal.svelte';
 	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
 	import Block from '$lib/components/Block.svelte';
+	import SettingsModal from '$lib/components/SettingsModal.svelte';
 	import { scale, fly } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
 	import type { PlayerStreak } from '$lib/streaks';
@@ -41,6 +42,9 @@
 	let playerStatusUnsubscribers: (() => void)[] = [];
 	let stopLocalPlayerPresence: (() => void) | null = null;
 	let showTimes = $state(false);
+	let settingsOpen = $state(false);
+	let singlePlayerMode = $state(false);
+	let singlePlayerLoadedFor = $state<string | null>(null);
 	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
 	let completionRefreshTimeout: number | null = null;
 
@@ -169,6 +173,45 @@
 	let activeDayDateByUser = $state<Record<string, string | null>>({});
 	let spectatorDate = $state<string | null>(null);
 	let isLoading = $state(true);
+	const isSinglePlayerView = $derived.by(() => Boolean(viewerUserId && singlePlayerMode));
+	const visiblePeople = $derived.by(() => {
+		if (!viewerUserId || !singlePlayerMode) return people;
+		return people.filter((person) => person.user_id === viewerUserId);
+	});
+
+	const singlePlayerStorageKey = (userId: string) => `fz.singlePlayer.${userId}`;
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) {
+			singlePlayerLoadedFor = null;
+			singlePlayerMode = false;
+			return;
+		}
+		if (singlePlayerLoadedFor === viewerUserId) return;
+		const stored = window.localStorage.getItem(singlePlayerStorageKey(viewerUserId));
+		singlePlayerMode = stored === 'true';
+		singlePlayerLoadedFor = viewerUserId;
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) {
+			upcomingEvents = [];
+			return;
+		}
+		void loadUpcomingEvents(viewerUserId);
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) return;
+		if (singlePlayerLoadedFor !== viewerUserId) return;
+		window.localStorage.setItem(
+			singlePlayerStorageKey(viewerUserId),
+			singlePlayerMode ? 'true' : 'false'
+		);
+	});
 
 	let reviewSubmitting = $state(false);
 	let hideCursor = $state(false);
@@ -176,6 +219,14 @@
 	let lastPointerY = 0;
 	let hasPointer = false;
 	let lastKeyAt = 0;
+
+	type UpcomingEvent = {
+		id: string;
+		title: string;
+		due_date: string;
+	};
+	let upcomingEvents = $state<UpcomingEvent[]>([]);
+	let upcomingEventsLoading = $state(false);
 
 	function setCursorHidden(hidden: boolean) {
 		hideCursor = hidden;
@@ -338,6 +389,11 @@
 	let lastUndoDate = $state<string | null>(null);
 
 	let logOpen = $state(false);
+	let logEventMode = $state(false);
+	let logDueDate = $state('');
+	let logEventId = $state<string | null>(null);
+	let focusPane = $state<'grid' | 'upcoming'>('grid');
+	let upcomingSelectionIndex = $state<number | null>(null);
 	type BlockCarryoverPrompt = {
 		user_id: string;
 		prevHour: number;
@@ -479,6 +535,50 @@
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+	const formatDisplayDate = (
+		dateStr: string,
+		options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+	) => {
+		const parsed = parseHabitDate(dateStr);
+		if (parsed === null) return dateStr;
+		return new Date(parsed).toLocaleDateString(undefined, options);
+	};
+	const daysUntilLabel = (dateStr: string) => {
+		const parsed = parseHabitDate(dateStr);
+		const todayMs = parseHabitDate(localToday());
+		if (parsed === null || todayMs === null) return '';
+		const diffDays = Math.round((parsed - todayMs) / DAY_MS);
+		const safeDays = Math.max(0, diffDays);
+		return `${safeDays} days`;
+	};
+	const isMilestoneEvent = (event: UpcomingEvent) => event.id.startsWith('milestone-');
+	const clampUpcomingIndex = (index: number) =>
+		Math.max(0, Math.min(upcomingEvents.length - 1, index));
+	const focusUpcoming = (index?: number) => {
+		if (!isSinglePlayerView) return;
+		focusPane = 'upcoming';
+		hoverBlock = null;
+		if (upcomingEvents.length === 0) {
+			upcomingSelectionIndex = null;
+			return;
+		}
+		if (typeof index === 'number') {
+			upcomingSelectionIndex = clampUpcomingIndex(index);
+			return;
+		}
+		if (upcomingSelectionIndex === null) {
+			upcomingSelectionIndex = 0;
+		}
+	};
+	const focusGrid = () => {
+		focusPane = 'grid';
+	};
+	const moveUpcomingSelection = (delta: 1 | -1) => {
+		if (upcomingEvents.length === 0) return false;
+		const current = upcomingSelectionIndex ?? 0;
+		upcomingSelectionIndex = clampUpcomingIndex(current + delta);
+		return true;
+	};
 	const dateStringNDaysAgo = (days: number) => {
 		const base = getNow();
 		const d = new Date(base);
@@ -496,6 +596,17 @@
 	const displayDateForUser = (user_id: string) => {
 		if (!viewerUserId) return localToday();
 		return activeDayDateByUser[user_id] ?? localToday();
+	};
+	const dayLabelForUser = (user_id: string) => {
+		const dateStr = displayDateForUser(user_id);
+		const todayStr = localToday();
+		const dateMs = parseHabitDate(dateStr);
+		const todayMs = parseHabitDate(todayStr);
+		if (dateMs === null || todayMs === null) return dateStr;
+		const diffDays = Math.round((dateMs - todayMs) / DAY_MS);
+		if (diffDays === 0) return 'Today';
+		const absDays = Math.abs(diffDays);
+		return diffDays > 0 ? `Today + ${absDays}` : `Today - ${absDays}`;
 	};
 	const canEditDayForUser = (user_id: string) => {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
@@ -624,6 +735,16 @@
 		if (currentDate === lastUndoDate) return;
 		clearUndoStacks();
 		lastUndoDate = currentDate;
+	});
+	$effect(() => {
+		if (!isSinglePlayerView || focusPane !== 'upcoming') return;
+		if (upcomingEvents.length === 0) {
+			upcomingSelectionIndex = null;
+			return;
+		}
+		if (upcomingSelectionIndex === null || upcomingSelectionIndex >= upcomingEvents.length) {
+			upcomingSelectionIndex = 0;
+		}
 	});
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
@@ -1550,7 +1671,7 @@
 		hourIndex: number
 	) {
 		if (!canDragBlock(user_id, hour, half)) return;
-
+		focusGrid();
 		setSelectedBlock(null);
 		hoverBlock = null;
 		dragHoverBlock = null;
@@ -1648,6 +1769,7 @@
 	function handleBlockPointerEnter(user_id: string, hourIndex: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return;
 		if (suppressHoverSelection) return;
+		focusGrid();
 		hoverBlock = { hourIndex, half };
 		if (draggingBlock) return;
 		setSelectedBlock({ hourIndex, half });
@@ -1664,6 +1786,38 @@
 		if (isTypingTarget(event.target)) return;
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
+		if (event.ctrlKey && !event.metaKey && !event.altKey) {
+			if (normalized === 'l') {
+				focusUpcoming();
+				event.preventDefault();
+				return;
+			}
+			if (normalized === 'h') {
+				focusGrid();
+				event.preventDefault();
+				return;
+			}
+		}
+		if (focusPane === 'upcoming') {
+			if (normalized === 'j') {
+				if (moveUpcomingSelection(1)) event.preventDefault();
+				return;
+			}
+			if (normalized === 'k') {
+				if (moveUpcomingSelection(-1)) event.preventDefault();
+				return;
+			}
+			if (normalized === 'Enter') {
+				const idx = upcomingSelectionIndex ?? 0;
+				const entry = upcomingEvents[idx];
+				if (entry && !isMilestoneEvent(entry)) {
+					openEventModal(entry);
+				}
+				event.preventDefault();
+				return;
+			}
+			return;
+		}
 		const allowWithModifier =
 			(event.metaKey || event.ctrlKey) && (normalized === 'n' || normalized === 'p');
 		if ((event.metaKey || event.ctrlKey || event.altKey) && !allowWithModifier) return;
@@ -2269,16 +2423,84 @@
 			console.error('load completion streak error', { user_id, error });
 		}
 	}
+
+	async function loadUpcomingEvents(user_id: string) {
+		upcomingEventsLoading = true;
+		try {
+			const now = new Date();
+			const today = localToday();
+			const yearEnd = formatDateString(endOfYear(now));
+			const { data, error } = await supabase
+				.from('events')
+				.select('id, title, due_date')
+				.eq('user_id', user_id)
+				.order('due_date', { ascending: true });
+			if (error) throw error;
+			const dbEvents = (data ?? [])
+				.map((row) => ({
+					id: row.id as string,
+					title: (row.title as string | null) ?? '',
+					due_date: (row.due_date as string | null) ?? ''
+				}))
+				.filter((event) => Boolean(event.title && event.due_date))
+				.filter((event) => event.due_date >= today && event.due_date <= yearEnd);
+			const milestoneEvents: UpcomingEvent[] = [
+				{ id: 'milestone-week', title: 'End of week', due_date: formatDateString(endOfWeek(now)) },
+				{
+					id: 'milestone-month',
+					title: 'End of month',
+					due_date: formatDateString(endOfMonth(now))
+				},
+				{
+					id: 'milestone-quarter',
+					title: `End of ${quarterLabel(now)}`,
+					due_date: formatDateString(endOfQuarter(now))
+				},
+				{ id: 'milestone-year', title: 'End of year', due_date: yearEnd }
+			].filter((event) => event.due_date >= today && event.due_date <= yearEnd);
+			upcomingEvents = [...milestoneEvents, ...dbEvents].sort((a, b) =>
+				a.due_date.localeCompare(b.due_date)
+			);
+		} catch (error) {
+			console.error('events load error', { user_id, error });
+			upcomingEvents = [];
+		} finally {
+			upcomingEventsLoading = false;
+		}
+	}
 	function blockHasElapsed(hour: number, half: 0 | 1) {
 		if (currentHour < 0) return false;
 		if (currentHour > hour) return true;
 		if (currentHour === hour && currentHalf > half) return true;
 		return false;
 	}
+	function endOfWeek(date: Date) {
+		const end = new Date(date);
+		const day = end.getDay();
+		const diff = (7 - day) % 7;
+		end.setDate(end.getDate() + diff);
+		return end;
+	}
+	function endOfMonth(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+	}
+	function endOfQuarter(date: Date) {
+		const quarterIndex = Math.floor(date.getMonth() / 3);
+		const endMonth = quarterIndex * 3 + 2;
+		return new Date(date.getFullYear(), endMonth + 1, 0);
+	}
+	function quarterLabel(date: Date) {
+		const quarterIndex = Math.floor(date.getMonth() / 3) + 1;
+		return `Q${quarterIndex}`;
+	}
+	function endOfYear(date: Date) {
+		return new Date(date.getFullYear(), 11, 31);
+	}
 
 	let editorMode = $state(false);
 	function openEditor(user_id: string, h: number, half01: 0 | 1, normal?: boolean) {
 		if (viewerUserId !== user_id) return;
+		logEventMode = false;
 		const hourIndex = getHourIndex(h);
 		if (hourIndex !== -1) {
 			setSelectedBlock({ hourIndex, half: half01 });
@@ -2300,8 +2522,30 @@
 		logOpen = true;
 	}
 
+	function openEventModal(event?: UpcomingEvent) {
+		if (!viewerUserId) return;
+		const fallback = localToday();
+		logEventMode = true;
+		logEventId = event?.id ?? null;
+		logDueDate = event?.due_date ?? fallback;
+		draft = {
+			user_id: viewerUserId,
+			hour: START_HOUR,
+			half: 0,
+			title: event?.title ?? '',
+			status: null,
+			category: null,
+			habit: null
+		};
+		editorMode = false;
+		logOpen = true;
+	}
+
 	function closeLogModal() {
 		logOpen = false;
+		logEventMode = false;
+		logEventId = null;
+		logDueDate = '';
 		if (!viewerUserId) return;
 		hoverBlock = null;
 		suppressHoverSelection = true;
@@ -2314,10 +2558,39 @@
 		half: 0 | 1,
 		blockCount: number,
 		category: BlockCategory | null,
-		habitConfig: HabitSaveConfig | null
+		habitConfig: HabitSaveConfig | null,
+		eventMode: boolean,
+		dueDate: string
 	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
+		if (eventMode) {
+			const trimmedTitle = text.trim();
+			const trimmedDate = dueDate.trim();
+			if (!trimmedTitle || !trimmedDate) return;
+			try {
+				if (logEventId) {
+					const { error } = await supabase
+						.from('events')
+						.update({ title: trimmedTitle, due_date: trimmedDate })
+						.eq('id', logEventId)
+						.eq('user_id', user_id);
+					if (error) throw error;
+				} else {
+					const { error } = await supabase.from('events').insert({
+						user_id,
+						title: trimmedTitle,
+						due_date: trimmedDate
+					});
+					if (error) throw error;
+				}
+				logEventId = null;
+				void loadUpcomingEvents(user_id);
+			} catch (error) {
+				console.error('event save error', { user_id, error });
+			}
+			return;
+		}
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
 
@@ -3748,13 +4021,15 @@
 						</div>
 					{/each}
 				{:else}
-					{#each people as person}
+					{#each visiblePeople as person}
 						{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
 						<div class="flex w-full flex-col space-y-1 transition-opacity">
 							<div class="flex h-6 items-center gap-2">
 								{#if trackedKey}
 									<PlayerStatusTag
-										label={playerDisplays[trackedKey]?.label ?? null}
+										label={isSinglePlayerView
+											? dayLabelForUser(person.user_id)
+											: (playerDisplays[trackedKey]?.label ?? null)}
 										status={playerStatuses[trackedKey]}
 										me={person.user_id === viewerUserId}
 										streak={streakByUser[person.user_id] ?? null}
@@ -3812,7 +4087,8 @@
 													: 0}
 												habit={getHabitTitle(person.user_id, h, 0)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 0)}
-												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
+												selected={focusPane === 'grid' &&
+													blockIsHighlighted(person.user_id, hourIndex, 0)}
 												isCurrent={blockIsCurrent(h, 0)}
 												isCut={blockIsCutA}
 												isCopied={blockIsCopiedA}
@@ -3851,7 +4127,8 @@
 													: 0}
 												habit={getHabitTitle(person.user_id, h, 1)}
 												habitStreak={habitStreakForBlock(person.user_id, h, 1)}
-												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
+												selected={focusPane === 'grid' &&
+													blockIsHighlighted(person.user_id, hourIndex, 1)}
 												isCurrent={blockIsCurrent(h, 1)}
 												isCut={blockIsCutB}
 												isCopied={blockIsCopiedB}
@@ -3862,15 +4139,115 @@
 							{/if}
 						</div>
 					{/each}
+					{#if isSinglePlayerView}
+						<div
+							class="relative flex w-full flex-col gap-1 pl-6 before:absolute before:top-6 before:bottom-0 before:left-0 before:w-px before:bg-stone-100"
+							aria-label="Upcoming"
+						>
+							<div class="flex h-6 items-center justify-between">
+								<div class="text-base font-medium text-stone-800">Upcoming</div>
+								<button
+									type="button"
+									class="flex h-6 w-6 items-center justify-center rounded-md text-base font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
+									aria-label="New event"
+									onclick={() => openEventModal()}
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										width="16"
+										height="16"
+										fill="currentColor"
+										class="bi bi-plus"
+										viewBox="0 0 16 16"
+										aria-hidden="true"
+									>
+										<path
+											d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4"
+										/>
+									</svg>
+								</button>
+							</div>
+							<div class="space-y-3">
+								{#if upcomingEventsLoading}
+									<div class="text-xs text-stone-400">Loading...</div>
+								{:else if upcomingEvents.length === 0}
+									<div class="text-xs text-stone-400">No upcoming events yet.</div>
+								{:else}
+									{#each upcomingEvents as event, index}
+										<button
+											type="button"
+											disabled={isMilestoneEvent(event)}
+											class={`flex w-full flex-row justify-between rounded-lg p-4 text-left transition disabled:cursor-default ${
+												isMilestoneEvent(event)
+													? 'bg-stone-50'
+													: 'bg-stone-100 hover:ring-1 hover:ring-stone-400 hover:ring-offset-1 hover:ring-offset-stone-50'
+											}`}
+											class:ring-1={focusPane === 'upcoming' && upcomingSelectionIndex === index}
+											class:ring-stone-400={focusPane === 'upcoming' &&
+												upcomingSelectionIndex === index}
+											class:ring-offset-1={focusPane === 'upcoming' &&
+												upcomingSelectionIndex === index}
+											class:ring-offset-stone-50={focusPane === 'upcoming' &&
+												upcomingSelectionIndex === index}
+											onpointerenter={() => focusUpcoming(index)}
+											onpointerdown={() => focusUpcoming(index)}
+											onclick={() => {
+												if (!isMilestoneEvent(event)) openEventModal(event);
+											}}
+										>
+											<div class="text-xs font-medium text-stone-800">{event.title}</div>
+											<div class="flex items-center justify-end gap-2 text-xs text-stone-500">
+												<span>{daysUntilLabel(event.due_date)}</span>
+												<span class="text-stone-300">·</span>
+												<span>{formatDisplayDate(event.due_date)}</span>
+											</div>
+										</button>
+									{/each}
+								{/if}
+							</div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
 	</div>
 </div>
 
+<button
+	class="no-drag fixed bottom-4 left-4 z-50 flex h-6 w-6 items-center justify-center text-stone-200 transition hover:text-stone-500"
+	type="button"
+	aria-label="Open settings"
+	onclick={() => (settingsOpen = true)}
+>
+	<svg
+		xmlns="http://www.w3.org/2000/svg"
+		width="14"
+		height="14"
+		fill="currentColor"
+		class="bi bi-gear-fill"
+		viewBox="0 0 16 16"
+		aria-hidden="true"
+	>
+		<path
+			d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"
+		/>
+	</svg>
+</button>
+
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
 {/if}
+
+<SettingsModal
+	open={settingsOpen}
+	onClose={() => (settingsOpen = false)}
+	{singlePlayerMode}
+	singlePlayerDisabled={!viewerUserId}
+	onToggleSinglePlayer={(next) => {
+		if (!viewerUserId) return;
+		singlePlayerMode = next;
+	}}
+/>
 
 <LogModal
 	normal={editorMode}
@@ -3883,6 +4260,8 @@
 	initialStatus={draft.status}
 	initialCategory={draft.category}
 	initialHabit={draft.habit ? { id: draft.habit.id, repeatDays: draft.habit.repeatDays } : null}
+	initialEventMode={logEventMode}
+	initialDueDate={logDueDate}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
 	startHour={START_HOUR}
