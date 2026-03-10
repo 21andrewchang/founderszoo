@@ -10,9 +10,12 @@
 	import { getContext, onDestroy, onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
+	import { get } from 'svelte/store';
 	import type { Session } from '$lib/session';
 	import { formatLocalTimestamp } from '$lib/time';
 	import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+	import { fetchCompletionByDate } from '$lib/heatmap';
+	import { heatmapStore } from '$lib/heatmapStore';
 
 	type Person = { label: string; user_id: string };
 
@@ -38,6 +41,8 @@
 	let playerStatusUnsubscribers: (() => void)[] = [];
 	let stopLocalPlayerPresence: (() => void) | null = null;
 	let showTimes = $state(false);
+	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
+	let completionRefreshTimeout: number | null = null;
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
 		const next = {} as Record<PlayerKey, PlayerDisplay>;
@@ -868,6 +873,37 @@
 			length: streakLength,
 			missesOnLatest: 0
 		};
+	}
+	function completionMapFromRecord(records: Record<string, number>) {
+		return new Map<string, number>(Object.entries(records));
+	}
+	function waitForHeatmap(
+		user_id: string,
+		timeoutMs = 2000
+	): Promise<Record<string, number> | null> {
+		if (typeof window === 'undefined') return Promise.resolve(null);
+		return new Promise((resolve) => {
+			const current = get(heatmapStore);
+			if (current.userId === user_id && !current.loading) {
+				resolve(current.byDate);
+				return;
+			}
+			let resolved = false;
+			const timeout = window.setTimeout(() => {
+				if (resolved) return;
+				resolved = true;
+				unsub();
+				resolve(null);
+			}, timeoutMs);
+			const unsub = heatmapStore.subscribe((state) => {
+				if (state.userId !== user_id || state.loading) return;
+				if (resolved) return;
+				resolved = true;
+				window.clearTimeout(timeout);
+				unsub();
+				resolve(state.byDate);
+			});
+		});
 	}
 
 	async function startNextDayPlanning() {
@@ -2151,7 +2187,18 @@
 			console.error('habit day status update error', error);
 			return false;
 		}
+		scheduleCompletionRefresh(user_id);
 		return true;
+	}
+	function scheduleCompletionRefresh(user_id: string) {
+		if (typeof window === 'undefined') return;
+		if (completionRefreshTimeout !== null) {
+			window.clearTimeout(completionRefreshTimeout);
+		}
+		completionRefreshTimeout = window.setTimeout(() => {
+			window.dispatchEvent(new CustomEvent(HEATMAP_REFRESH_EVENT));
+			void loadCompletionStreakForUser(user_id);
+		}, 200);
 	}
 	function optimisticUpdateHabitStatus(user_id: string, habitId: string, completed: boolean) {
 		const day = localToday();
@@ -2200,79 +2247,20 @@
 	async function loadCompletionStreakForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(COMPLETION_STREAK_LOOKBACK_DAYS);
 		try {
-			const today = localToday();
-			const { data: daysData, error: daysError } = await supabase
-				.from('days')
-				.select('id, date')
-				.eq('user_id', user_id)
-				.gte('date', lookbackStart)
-				.order('date', { ascending: true });
-			if (daysError) throw daysError;
-
-			const dayIdByDate = new Map<string, string>();
-			for (const row of daysData ?? []) {
-				const date = (row.date as string | null) ?? null;
-				const id = (row.id as string | null) ?? null;
-				if (!date || !id) continue;
-				dayIdByDate.set(id, date);
+			let completionByDate: Record<string, number> | null = null;
+			if (viewerUserId && user_id === viewerUserId) {
+				completionByDate = await waitForHeatmap(user_id);
 			}
-
-			const { data: habitData, error: habitError } = await supabase
-				.from('habit_day_status')
-				.select('day, completed')
-				.eq('user_id', user_id)
-				.gte('day', lookbackStart);
-			if (habitError) throw habitError;
-
-			const habitCounts = new Map<string, number>();
-			for (const row of habitData ?? []) {
-				const day = (row.day as string | null) ?? null;
-				if (!day || !row.completed) continue;
-				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
-			}
-
-			const completedCounts = new Map<string, number>();
-			if (dayIdByDate.size > 0) {
-				const dayIds = Array.from(dayIdByDate.keys());
-				const { data: hoursData, error: hoursError } = await supabase
-					.from('hours')
-					.select('day_id, status, title')
-					.in('day_id', dayIds)
-					.or('status.is.null,status.eq.true');
-				if (hoursError) throw hoursError;
-
-				for (const row of hoursData ?? []) {
-					const dayId = (row.day_id as string | null) ?? null;
-					const title = (row.title as string | null) ?? '';
-					const status = row.status as boolean | null;
-					if (!dayId) continue;
-					if (title.trim().length === 0) continue;
-					if (status === false) continue;
-					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
-				}
-			}
-
-			const days = new Map<string, number>();
-			for (const [dayId, date] of dayIdByDate.entries()) {
-				if (date === today) continue;
-				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+			if (!completionByDate) {
+				completionByDate = await fetchCompletionByDate(
+					supabase,
+					user_id,
+					lookbackStart,
+					TOTAL_BLOCKS_PER_DAY
 				);
-				days.set(date, pct);
 			}
 
-			for (const [date, completed] of habitCounts.entries()) {
-				if (date === today) continue;
-				if (days.has(date)) continue;
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
-				);
-				days.set(date, pct);
-			}
-
+			const days = completionMapFromRecord(completionByDate);
 			streakByUser = {
 				...streakByUser,
 				[user_id]: computeBracketStreak(days)
@@ -2409,6 +2397,7 @@
 			} catch (error) {
 				console.error('save habit error', error);
 			}
+			scheduleCompletionRefresh(user_id);
 			closeLogModal();
 			return;
 		}
@@ -2528,6 +2517,7 @@
 				suppressHoverSelection = true;
 			}
 		}
+		scheduleCompletionRefresh(user_id);
 
 		closeLogModal();
 	}
@@ -2641,6 +2631,8 @@
 				| { error?: unknown }
 				| undefined;
 			if (errorResult?.error) throw errorResult.error;
+			const targetUserId = action.entries[0]?.user_id;
+			if (targetUserId) scheduleCompletionRefresh(targetUserId);
 		} catch (error) {
 			console.error('undo error', error);
 		}
@@ -2705,6 +2697,7 @@
 		for (const update of updates) {
 			setStatus(user_id, update.hour, update.half ? 1 : 0, nextStatus);
 		}
+		scheduleCompletionRefresh(user_id);
 	}
 
 	function cancelPendingMove() {
@@ -2785,6 +2778,7 @@
 					setSelectedBlock({ hourIndex, half: toHalf });
 				}
 			}
+			scheduleCompletionRefresh(user_id);
 			return true;
 		} finally {
 			isCopySubmitting = false;
@@ -2845,6 +2839,7 @@
 					setSelectedBlock({ hourIndex, half: toHalf });
 				}
 			}
+			scheduleCompletionRefresh(user_id);
 			return true;
 		}
 		if (destinationHabit) return false;
@@ -2925,6 +2920,7 @@
 			setTitle(user_id, fromHour, fromHalf, '', null, null);
 		}
 
+		scheduleCompletionRefresh(user_id);
 		return true;
 	}
 
@@ -2955,6 +2951,7 @@
 			}
 			setHabitEntry(user_id, hour, half, null);
 			clearHabitStatusById(user_id, habitEntry.id);
+			scheduleCompletionRefresh(user_id);
 			return true;
 		}
 		const title = (getTitle(user_id, hour, half) ?? '').trim();
@@ -3016,6 +3013,7 @@
 		}
 
 		setTitle(user_id, hour, half, '', null);
+		scheduleCompletionRefresh(user_id);
 		return true;
 	}
 
@@ -3057,6 +3055,7 @@
 			}
 
 			setStatus(user_id, prevHour, prevHalf, true);
+			scheduleCompletionRefresh(user_id);
 
 			// Close prompt and open editor for the current block
 			carryoverPrompt = null;
@@ -3151,6 +3150,7 @@
 			}
 
 			carryoverPrompt = null;
+			scheduleCompletionRefresh(user_id);
 			// You can choose whether to auto-open the editor here.
 			// Spec says just copy it, so no openEditor() call.
 		} finally {

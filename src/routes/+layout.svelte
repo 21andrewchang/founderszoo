@@ -12,6 +12,8 @@
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
 	import { useGlobalPresence } from '$lib/presence';
+	import { fetchCompletionByDate } from '$lib/heatmap';
+	import { heatmapStore } from '$lib/heatmapStore';
 	import GrogathLogin from './grogath/+page.svelte';
 
 	type Person = { label: string; user_id: string };
@@ -38,6 +40,8 @@
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
 	const HEATMAP_LOOKBACK_DAYS = 365;
 	const YC_APP_DUE_DATE = '2026-02-09';
+	const HEATMAP_HOURS_BATCH_SIZE = 25;
+	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
@@ -99,14 +103,14 @@
 		completed: number;
 		productiveHours: number;
 		score: number;
-		badBlocks: number;
 		categoryBreakdown: SummaryCategory[];
 	};
 
+	const initialHeatmap = ($page.data?.heatmapByDate as Record<string, number> | null) ?? {};
 	let heatmapOpen = $state(false);
-	let heatmapLoading = $state(false);
+	let heatmapLoading = $state(Object.keys(initialHeatmap).length === 0);
 	let heatmapAnimated = $state(false);
-	let heatmapByDate = $state<Record<string, number>>({});
+	let heatmapByDate = $state<Record<string, number>>(initialHeatmap);
 	let heatmapScrollEl = $state<HTMLDivElement | null>(null);
 	let heatmapTooltip = $state({ text: '', x: 0, y: 0, visible: false });
 	let calendarLockedDate = $state<string | null>(null);
@@ -497,7 +501,6 @@
 	): SummaryStats {
 		let planned = 0;
 		let completed = 0;
-		let badBlocks = 0;
 		const categoryCounts: Record<SummaryCategoryKey, number> = {
 			body: 0,
 			rest: 0,
@@ -508,12 +511,8 @@
 		for (const row of hours) {
 			const title = (row.title ?? '').trim();
 			const category = row.category as SummaryCategoryKey | null;
-			const isBad = category === 'bad';
-			if (title.length > 0 && isBad) badBlocks += 1;
-			if (!isBad) {
-				if (title.length > 0) planned += 1;
-				if (title.length > 0 && row.status !== false) completed += 1;
-			}
+			if (title.length > 0) planned += 1;
+			if (title.length > 0 && row.status !== false) completed += 1;
 			if (title.length > 0 && category) {
 				categoryCounts[category] += 1;
 			}
@@ -543,7 +542,6 @@
 			completed: totalCompleted,
 			productiveHours: totalCompleted / 2,
 			score,
-			badBlocks,
 			categoryBreakdown
 		};
 	}
@@ -1100,84 +1098,27 @@
 	async function loadHeatmap(userId: string | null) {
 		if (!userId) {
 			heatmapByDate = {};
+			heatmapStore.set({ userId: null, byDate: {}, loading: false });
 			return;
 		}
 		heatmapLoading = true;
+		heatmapStore.set({ userId, byDate: heatmapByDate, loading: true });
 		const lookbackStart = dateStringNDaysAgo(HEATMAP_LOOKBACK_DAYS);
 		try {
-			const { data: daysData, error: daysError } = await supabase
-				.from('days')
-				.select('id, date')
-				.eq('user_id', userId)
-				.gte('date', lookbackStart)
-				.order('date', { ascending: true });
-			if (daysError) throw daysError;
-			const dayIdByDate = new Map<string, string>();
-			for (const row of daysData ?? []) {
-				const date = (row.date as string | null) ?? null;
-				const id = (row.id as string | null) ?? null;
-				if (!date || !id) continue;
-				dayIdByDate.set(id, date);
-			}
-
-			const { data: habitData, error: habitError } = await supabase
-				.from('habit_day_status')
-				.select('day, completed')
-				.eq('user_id', userId)
-				.gte('day', lookbackStart);
-			if (habitError) throw habitError;
-
-			const habitCounts = new Map<string, number>();
-			for (const row of habitData ?? []) {
-				const day = (row.day as string | null) ?? null;
-				if (!day || !row.completed) continue;
-				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
-			}
-
-			const completedCounts = new Map<string, number>();
-			if (dayIdByDate.size > 0) {
-				const dayIds = Array.from(dayIdByDate.keys());
-				const { data: hoursData, error: hoursError } = await supabase
-					.from('hours')
-					.select('day_id, status, title')
-					.in('day_id', dayIds)
-					.or('status.is.null,status.eq.true');
-				if (hoursError) throw hoursError;
-
-				for (const row of hoursData ?? []) {
-					const dayId = (row.day_id as string | null) ?? null;
-					const title = (row.title as string | null) ?? '';
-					const status = row.status as boolean | null;
-					if (!dayId) continue;
-					if (title.trim().length === 0) continue;
-					if (status === false) continue;
-					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
-				}
-			}
-
-			const next: Record<string, number> = {};
-			for (const [dayId, date] of dayIdByDate.entries()) {
-				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
-				);
-				next[date] = pct;
-			}
-
-			for (const [date, completed] of habitCounts.entries()) {
-				if (next[date] !== undefined) continue;
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
-				);
-				next[date] = pct;
-			}
+			const next = await fetchCompletionByDate(
+				supabase,
+				userId,
+				lookbackStart,
+				TOTAL_BLOCKS_PER_DAY,
+				HEATMAP_HOURS_BATCH_SIZE
+			);
 
 			heatmapByDate = next;
+			heatmapStore.set({ userId, byDate: next, loading: false });
 		} catch (error) {
 			console.error('heatmap load error', error);
 			heatmapByDate = {};
+			heatmapStore.set({ userId, byDate: {}, loading: false });
 		} finally {
 			heatmapLoading = false;
 		}
@@ -1201,6 +1142,10 @@
 		let currentProgressInterval: number | null = null;
 		let authSubscription: { unsubscribe: () => void } | null = null;
 		let goalRotationInterval: number | null = null;
+		const refreshHeatmap = () => {
+			if (!viewerId) return;
+			void loadHeatmap(viewerId);
+		};
 		const goalRotationIntervalMs = 10000;
 		let lastGoalRotationAt = Date.now();
 
@@ -1218,7 +1163,15 @@
 			}
 			if (!mounted) return;
 			await loadGoals();
-			await loadHeatmap(authUser?.id ?? null);
+			const serverHeatmap = $page.data?.heatmapByDate as Record<string, number> | null | undefined;
+			const serverHeatmapUserId = $page.data?.heatmapUserId as string | null | undefined;
+			if (authUser && serverHeatmap && serverHeatmapUserId === authUser.id) {
+				heatmapByDate = serverHeatmap;
+				heatmapLoading = false;
+				heatmapStore.set({ userId: authUser.id, byDate: serverHeatmap, loading: false });
+			} else {
+				await loadHeatmap(authUser?.id ?? null);
+			}
 			await refreshTrackedPlayers();
 		};
 
@@ -1233,6 +1186,8 @@
 			void refreshTrackedPlayers();
 		});
 		authSubscription = data.subscription;
+
+		window.addEventListener(HEATMAP_REFRESH_EVENT, refreshHeatmap);
 
 		currentProgressInterval = window.setInterval(() => {
 			void refreshCurrentCombined();
@@ -1358,6 +1313,7 @@
 
 		return () => {
 			mounted = false;
+			window.removeEventListener(HEATMAP_REFRESH_EVENT, refreshHeatmap);
 			document.removeEventListener('keydown', handleKeyDown);
 			if (currentProgressInterval !== null) {
 				window.clearInterval(currentProgressInterval);
@@ -1505,7 +1461,9 @@
 
 		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
 			{#if viewerId}
-				<div class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition">
+				<div
+					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition"
+				>
 					{#key displayGoalKey}
 						<span
 							in:fly={{ y: 4, delay: 400, duration: 200 }}
@@ -1522,11 +1480,7 @@
 									{displayRangeLabel}
 								</span>
 							</button>
-							<button
-								type="button"
-								class="rounded-md hover:bg-stone-100"
-								onclick={openGoalModal}
-							>
+							<button type="button" class="rounded-md hover:bg-stone-100" onclick={openGoalModal}>
 								{displayGoalEntry.title || 'Milestone'}
 							</button>
 						</span>
