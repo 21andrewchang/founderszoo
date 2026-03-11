@@ -129,6 +129,7 @@
 	let calendarWeekEls = $state<(HTMLDivElement | null)[]>([]);
 	let calendarScrollDirection = $state<1 | -1 | 0>(0);
 	let calendarSnapDisabled = $state(false);
+	let calendarDidInitialScroll = $state(false);
 	let calendarGroupObserver: IntersectionObserver | null = null;
 	let calendarVisibleMonth = $state<{ monthIndex: number; year: number } | null>(null);
 	let calendarScrollSnapTimer: number | null = null;
@@ -337,14 +338,10 @@
 	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
 	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
 	const calendarSummaryTarget = $derived(calendarHoverDate ?? calendarLockedDate ?? activeDayDate);
-	const calendarRangeAnchorDate = $derived(
-		formatDateString(new Date(calendarYear, calendarMonthIndex, 1))
-	);
+	const calendarRangeAnchorDate = $derived(formatDateString(new Date(calendarYear, 0, 1)));
 	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
 	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
-	const calendarWeekRange = $derived(
-		buildCalendarWeekRange(calendarRangeAnchorDate, monthsUntilEndOfYear(calendarRangeAnchorDate))
-	);
+	const calendarWeekRange = $derived(buildCalendarWeekRange(calendarRangeAnchorDate, 12));
 	const calendarWeekGroups = $derived(chunkWeeks(calendarWeekRange, 6));
 	$effect(() => {
 		calendarWeekEls = Array.from({ length: calendarWeekRange.length }, () => null);
@@ -374,6 +371,36 @@
 		if (!calendarLockedDate) {
 			setCalendarMonthFromDate(activeDayDate);
 		}
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarDidInitialScroll = false;
+			return;
+		}
+		if (calendarDidInitialScroll) return;
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const targetDate = localToday();
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === targetDate)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex = Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop);
+			calendarDidInitialScroll = true;
+		});
 	});
 
 	$effect(() => {
@@ -922,6 +949,12 @@
 		return step > 0 ? step : null;
 	}
 
+	function calendarBaseOffset() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		return weekEls[0].offsetTop;
+	}
+
 	function updateCalendarVisibleMonthFromScroll(
 		scrollTop: number,
 		logLabel?: string,
@@ -990,7 +1023,9 @@
 		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
 		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
 		const rowStep = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
-		const firstVisibleIndex = Math.round(currentTop / rowStep);
+		const baseOffset = calendarBaseOffset();
+		if (baseOffset === null) return;
+		const firstVisibleIndex = Math.round((currentTop - baseOffset) / rowStep) + 1;
 		if (!Number.isFinite(firstVisibleIndex)) return;
 		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
 		if (direction > 0 && weekIndex > lastVisibleIndex) {
