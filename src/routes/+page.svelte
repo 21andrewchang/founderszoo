@@ -17,6 +17,7 @@
 	import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 	import { fetchCompletionByDate } from '$lib/heatmap';
 	import { heatmapStore } from '$lib/heatmapStore';
+	import { eventModalOpenDate, clearEventModalOpen } from '$lib/eventModalStore';
 
 	type Person = { label: string; user_id: string };
 
@@ -46,6 +47,7 @@
 	let singlePlayerMode = $state(false);
 	let singlePlayerLoadedFor = $state<string | null>(null);
 	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
+	const EVENT_MODAL_OPEN_EVENT = 'event-modal-open';
 	let completionRefreshTimeout: number | null = null;
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
@@ -2549,6 +2551,24 @@
 		logOpen = true;
 	}
 
+	function openEventModalForDate(dateStr: string) {
+		if (!viewerUserId) return;
+		logEventMode = true;
+		logEventId = null;
+		logDueDate = dateStr;
+		draft = {
+			user_id: viewerUserId,
+			hour: START_HOUR,
+			half: 0,
+			title: '',
+			status: null,
+			category: null,
+			habit: null
+		};
+		editorMode = false;
+		logOpen = true;
+	}
+
 	function closeLogModal() {
 		logOpen = false;
 		logEventMode = false;
@@ -3956,12 +3976,19 @@
 			if (now - lastKeyAt < 150) return;
 			setCursorHidden(false);
 		};
+		const eventModalUnsub = eventModalOpenDate.subscribe((dateStr) => {
+			console.log('event modal store received', dateStr);
+			if (!dateStr) return;
+			openEventModalForDate(dateStr);
+			clearEventModalOpen();
+		});
 		window.addEventListener('keydown', keyHandler);
 		window.addEventListener('pointermove', pointerHandler);
 		window.addEventListener('pointerdown', pointerHandler);
 		requestAnimationFrame(() => (showTimes = true));
 		return () => {
 			stopClockTick();
+			eventModalUnsub();
 			window.removeEventListener('keydown', keyHandler);
 			window.removeEventListener('pointermove', pointerHandler);
 			window.removeEventListener('pointerdown', pointerHandler);

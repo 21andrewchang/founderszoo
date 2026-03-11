@@ -14,6 +14,7 @@
 	import { useGlobalPresence } from '$lib/presence';
 	import { fetchCompletionByDate } from '$lib/heatmap';
 	import { heatmapStore } from '$lib/heatmapStore';
+	import { requestEventModalOpen } from '$lib/eventModalStore';
 	import GrogathLogin from './grogath/+page.svelte';
 
 	type Person = { label: string; user_id: string };
@@ -1666,6 +1667,10 @@
 			if (!heatmapOpen) return;
 			let handled = true;
 			switch (normalized) {
+				case 'i': {
+					requestEventModalOpen(calendarSelectedDate);
+					break;
+				}
 				case 'h':
 					moveSelectedByDays(-1);
 					break;
@@ -2051,7 +2056,19 @@
 									} ${isSelected ? 'calendar-cell-selected' : ''} ${
 										isStrong ? 'calendar-cell-strong' : ''
 									} ${!isSelected && isToday ? 'calendar-cell-today' : ''}`}
-									onclick={() => handleCalendarSelect(dateKey)}
+									ondblclick={(event) => {
+										event.preventDefault();
+										event.stopPropagation();
+										handleCalendarSelect(dateKey);
+										requestEventModalOpen(dateKey);
+									}}
+									onclick={(event) => {
+										handleCalendarSelect(dateKey);
+										if (event.detail !== 2) return;
+										event.preventDefault();
+										event.stopPropagation();
+										requestEventModalOpen(dateKey);
+									}}
 								>
 									<span
 										class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}
@@ -2275,9 +2292,9 @@
 		background: #fff;
 		text-align: center;
 		font-size: 12px;
-		font-weight: 600;
+		font-weight: 400;
 		color: #6b7280;
-		height: 36px;
+		height: 26px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
