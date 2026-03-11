@@ -130,6 +130,7 @@
 	let calendarScrollDirection = $state<1 | -1 | 0>(0);
 	let calendarSnapDisabled = $state(false);
 	let calendarDidInitialScroll = $state(false);
+	let calendarAutoScroll = $state(false);
 	let calendarGroupObserver: IntersectionObserver | null = null;
 	let calendarVisibleMonth = $state<{ monthIndex: number; year: number } | null>(null);
 	let calendarScrollSnapTimer: number | null = null;
@@ -961,9 +962,10 @@
 		meta?: Record<string, number | string>
 	) {
 		const step = calendarRowStep();
-		if (!step) return;
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
 		const maxStart = Math.max(0, calendarWeekRange.length - 1);
-		const startIndex = Math.max(0, Math.min(maxStart, Math.round(scrollTop / step)));
+		const startIndex = Math.max(0, Math.min(maxStart, Math.round((scrollTop - baseOffset) / step)));
 		const groupWeeks = calendarWeekRange.slice(startIndex, startIndex + 6);
 		if (!groupWeeks.length) return;
 		const totals = calendarGroupMonthTotals(groupWeeks);
@@ -1028,14 +1030,19 @@
 		const firstVisibleIndex = Math.round((currentTop - baseOffset) / rowStep) + 1;
 		if (!Number.isFinite(firstVisibleIndex)) return;
 		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
+		if (calendarAutoScroll) return;
 		if (direction > 0 && weekIndex > lastVisibleIndex) {
 			const nextTop = Math.min(currentTop + rowStep, maxTop);
 			if (nextTop - currentTop > 0.5) {
 				disableCalendarSnap();
+				calendarAutoScroll = true;
 				calendarScrollEl.scrollTop = nextTop;
 				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
 					direction: 'down',
 					weekIndex
+				});
+				requestAnimationFrame(() => {
+					calendarAutoScroll = false;
 				});
 			}
 			return;
@@ -1044,10 +1051,14 @@
 			const nextTop = Math.max(currentTop - rowStep, 0);
 			if (currentTop - nextTop > 0.5) {
 				disableCalendarSnap();
+				calendarAutoScroll = true;
 				calendarScrollEl.scrollTop = nextTop;
 				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
 					direction: 'up',
 					weekIndex
+				});
+				requestAnimationFrame(() => {
+					calendarAutoScroll = false;
 				});
 			}
 		}
