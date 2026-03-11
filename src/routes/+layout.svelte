@@ -1021,6 +1021,7 @@
 		if (weekIndex === -1) return;
 		const weekEl = calendarWeekEls[weekIndex];
 		if (!weekEl) return;
+		if (calendarAutoScroll) return;
 		const currentTop = calendarScrollEl.scrollTop;
 		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
 		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
@@ -1030,7 +1031,6 @@
 		const firstVisibleIndex = Math.round((currentTop - baseOffset) / rowStep) + 1;
 		if (!Number.isFinite(firstVisibleIndex)) return;
 		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
-		if (calendarAutoScroll) return;
 		if (direction > 0 && weekIndex > lastVisibleIndex) {
 			const nextTop = Math.min(currentTop + rowStep, maxTop);
 			if (nextTop - currentTop > 0.5) {
@@ -1041,9 +1041,9 @@
 					direction: 'down',
 					weekIndex
 				});
-				requestAnimationFrame(() => {
+				window.setTimeout(() => {
 					calendarAutoScroll = false;
-				});
+				}, 120);
 			}
 			return;
 		}
@@ -1057,9 +1057,9 @@
 					direction: 'up',
 					weekIndex
 				});
-				requestAnimationFrame(() => {
+				window.setTimeout(() => {
 					calendarAutoScroll = false;
-				});
+				}, 120);
 			}
 		}
 	}
