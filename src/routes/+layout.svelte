@@ -367,10 +367,16 @@
 	});
 
 	$effect(() => {
-		if (!heatmapOpen) return;
+		if (!heatmapOpen) {
+			calendarHoverDate = null;
+			calendarLockedDate = null;
+			return;
+		}
 		calendarHoverDate = null;
 		if (!calendarLockedDate) {
-			setCalendarMonthFromDate(activeDayDate);
+			const today = localToday();
+			calendarLockedDate = today;
+			setCalendarMonthFromDate(today);
 		}
 	});
 
@@ -966,7 +972,8 @@
 		if (!step || baseOffset === null) return;
 		const maxStart = Math.max(0, calendarWeekRange.length - 1);
 		const startIndex = Math.max(0, Math.min(maxStart, Math.round((scrollTop - baseOffset) / step)));
-		const groupWeeks = calendarWeekRange.slice(startIndex, startIndex + 6);
+		const countStartIndex = Math.min(maxStart, startIndex + 1);
+		const groupWeeks = calendarWeekRange.slice(countStartIndex, countStartIndex + 6);
 		if (!groupWeeks.length) return;
 		const totals = calendarGroupMonthTotals(groupWeeks);
 		let best: { monthIndex: number; year: number; dayCount: number } | null = null;
@@ -1010,6 +1017,34 @@
 		requestAnimationFrame(() => {
 			if (!calendarScrollEl) return;
 			calendarScrollEl.style.scrollSnapType = previous;
+		});
+	}
+
+	function scrollCalendarToDate(dateStr: string, options?: { align?: 'top' | 'nearby' }) {
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex =
+			options?.align === 'top' ? Math.max(0, weekIndex - 1) : Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarAutoScroll = true;
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar jump', {
+				source: 'today-key'
+			});
+			window.setTimeout(() => {
+				calendarAutoScroll = false;
+			}, 120);
 		});
 	}
 
@@ -1581,8 +1616,14 @@
 				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
 			}
 			const normalized = event.key.toLowerCase();
-			if (event.key === 'T') {
-				activeDayDateStore.set(localToday());
+			if (normalized === 't' && !pendingNavG) {
+				const today = localToday();
+				if (heatmapOpen) {
+					handleCalendarSelect(today);
+					scrollCalendarToDate(today, { align: 'top' });
+				} else {
+					activeDayDateStore.set(today);
+				}
 				event.preventDefault();
 				return;
 			}
@@ -1718,7 +1759,7 @@
 			<div class="pointer-events-auto relative flex items-center">
 				<button
 					type="button"
-					class="flex h-11 w-11 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
+					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
 					aria-label="Previous day"
 					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
 				>
@@ -1738,7 +1779,7 @@
 				</button>
 				<button
 					type="button"
-					class="flex w-32 items-center justify-center gap-2 rounded-sm px-4 py-3 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
+					class="flex h-9 w-32 items-center justify-center gap-2 rounded-sm px-3 py-2 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
 					disabled={isActiveDayToday}
 					onclick={() => {
 						activeDayDateStore.set(localToday());
@@ -1749,7 +1790,7 @@
 				</button>
 				<button
 					type="button"
-					class="flex h-11 w-11 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
+					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
 					aria-label="Next day"
 					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
 				>
@@ -1777,7 +1818,7 @@
 			<div class="pointer-events-auto relative flex items-center">
 				<button
 					type="button"
-					class="rounded-sm p-4 text-stone-500 transition hover:bg-stone-300/50"
+					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
 					aria-label="Toggle timeline"
 					onclick={() => {
 						const nextOpen = !heatmapOpen;
@@ -1817,7 +1858,7 @@
 						>
 							<button
 								type="button"
-								class="rounded-sm px-3 py-2 hover:bg-stone-100"
+								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
 								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
 								onclick={() => togglePinnedGoal(displayGoalKey)}
 							>
@@ -1827,7 +1868,7 @@
 							</button>
 							<button
 								type="button"
-								class="rounded-sm px-3 py-2 hover:bg-stone-100"
+								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
 								onclick={openGoalModal}
 							>
 								{displayGoalEntry.title || 'Milestone'}
@@ -2010,12 +2051,14 @@
 									} ${isSelected ? 'calendar-cell-selected' : ''} ${
 										isStrong ? 'calendar-cell-strong' : ''
 									} ${!isSelected && isToday ? 'calendar-cell-today' : ''}`}
-									onmouseenter={(event) => handleCalendarHover(dateKey, event)}
-									onmousemove={updateCalendarHoverPosition}
-									onmouseleave={clearCalendarHover}
 									onclick={() => handleCalendarSelect(dateKey)}
 								>
-									<span class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}></span>
+									<span
+										class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}
+										onmouseenter={(event) => handleCalendarHover(dateKey, event)}
+										onmousemove={updateCalendarHoverPosition}
+										onmouseleave={clearCalendarHover}
+									></span>
 									<span
 										class={`calendar-cell-date text-xs font-normal ${
 											isToday ? 'calendar-cell-date-today' : ''
@@ -2283,11 +2326,11 @@
 
 	.calendar-cell-swatch {
 		position: absolute;
-		top: 6px;
-		left: 6px;
-		width: 22px;
-		height: 22px;
-		border-radius: 6px;
+		top: 8px;
+		left: 8px;
+		width: 16px;
+		height: 16px;
+		border-radius: 5px;
 	}
 
 	.calendar-cell:hover:not(.calendar-cell-selected) {
@@ -2311,15 +2354,16 @@
 	}
 
 	.calendar-cell-date {
+		display: inline-flex;
+		align-items: center;
+		justify-content: flex-end;
+		width: 22px;
+		height: 22px;
 		color: inherit;
 	}
 
 	.calendar-cell-date-today {
-		display: inline-flex;
-		align-items: center;
 		justify-content: center;
-		width: 22px;
-		height: 22px;
 		padding: 0;
 		border-radius: 999px;
 		background: #ef4444;
