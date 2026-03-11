@@ -549,7 +549,15 @@
 		if (parsed === null || todayMs === null) return '';
 		const diffDays = Math.round((parsed - todayMs) / DAY_MS);
 		const safeDays = Math.max(0, diffDays);
-		return `${safeDays} days`;
+		if (safeDays > 7) {
+			const weeks = Math.floor(safeDays / 7);
+			const days = safeDays % 7;
+			const weekLabel = `${weeks} week${weeks === 1 ? '' : 's'}`;
+			if (days === 0) return weekLabel;
+			const dayLabel = `${days} day${days === 1 ? '' : 's'}`;
+			return `${weekLabel} ${dayLabel}`;
+		}
+		return `${safeDays} day${safeDays === 1 ? '' : 's'}`;
 	};
 	const isMilestoneEvent = (event: UpcomingEvent) => event.id.startsWith('milestone-');
 	const clampUpcomingIndex = (index: number) =>
@@ -3969,25 +3977,25 @@
 </script>
 
 <div
-	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 select-none"
+	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-8 select-none"
 	class:cursor-none={hideCursor}
 >
 	<div class="flex flex-row space-x-4">
 		{#if isLoading}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
+			<div class="flex flex-col space-y-2">
+				<div class="h-9 w-9 text-stone-50">T</div>
 				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center"></div>
+					<div class="relative flex h-10 w-10 items-center justify-center"></div>
 				{/each}
 			</div>
 		{:else}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
+			<div class="flex flex-col space-y-2">
+				<div class="h-10 w-10 text-stone-50">T</div>
 				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center">
+					<div class="relative flex h-10 w-10 items-center justify-center">
 						{#if showTimes}
 							<div
-								class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
+								class="z-20 flex h-10 w-10 items-center justify-center rounded text-xl text-stone-300"
 								in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 200 }}
 							>
 								{hh(h)}
@@ -3995,7 +4003,7 @@
 						{/if}
 						{#if isCurrent(h)}
 							<div
-								class="absolute h-7 w-7 rounded-md bg-stone-700"
+								class="absolute h-10 w-10 rounded-md bg-stone-700"
 								in:scale|global={{ start: 0.6, duration: 100, delay: 1000 }}
 							></div>
 						{/if}
@@ -4005,15 +4013,15 @@
 		{/if}
 
 		<div class="flex w-full flex-col">
-			<div class="flex w-full flex-row gap-4">
+			<div class="flex w-full flex-row gap-6">
 				{#if isLoading}
 					{#each loadingPlaceholderColumns as _}
-						<div class="flex w-full flex-col space-y-1" aria-hidden="true">
-							<div class="flex h-6 items-center gap-2">
-								<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
+						<div class="flex w-full flex-col space-y-2" aria-hidden="true">
+							<div class="flex h-10 items-center gap-3">
+								<div class="loading-sheen h-6 w-32 rounded bg-stone-200"></div>
 							</div>
 							{#each hours as _}
-								<div class="flex h-7 w-full flex-row space-x-1">
+								<div class="flex h-10 w-full flex-row space-x-2">
 									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 								</div>
@@ -4023,8 +4031,8 @@
 				{:else}
 					{#each visiblePeople as person}
 						{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
-						<div class="flex w-full flex-col space-y-1 transition-opacity">
-							<div class="flex h-6 items-center gap-2">
+						<div class="flex min-w-0 flex-1 flex-col space-y-2 transition-opacity">
+							<div class="flex h-10 items-center gap-3">
 								{#if trackedKey}
 									<PlayerStatusTag
 										label={isSinglePlayerView
@@ -4039,7 +4047,7 @@
 
 							{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
 								{#each hours as _}
-									<div class="flex h-7 w-full flex-row space-x-1">
+									<div class="flex h-10 w-full flex-row space-x-2">
 										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
 									</div>
@@ -4051,7 +4059,7 @@
 									{@const blockIsCopiedA = blockIsCopied(person.user_id, h, 0)}
 									{@const blockIsCopiedB = blockIsCopied(person.user_id, h, 1)}
 									<div
-										class="hover:none flex h-7 w-full flex-row space-x-1"
+										class="hover:none flex h-10 w-full flex-row space-x-2"
 										class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
 									>
 										<div
@@ -4140,22 +4148,19 @@
 						</div>
 					{/each}
 					{#if isSinglePlayerView}
-						<div
-							class="relative flex w-full flex-col gap-1 pl-6 before:absolute before:top-6 before:bottom-0 before:left-0 before:w-px before:bg-stone-100"
-							aria-label="Upcoming"
-						>
-							<div class="flex h-6 items-center justify-between">
-								<div class="text-base font-medium text-stone-800">Upcoming</div>
+						<div class="relative flex min-w-0 flex-1 flex-col gap-2 pl-0" aria-label="Upcoming">
+							<div class="flex h-10 items-center justify-between">
+								<div class="text-xl font-medium text-stone-800">Upcoming</div>
 								<button
 									type="button"
-									class="flex h-6 w-6 items-center justify-center rounded-md text-base font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
+									class="flex h-8 w-8 items-center justify-center rounded-md text-lg font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
 									aria-label="New event"
 									onclick={() => openEventModal()}
 								>
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
-										width="16"
-										height="16"
+										width="20"
+										height="20"
 										fill="currentColor"
 										class="bi bi-plus"
 										viewBox="0 0 16 16"
@@ -4167,17 +4172,17 @@
 									</svg>
 								</button>
 							</div>
-							<div class="space-y-3">
+							<div class="space-y-4">
 								{#if upcomingEventsLoading}
-									<div class="text-xs text-stone-400">Loading...</div>
+									<div class="text-sm text-stone-400">Loading...</div>
 								{:else if upcomingEvents.length === 0}
-									<div class="text-xs text-stone-400">No upcoming events yet.</div>
+									<div class="text-sm text-stone-400">No upcoming events yet.</div>
 								{:else}
 									{#each upcomingEvents as event, index}
 										<button
 											type="button"
 											disabled={isMilestoneEvent(event)}
-											class={`flex w-full flex-row justify-between rounded-lg p-4 text-left transition disabled:cursor-default ${
+											class={`flex w-full flex-row justify-between rounded-lg p-5 text-left transition disabled:cursor-default ${
 												isMilestoneEvent(event)
 													? 'bg-stone-50'
 													: 'bg-stone-100 hover:ring-1 hover:ring-stone-400 hover:ring-offset-1 hover:ring-offset-stone-50'
@@ -4195,8 +4200,8 @@
 												if (!isMilestoneEvent(event)) openEventModal(event);
 											}}
 										>
-											<div class="text-xs font-medium text-stone-800">{event.title}</div>
-											<div class="flex items-center justify-end gap-2 text-xs text-stone-500">
+											<div class="text-sm font-medium text-stone-800">{event.title}</div>
+											<div class="flex items-center justify-end gap-2 text-sm text-stone-500">
 												<span>{daysUntilLabel(event.due_date)}</span>
 												<span class="text-stone-300">·</span>
 												<span>{formatDisplayDate(event.due_date)}</span>

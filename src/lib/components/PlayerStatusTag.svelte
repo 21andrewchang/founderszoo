@@ -47,7 +47,7 @@
 </script>
 
 <div
-	class="group relative inline-flex items-center gap-2 rounded-md font-medium text-stone-700"
+	class="group relative inline-flex items-center gap-2 rounded-md text-xl font-medium text-stone-700"
 	aria-label={aria}
 >
 	<span class={`h-2 w-2 rounded-full ${dotClass}`}></span>

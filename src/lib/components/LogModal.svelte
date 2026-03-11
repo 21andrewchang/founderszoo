@@ -474,21 +474,21 @@
 	>
 		<div
 			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-lg rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+			class="w-full max-w-3xl rounded-2xl border border-stone-200 bg-white text-xl text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
 			{#if !eventMode}
-				<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
+				<div class="flex flex-row gap-1 p-4 pb-0 text-base text-stone-600">
 					<div class="relative">
 						<button
 							type="button"
-							class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+							class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
 							onclick={toggleHourMenu}
 						>
 							Hour {hh(hour)}
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								viewBox="0 0 16 16"
-								class="h-3 w-3 text-stone-400"
+								class="h-4 w-4 text-stone-400"
 								fill="currentColor"
 								aria-hidden="true"
 							>
@@ -505,7 +505,7 @@
 									{#each HOURS as h, index}
 										<button
 											type="button"
-											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-base text-stone-700"
 											class:bg-stone-100={hourMenuIndex === index}
 											onclick={() => {
 												hour = h;
@@ -515,7 +515,7 @@
 										>
 											<span>Hour {hh(h)}</span>
 											{#if h === hour}
-												<span class="text-[10px] font-semibold text-stone-900">✓</span>
+												<span class="text-base font-semibold text-stone-900">✓</span>
 											{/if}
 										</button>
 									{/each}
@@ -524,7 +524,7 @@
 						{/if}
 					</div>
 					<button
-						class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+						class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
 						onclick={() => (half = half ? 0 : 1)}
 					>
 						Block
@@ -542,16 +542,16 @@
 					</button>
 				</div>
 			{:else}
-				<div class="flex flex-row items-center gap-1 p-3 pb-0 text-xs text-stone-600">
+				<div class="flex flex-row items-center gap-1 p-4 pb-0 text-base text-stone-600">
 					<div
-						class="flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500"
+						class="flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500"
 					>
 						<input
 							bind:this={dueMonthEl}
 							type="text"
 							inputmode="numeric"
 							placeholder="MM"
-							class="w-6 border-none bg-transparent p-0 text-center text-[11px] tracking-wide text-stone-500 outline-none focus:outline-none"
+							class="w-8 border-none bg-transparent p-0 text-center text-base tracking-wide text-stone-500 outline-none focus:outline-none"
 							value={dueMonth}
 							oninput={(event) => {
 								dueMonth = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
@@ -569,7 +569,7 @@
 							type="text"
 							inputmode="numeric"
 							placeholder="DD"
-							class="w-6 border-none bg-transparent p-0 text-center text-[11px] tracking-wide text-stone-500 outline-none focus:outline-none"
+							class="w-8 border-none bg-transparent p-0 text-center text-base tracking-wide text-stone-500 outline-none focus:outline-none"
 							value={dueDay}
 							oninput={(event) => {
 								dueDay = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
@@ -590,23 +590,23 @@
 					bind:this={inputEl}
 					type="text"
 					placeholder="Title"
-					class="w-full p-5 text-2xl text-stone-800 transition outline-none"
+					class="w-full p-6 py-8 text-4xl text-stone-800 transition outline-none"
 					onfocus={enterInsertMode}
 					bind:value={text}
 					autocomplete="off"
 				/>
 			</div>
 
-			<div class="flex flex-row gap-1 px-4 pb-2">
+			<div class="flex flex-row gap-2 px-6 pb-4">
 				{#each CATEGORY_PRESETS as p}
 					<button
 						type="button"
-						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
 						class:bg-stone-100={category === p.value}
 						onclick={() => selectCategory(p.value)}
 					>
 						<span
-							class={`relative flex h-3 w-3 items-center justify-center ${
+							class={`relative flex h-4 w-4 items-center justify-center ${
 								p.value === 'admin'
 									? 'text-amber-900/30'
 									: p.value === 'body'
@@ -620,7 +620,7 @@
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"
-									class="h-3 w-3"
+									class="h-4 w-4"
 									fill="currentColor"
 								>
 									<path
@@ -631,7 +631,7 @@
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"
-									class="h-3 w-3"
+									class="h-4 w-4"
 									fill="currentColor"
 								>
 									<path
@@ -642,7 +642,7 @@
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"
-									class="h-3 w-3"
+									class="h-4 w-4"
 									fill="currentColor"
 								>
 									<path
@@ -653,7 +653,7 @@
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"
-									class="h-3 w-3"
+									class="h-4 w-4"
 									fill="currentColor"
 								>
 									<path
@@ -663,7 +663,7 @@
 							{/if}
 							{#if commandHintVisible}
 								<span
-									class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+									class="absolute h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
 									in:fly={{ y: 6, duration: 200 }}
 								>
 									{p.key}
@@ -676,18 +676,18 @@
 				{/each}
 				<button
 					type="button"
-					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+					class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
 					class:bg-stone-100={statusKind !== 'none'}
 					class:opacity-50={statusDisabled}
 					class:cursor-not-allowed={statusDisabled}
 					onclick={cycleStatus}
 					disabled={statusDisabled}
 				>
-					<span class="relative flex h-3 w-3 items-center justify-center">
+					<span class="relative flex h-4 w-4 items-center justify-center">
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
-							class="h-3 w-3 text-rose-500"
+							class="h-4 w-4 text-rose-500"
 							fill="currentColor"
 						>
 							<path
@@ -696,7 +696,7 @@
 						</svg>
 						{#if commandHintVisible}
 							<span
-								class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								class="absolute z-20 h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
 								5
@@ -707,12 +707,12 @@
 				</button>
 			</div>
 
-			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-4 py-3">
+			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-6 py-4">
 				<div class="flex items-center gap-2">
 					<div class="relative">
 						<button
 							type="button"
-							class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+							class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
 							class:bg-stone-100={habitMode}
 							class:opacity-50={eventMode}
 							class:cursor-not-allowed={eventMode}
@@ -722,11 +722,11 @@
 							}}
 							disabled={eventMode}
 						>
-							<span class="relative flex h-3 w-3 items-center justify-center">
+							<span class="relative flex h-4 w-4 items-center justify-center">
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
 									viewBox="0 0 16 16"
-									class="h-3 w-3 text-stone-700"
+									class="h-4 w-4 text-stone-700"
 									fill="currentColor"
 								>
 									<path
@@ -739,7 +739,7 @@
 								</svg>
 								{#if mode === 'normal'}
 									<span
-										class="absolute z-20 h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+										class="absolute z-20 h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
 										in:fly={{ y: 6, duration: 200 }}
 									>
 										h
@@ -756,14 +756,14 @@
 									{#each HABIT_MENU_DAYS as day, index}
 										<button
 											type="button"
-											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-[11px] text-stone-700"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-base text-stone-700"
 											class:bg-stone-100={habitMenuIndex === index}
 											onclick={() => toggleHabitDay(day.value)}
 											onmouseenter={() => (habitMenuIndex = index)}
 										>
 											<span>{day.label}</span>
 											{#if day.value === -1 ? habitDays.length === HABIT_DAYS.length : habitDays.includes(day.value)}
-												<span class="text-[10px] font-semibold text-stone-900">✓</span>
+												<span class="text-base font-semibold text-stone-900">✓</span>
 											{/if}
 										</button>
 									{/each}
@@ -773,15 +773,15 @@
 					</div>
 					<button
 						type="button"
-						class="inline-flex items-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
+						class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
 						class:bg-stone-100={eventMode}
 						onclick={toggleEventMode}
 					>
-						<span class="flex h-3 w-3 items-center justify-center">
+						<span class="flex h-4 w-4 items-center justify-center">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								viewBox="0 0 16 16"
-								class="h-2.5 w-2.5 text-stone-700"
+								class="h-4 w-4 text-stone-700"
 								fill="currentColor"
 								aria-hidden="true"
 							>
@@ -794,7 +794,7 @@
 					</button>
 				</div>
 				<button
-					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-3 py-1.5 text-base font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={handleSubmit}
 				>
 					{saving ? 'Saving…' : `Save `}

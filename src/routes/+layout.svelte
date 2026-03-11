@@ -126,7 +126,12 @@
 	let calendarActiveGroupIndex = $state(0);
 	let calendarScrollEl = $state<HTMLDivElement | null>(null);
 	let calendarGroupEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarWeekEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarScrollDirection = $state<1 | -1 | 0>(0);
+	let calendarSnapDisabled = $state(false);
 	let calendarGroupObserver: IntersectionObserver | null = null;
+	let calendarVisibleMonth = $state<{ monthIndex: number; year: number } | null>(null);
+	let calendarScrollSnapTimer: number | null = null;
 
 	type GoalEntry = {
 		id: string | null;
@@ -330,12 +335,24 @@
 	const heatmapDateLabel = (dateStr: string) =>
 		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
 	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
-	const calendarPreviewDate = $derived(calendarHoverDate ?? calendarLockedDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarSummaryTarget = $derived(calendarHoverDate ?? calendarLockedDate ?? activeDayDate);
+	const calendarRangeAnchorDate = $derived(
+		formatDateString(new Date(calendarYear, calendarMonthIndex, 1))
+	);
 	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
 	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
-	const calendarWeekRange = $derived(buildCalendarWeekRange(calendarSelectedDate, 12));
+	const calendarWeekRange = $derived(
+		buildCalendarWeekRange(calendarRangeAnchorDate, monthsUntilEndOfYear(calendarRangeAnchorDate))
+	);
 	const calendarWeekGroups = $derived(chunkWeeks(calendarWeekRange, 6));
+	$effect(() => {
+		calendarWeekEls = Array.from({ length: calendarWeekRange.length }, () => null);
+	});
 	const calendarHeaderLabel = $derived.by(() => {
+		if (calendarVisibleMonth) {
+			return `${MONTHS[calendarVisibleMonth.monthIndex] ?? MONTHS[0]} ${calendarVisibleMonth.year}`;
+		}
 		const group = calendarWeekGroups[calendarActiveGroupIndex];
 		return group ? calendarGroupLabel(group) : calendarMonthLabel;
 	});
@@ -362,9 +379,21 @@
 	$effect(() => {
 		if (!heatmapOpen) return;
 		if (!viewerId) return;
+		if (!calendarSummaryTarget) return;
+		if (calendarSummaryTarget === calendarSummaryDate && calendarSummary) return;
+		void loadCalendarSummary(calendarSummaryTarget);
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
 		if (!calendarPreviewDate) return;
-		if (calendarPreviewDate === calendarSummaryDate && calendarSummary) return;
-		void loadCalendarSummary(calendarPreviewDate);
+		if (calendarScrollDirection === 0) return;
+		const direction = calendarScrollDirection;
+		calendarScrollDirection = 0;
+		requestAnimationFrame(() => {
+			scrollCalendarRowIfNeeded(calendarPreviewDate, direction);
+		});
 	});
 
 	function formatDaysUntilText(days: number | null) {
@@ -602,6 +631,12 @@
 		return weeks;
 	}
 
+	function monthsUntilEndOfYear(baseDateStr: string) {
+		const parsed = parseLocalDate(baseDateStr) ?? new Date();
+		const monthIndex = parsed.getMonth();
+		return Math.max(1, 12 - monthIndex);
+	}
+
 	function chunkWeeks(weeks: Date[][], chunkSize: number) {
 		const groups: Date[][][] = [];
 		for (let i = 0; i < weeks.length; i += chunkSize) {
@@ -611,18 +646,66 @@
 	}
 
 	function calendarGroupMonthInfo(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number };
+		const totals = new Map<string, MonthTally>();
+
 		for (const week of group) {
 			for (const day of week) {
-				if (day.getDate() == 1) {
-					return { monthIndex: day.getMonth(), year: day.getFullYear() };
-				}
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
 			}
 		}
+
+		let best: MonthTally | null = null;
+		for (const entry of totals.values()) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+
+		if (best) {
+			return { monthIndex: best.monthIndex, year: best.year };
+		}
+
 		const fallbackDay = group[Math.floor(group.length / 2)]?.[3] ?? group[0]?.[0];
 		if (!fallbackDay) {
 			return { monthIndex: calendarMonthIndex, year: calendarYear };
 		}
 		return { monthIndex: fallbackDay.getMonth(), year: fallbackDay.getFullYear() };
+	}
+
+	function calendarGroupMonthTotals(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number; rowCount: number };
+		const totals = new Map<string, MonthTally>();
+		for (const week of group) {
+			const weekMonths = new Set<string>();
+			for (const day of week) {
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0,
+					rowCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
+				weekMonths.add(key);
+			}
+			for (const key of weekMonths) {
+				const entry = totals.get(key);
+				if (entry) entry.rowCount += 1;
+			}
+		}
+		return Array.from(totals.values()).sort((a, b) => {
+			if (a.year !== b.year) return a.year - b.year;
+			return a.monthIndex - b.monthIndex;
+		});
 	}
 
 	function calendarGroupLabel(group: Date[][]) {
@@ -757,11 +840,14 @@
 		calendarHoverPosition = null;
 	}
 
-	function handleCalendarSelect(dateStr: string) {
+	function handleCalendarSelect(dateStr: string, options?: { syncMonth?: boolean }) {
+		const syncMonth = options?.syncMonth ?? true;
 		calendarLockedDate = dateStr;
 		calendarHoverDate = null;
 		calendarHoverPosition = null;
-		setCalendarMonthFromDate(dateStr);
+		if (syncMonth) {
+			setCalendarMonthFromDate(dateStr);
+		}
 		activeDayDateStore.set(dateStr);
 	}
 
@@ -799,9 +885,78 @@
 		};
 	});
 
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		const readyWeeks = calendarWeekEls.filter(Boolean).length;
+		if (!readyWeeks) return;
+		updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop);
+		const handleScroll = () => {
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+			}
+			calendarScrollSnapTimer = window.setTimeout(() => {
+				calendarScrollSnapTimer = null;
+				if (!calendarScrollEl) return;
+				updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop, 'Calendar snap', {
+					source: 'scroll-end'
+				});
+			}, 120);
+		};
+		calendarScrollEl.addEventListener('scroll', handleScroll, { passive: true });
+		return () => {
+			calendarScrollEl?.removeEventListener('scroll', handleScroll);
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+				calendarScrollSnapTimer = null;
+			}
+		};
+	});
+
+	function calendarRowStep() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		const weekEl = weekEls[0];
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const step = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		return step > 0 ? step : null;
+	}
+
+	function updateCalendarVisibleMonthFromScroll(
+		scrollTop: number,
+		logLabel?: string,
+		meta?: Record<string, number | string>
+	) {
+		const step = calendarRowStep();
+		if (!step) return;
+		const maxStart = Math.max(0, calendarWeekRange.length - 1);
+		const startIndex = Math.max(0, Math.min(maxStart, Math.round(scrollTop / step)));
+		const groupWeeks = calendarWeekRange.slice(startIndex, startIndex + 6);
+		if (!groupWeeks.length) return;
+		const totals = calendarGroupMonthTotals(groupWeeks);
+		let best: { monthIndex: number; year: number; dayCount: number } | null = null;
+		for (const entry of totals) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+		calendarVisibleMonth = best ? { monthIndex: best.monthIndex, year: best.year } : null;
+		if (logLabel) {
+			console.log(
+				logLabel,
+				{ ...meta, startIndex, scrollTop, step },
+				totals.map(
+					(entry) =>
+						`${MONTHS[entry.monthIndex] ?? entry.monthIndex} ${entry.year}: rows ${entry.rowCount}, days ${entry.dayCount}`
+				)
+			);
+		}
+	}
+
 	function moveSelectedByDays(days: number) {
-		const baseDate = calendarLockedDate ?? activeDayDate;
-		handleCalendarSelect(addDaysToDateString(baseDate, days));
+		const baseDate = calendarPreviewDate ?? activeDayDate;
+		calendarScrollDirection = days > 0 ? 1 : -1;
+		handleCalendarSelect(addDaysToDateString(baseDate, days), { syncMonth: false });
 	}
 
 	function moveSelectedByWeeks(weeks: number) {
@@ -809,8 +964,58 @@
 	}
 
 	function moveSelectedByMonths(months: number) {
-		const baseDate = calendarLockedDate ?? activeDayDate;
+		const baseDate = calendarPreviewDate ?? activeDayDate;
 		handleCalendarSelect(addMonthsToDateString(baseDate, months));
+	}
+
+	function disableCalendarSnap() {
+		if (!calendarScrollEl) return;
+		const previous = calendarScrollEl.style.scrollSnapType;
+		calendarScrollEl.style.scrollSnapType = 'none';
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.style.scrollSnapType = previous;
+		});
+	}
+
+	function scrollCalendarRowIfNeeded(dateStr: string, direction: 1 | -1) {
+		if (!calendarScrollEl) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		const currentTop = calendarScrollEl.scrollTop;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const rowStep = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		const firstVisibleIndex = Math.round(currentTop / rowStep);
+		if (!Number.isFinite(firstVisibleIndex)) return;
+		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
+		if (direction > 0 && weekIndex > lastVisibleIndex) {
+			const nextTop = Math.min(currentTop + rowStep, maxTop);
+			if (nextTop - currentTop > 0.5) {
+				disableCalendarSnap();
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'down',
+					weekIndex
+				});
+			}
+			return;
+		}
+		if (direction < 0 && weekIndex < firstVisibleIndex) {
+			const nextTop = Math.max(currentTop - rowStep, 0);
+			if (currentTop - nextTop > 0.5) {
+				disableCalendarSnap();
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'up',
+					weekIndex
+				});
+			}
+		}
 	}
 
 	function buildHeatmapWeeks() {
@@ -1467,14 +1672,14 @@
 			<div class="pointer-events-auto relative flex items-center">
 				<button
 					type="button"
-					class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+					class="flex h-11 w-11 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
 					aria-label="Previous day"
 					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
 				>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
-						width="10"
-						height="10"
+						width="18"
+						height="18"
 						fill="currentColor"
 						class="bi bi-chevron-left"
 						viewBox="0 0 16 16"
@@ -1487,7 +1692,7 @@
 				</button>
 				<button
 					type="button"
-					class="flex w-22 items-center justify-center gap-2 rounded-sm px-2 py-1 text-xs font-medium text-stone-700 transition hover:bg-stone-200/50"
+					class="flex w-32 items-center justify-center gap-2 rounded-sm px-4 py-3 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
 					disabled={isActiveDayToday}
 					onclick={() => {
 						activeDayDateStore.set(localToday());
@@ -1498,14 +1703,14 @@
 				</button>
 				<button
 					type="button"
-					class="flex h-6 w-6 items-center justify-center rounded-md text-xs text-stone-600 hover:bg-stone-100"
+					class="flex h-11 w-11 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
 					aria-label="Next day"
 					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
 				>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
-						width="10"
-						height="10"
+						width="18"
+						height="18"
 						fill="currentColor"
 						class="bi bi-chevron-right"
 						viewBox="0 0 16 16"
@@ -1526,7 +1731,7 @@
 			<div class="pointer-events-auto relative flex items-center">
 				<button
 					type="button"
-					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
+					class="rounded-sm p-4 text-stone-500 transition hover:bg-stone-300/50"
 					aria-label="Toggle timeline"
 					onclick={() => {
 						const nextOpen = !heatmapOpen;
@@ -1539,8 +1744,8 @@
 				>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
-						width="10"
-						height="10"
+						width="18"
+						height="18"
 						fill="currentColor"
 						class="bi bi-calendar-fill"
 						viewBox="0 0 16 16"
@@ -1553,20 +1758,20 @@
 			</div>
 		</div>
 
-		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2">
+		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2 translate-y-0.5">
 			{#if viewerId}
 				<div
-					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase transition"
+					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase transition"
 				>
 					{#key displayGoalKey}
 						<span
 							in:fly={{ y: 4, delay: 400, duration: 200 }}
 							out:fade={{ duration: 160 }}
-							class="flex h-6 items-center gap-0 rounded-sm px-2"
+							class="flex h-11 items-center gap-2 rounded-sm px-4"
 						>
 							<button
 								type="button"
-								class="rounded-sm px-1.5 py-0.5 hover:bg-stone-100"
+								class="rounded-sm px-3 py-2 hover:bg-stone-100"
 								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
 								onclick={() => togglePinnedGoal(displayGoalKey)}
 							>
@@ -1576,7 +1781,7 @@
 							</button>
 							<button
 								type="button"
-								class="rounded-sm px-1.5 py-0.5 hover:bg-stone-100"
+								class="rounded-sm px-3 py-2 hover:bg-stone-100"
 								onclick={openGoalModal}
 							>
 								{displayGoalEntry.title || 'Milestone'}
@@ -1586,10 +1791,10 @@
 				</div>
 			{:else}
 				<div
-					class="pointer-events-auto flex flex-col items-center gap-0.5 text-xs font-semibold tracking-wide text-stone-800 uppercase"
+					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase"
 				>
 					<span>{yearGoalTitle}</span>
-					<span class="text-[10px] font-semibold tracking-wide text-stone-400">
+					<span class="text-[15px] font-semibold tracking-wide text-stone-400">
 						{currentRangeLabel}
 					</span>
 				</div>
@@ -1739,19 +1944,22 @@
 					data-group={groupIndex}
 					bind:this={calendarGroupEls[groupIndex]}
 				>
-					{#each group as week}
-						<div class="calendar-week">
+					{#each group as week, weekIndex}
+						{@const globalWeekIndex = groupIndex * 6 + weekIndex}
+						<div class="calendar-week" bind:this={calendarWeekEls[globalWeekIndex]}>
 							{#each week as day}
 								{@const dateKey = formatDateString(day)}
+								{@const activeMonth = calendarVisibleMonth ?? groupMonth}
 								{@const isCurrentMonth =
-									day.getMonth() === groupMonth.monthIndex && day.getFullYear() === groupMonth.year}
+									day.getMonth() === activeMonth.monthIndex &&
+									day.getFullYear() === activeMonth.year}
 								{@const isSelected = dateKey === calendarSelectedDate}
 								{@const isToday = dateKey === localToday()}
 								{@const pct = heatmapByDate[dateKey] ?? 0}
 								{@const isStrong = pct >= 50}
 								<button
 									type="button"
-									class={`calendar-cell ${heatmapColorClass(pct)} ${
+									class={`calendar-cell ${
 										isCurrentMonth ? '' : 'calendar-cell-muted'
 									} ${isSelected ? 'calendar-cell-selected' : ''} ${
 										isStrong ? 'calendar-cell-strong' : ''
@@ -1761,7 +1969,14 @@
 									onmouseleave={clearCalendarHover}
 									onclick={() => handleCalendarSelect(dateKey)}
 								>
-									<span class="calendar-cell-date">{day.getDate()}</span>
+									<span class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}></span>
+									<span
+										class={`calendar-cell-date text-xs font-normal ${
+											isToday ? 'calendar-cell-date-today' : ''
+										}`}
+									>
+										{day.getDate()}
+									</span>
 								</button>
 							{/each}
 						</div>
@@ -1936,8 +2151,10 @@
 				) /
 				6
 		);
-		min-height: 100vh;
+		box-sizing: border-box;
+		height: 100vh;
 		padding-top: var(--calendar-top-offset);
+		overflow: hidden;
 		background: #fff;
 	}
 
@@ -1946,29 +2163,31 @@
 		top: 0;
 		z-index: 20;
 		background: #fff;
-		padding-bottom: 8px;
+		padding-bottom: 0;
 	}
 
 	.calendar-month-label {
 		font-size: 20px;
 		font-weight: 600;
 		color: #1c1917;
-		padding: 8px 0 6px;
+		padding: 8px 0 6px 16px;
 	}
 
 	.calendar-weekdays {
 		display: grid;
 		grid-template-columns: repeat(7, minmax(0, 1fr));
-		gap: var(--calendar-gap);
-		background: #e5e7eb;
+		gap: 0;
+		background: transparent;
+		border-bottom: 1px solid #e5e7eb;
+		margin-bottom: 0;
 	}
 
 	.calendar-weekday {
 		background: #fff;
 		text-align: center;
 		font-size: 12px;
-		font-weight: 500;
-		color: #78716c;
+		font-weight: 600;
+		color: #6b7280;
 		height: 36px;
 		display: flex;
 		align-items: center;
@@ -1989,6 +2208,10 @@
 		background: #e5e7eb;
 	}
 
+	.calendar-group + .calendar-group {
+		border-top: var(--calendar-gap) solid #e5e7eb;
+	}
+
 	.calendar-week {
 		display: grid;
 		grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -2003,18 +2226,33 @@
 		width: 100%;
 		height: 100%;
 		padding: 8px;
-		text-align: left;
+		position: relative;
+		background: #fff;
+		text-align: right;
 		display: flex;
 		align-items: flex-start;
-		justify-content: flex-start;
+		justify-content: flex-end;
 		transition: box-shadow 0.2s ease;
 	}
 
-	.calendar-cell:hover {
-		box-shadow: inset 0 0 0 1px #d6d3d1;
+	.calendar-cell-swatch {
+		position: absolute;
+		top: 6px;
+		left: 6px;
+		width: 22px;
+		height: 22px;
+		border-radius: 6px;
+	}
+
+	.calendar-cell:hover:not(.calendar-cell-selected) {
+		box-shadow: none;
 	}
 
 	.calendar-cell-muted {
+		opacity: 1;
+	}
+
+	.calendar-cell-muted .calendar-cell-date {
 		opacity: 0.35;
 	}
 
@@ -2023,17 +2261,23 @@
 	}
 
 	.calendar-cell-strong {
-		color: #fff;
-	}
-
-	.calendar-cell-today {
-		box-shadow: inset 0 0 0 1px #a8a29e;
+		color: inherit;
 	}
 
 	.calendar-cell-date {
-		font-size: 12px;
-		font-weight: 600;
 		color: inherit;
+	}
+
+	.calendar-cell-date-today {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		padding: 0;
+		border-radius: 999px;
+		background: #ef4444;
+		color: #fff;
 	}
 
 	@keyframes block-sheen {
