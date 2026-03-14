@@ -14,7 +14,6 @@
 	import { useGlobalPresence } from '$lib/presence';
 	import { fetchCompletionByDate } from '$lib/heatmap';
 	import { heatmapStore } from '$lib/heatmapStore';
-	import { requestEventModalOpen } from '$lib/eventModalStore';
 	import GrogathLogin from './grogath/+page.svelte';
 
 	type Person = { label: string; user_id: string };
@@ -1617,17 +1616,6 @@
 				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
 			}
 			const normalized = event.key.toLowerCase();
-			if (normalized === 't' && !pendingNavG) {
-				const today = localToday();
-				if (heatmapOpen) {
-					handleCalendarSelect(today);
-					scrollCalendarToDate(today, { align: 'top' });
-				} else {
-					activeDayDateStore.set(today);
-				}
-				event.preventDefault();
-				return;
-			}
 			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
 				if (normalized === 'g') {
 					pendingNavG = true;
@@ -1638,17 +1626,8 @@
 					}, 900);
 					return;
 				}
-				if (pendingNavG && (normalized === 't' || normalized === 'm')) {
-					if (normalized === 't') {
-						const nextOpen = !heatmapOpen;
-						heatmapOpen = nextOpen;
-						if (nextOpen) {
-							isGoalModalOpen = false;
-							void loadHeatmap(viewerId);
-						}
-					} else {
-						openGoalModal();
-					}
+				if (pendingNavG && normalized === 'm') {
+					openGoalModal();
 					resetNavG();
 					event.preventDefault();
 					return;
@@ -1667,10 +1646,6 @@
 			if (!heatmapOpen) return;
 			let handled = true;
 			switch (normalized) {
-				case 'i': {
-					requestEventModalOpen(calendarSelectedDate);
-					break;
-				}
 				case 'h':
 					moveSelectedByDays(-1);
 					break;
@@ -1810,40 +1785,6 @@
 						<path
 							fill-rule="evenodd"
 							d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-						/>
-					</svg>
-				</button>
-			</div>
-		</div>
-
-		<div
-			class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col items-end"
-			bind:this={dateMenuEl}
-		>
-			<div class="pointer-events-auto relative flex items-center">
-				<button
-					type="button"
-					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
-					aria-label="Toggle timeline"
-					onclick={() => {
-						const nextOpen = !heatmapOpen;
-						heatmapOpen = nextOpen;
-						if (nextOpen) {
-							isGoalModalOpen = false;
-							void loadHeatmap(viewerId);
-						}
-					}}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="18"
-						height="18"
-						fill="currentColor"
-						class="bi bi-calendar-fill"
-						viewBox="0 0 16 16"
-					>
-						<path
-							d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5h16V4H0V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5"
 						/>
 					</svg>
 				</button>
@@ -2018,378 +1959,14 @@
 	</div>
 {/if}
 
-{#if heatmapOpen}
-	<div class="calendar-shell text-stone-800">
-		<div class="calendar-header">
-			<div class="calendar-month-label">{calendarHeaderLabel}</div>
-			<div class="calendar-weekdays">
-				{#each CALENDAR_WEEKDAYS as label}
-					<div class="calendar-weekday">{label}</div>
-				{/each}
-			</div>
-		</div>
-		<div class="calendar-scroll" bind:this={calendarScrollEl}>
-			{#each calendarWeekGroups as group, groupIndex}
-				{@const groupMonth = calendarGroupMonthInfo(group)}
-				<div
-					class="calendar-group"
-					data-group={groupIndex}
-					bind:this={calendarGroupEls[groupIndex]}
-				>
-					{#each group as week, weekIndex}
-						{@const globalWeekIndex = groupIndex * 6 + weekIndex}
-						<div class="calendar-week" bind:this={calendarWeekEls[globalWeekIndex]}>
-							{#each week as day}
-								{@const dateKey = formatDateString(day)}
-								{@const activeMonth = calendarVisibleMonth ?? groupMonth}
-								{@const isCurrentMonth =
-									day.getMonth() === activeMonth.monthIndex &&
-									day.getFullYear() === activeMonth.year}
-								{@const isSelected = dateKey === calendarSelectedDate}
-								{@const isToday = dateKey === localToday()}
-								{@const pct = heatmapByDate[dateKey] ?? 0}
-								{@const isStrong = pct >= 50}
-								<button
-									type="button"
-									class={`calendar-cell ${
-										isCurrentMonth ? '' : 'calendar-cell-muted'
-									} ${isSelected ? 'calendar-cell-selected' : ''} ${
-										isStrong ? 'calendar-cell-strong' : ''
-									} ${!isSelected && isToday ? 'calendar-cell-today' : ''}`}
-									ondblclick={(event) => {
-										event.preventDefault();
-										event.stopPropagation();
-										handleCalendarSelect(dateKey);
-										requestEventModalOpen(dateKey);
-									}}
-									onclick={(event) => {
-										handleCalendarSelect(dateKey);
-										if (event.detail !== 2) return;
-										event.preventDefault();
-										event.stopPropagation();
-										requestEventModalOpen(dateKey);
-									}}
-								>
-									<span
-										class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}
-										onmouseenter={(event) => handleCalendarHover(dateKey, event)}
-										onmousemove={updateCalendarHoverPosition}
-										onmouseleave={clearCalendarHover}
-									></span>
-									<span
-										class={`calendar-cell-date text-xs font-normal ${
-											isToday ? 'calendar-cell-date-today' : ''
-										}`}
-									>
-										{day.getDate()}
-									</span>
-								</button>
-							{/each}
-						</div>
-					{/each}
-				</div>
-			{/each}
-		</div>
-		{#if calendarHoverDate && calendarHoverPosition}
-			{@const hoverMatchesSummary = calendarSummaryDate === calendarHoverDate}
-			<div
-				class="pointer-events-none fixed z-[9999] w-[360px] rounded-2xl border border-stone-200 bg-white p-4 shadow-2xl"
-				style={`left: ${calendarHoverPosition.x}px; top: ${calendarHoverPosition.y}px;`}
-			>
-				<div class="text-sm font-semibold text-stone-900">
-					{heatmapDateLabel(calendarHoverDate)}
-				</div>
-				{#if calendarSummaryLoading || !hoverMatchesSummary}
-					<div class="mt-2 text-xs text-stone-400">Loading summary...</div>
-				{:else}
-					<div class="mt-3 space-y-2 text-sm text-stone-700">
-						<div class="flex items-center justify-between">
-							<span>Tasks planned</span>
-							<span class="font-semibold text-stone-900">{calendarSummary?.planned ?? 0}</span>
-						</div>
-						<div class="flex items-center justify-between">
-							<span>Tasks completed</span>
-							<span class="font-semibold text-stone-900">{calendarSummary?.completed ?? 0}</span>
-						</div>
-						<div class="flex items-center justify-between">
-							<span>Productive hours</span>
-							<span class="font-semibold text-stone-900"
-								>{formatProductiveHours(calendarSummary?.productiveHours ?? 0)}</span
-							>
-						</div>
-					</div>
-					<div class="mt-4 flex items-start justify-between gap-4">
-						<div class="flex items-center justify-center">
-							<div
-								class="summary-pie h-24 w-24 rounded-full"
-								style={summaryPieStyle(calendarSummary)}
-							></div>
-						</div>
-						<div class="space-y-2 text-sm text-stone-700">
-							{#each calendarSummary?.categoryBreakdown ?? [] as category}
-								<div class="flex w-40 items-center justify-between">
-									<div class="flex items-center gap-2">
-										<span class={SUMMARY_CATEGORY_CLASSES[category.key]}>
-											{#if category.key === 'rest'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 16 16"
-													class="h-3 w-3"
-													fill="currentColor"
-												>
-													<path
-														d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
-													/>
-												</svg>
-											{:else if category.key === 'body'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 16 16"
-													class="h-3 w-3"
-													fill="currentColor"
-												>
-													<path
-														d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
-													/>
-												</svg>
-											{:else if category.key === 'work'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 16 16"
-													class="h-3 w-3"
-													fill="currentColor"
-												>
-													<path
-														d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
-													/>
-												</svg>
-											{:else if category.key === 'admin'}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 16 16"
-													class="h-3 w-3"
-													fill="currentColor"
-												>
-													<path
-														d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
-													/>
-												</svg>
-											{:else}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 16 16"
-													class="h-3 w-3"
-													fill="currentColor"
-												>
-													<path
-														d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
-													/>
-												</svg>
-											{/if}
-										</span>
-										<span>{category.label}</span>
-									</div>
-									<span class="font-semibold text-stone-900"
-										>{formatProductiveHours(category.hours)}h</span
-									>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-			</div>
-		{/if}
-	</div>
-{/if}
-
 {#if desktopMode}
 	{#if authSet && $session.user}
-		{#if !heatmapOpen && !isGoalModalOpen}
+		{#if !isGoalModalOpen}
 			{@render children()}
 		{/if}
 	{:else}
 		<GrogathLogin />
 	{/if}
-{:else if !heatmapOpen && !isGoalModalOpen}
+{:else if !isGoalModalOpen}
 	{@render children()}
 {/if}
-
-<style>
-	:global(:root) {
-		--summary-body: #fda4af;
-		--summary-rest: #c4b5fd;
-		--summary-work: #cbd5e1;
-		--summary-admin: rgba(120, 53, 15, 0.3);
-		--summary-bad: #f43f5e;
-		--summary-empty: #e5e7eb;
-	}
-
-	.summary-pie {
-		background: conic-gradient(var(--summary-empty) 0% 100%);
-	}
-
-	.heatmap-sheen {
-		overflow: hidden;
-	}
-
-	.heatmap-sheen::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		background: linear-gradient(
-			120deg,
-			transparent 0%,
-			rgba(255, 255, 255, 0.65) 50%,
-			transparent 100%
-		);
-		transform: translateX(-100%);
-		animation: block-sheen 0.5s linear infinite;
-	}
-
-	.calendar-shell {
-		--calendar-top-offset: 64px;
-		--calendar-header-height: 72px;
-		--calendar-gap: 1px;
-		--calendar-row-height: calc(
-			(
-					100vh - var(--calendar-top-offset) - var(--calendar-header-height) -
-						(5 * var(--calendar-gap))
-				) /
-				6
-		);
-		box-sizing: border-box;
-		height: 100vh;
-		padding-top: var(--calendar-top-offset);
-		overflow: hidden;
-		background: #fff;
-	}
-
-	.calendar-header {
-		position: sticky;
-		top: 0;
-		z-index: 20;
-		background: #fff;
-		padding-bottom: 0;
-	}
-
-	.calendar-month-label {
-		font-size: 20px;
-		font-weight: 600;
-		color: #1c1917;
-		padding: 8px 0 6px 16px;
-	}
-
-	.calendar-weekdays {
-		display: grid;
-		grid-template-columns: repeat(7, minmax(0, 1fr));
-		gap: 0;
-		background: transparent;
-		border-bottom: 1px solid #e5e7eb;
-		margin-bottom: 0;
-	}
-
-	.calendar-weekday {
-		background: #fff;
-		text-align: center;
-		font-size: 12px;
-		font-weight: 400;
-		color: #6b7280;
-		height: 26px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.calendar-scroll {
-		height: calc(100vh - var(--calendar-top-offset) - var(--calendar-header-height));
-		overflow-y: auto;
-		scroll-snap-type: y proximity;
-		scroll-padding-top: 0;
-	}
-
-	.calendar-group {
-		display: flex;
-		flex-direction: column;
-		gap: var(--calendar-gap);
-		background: #e5e7eb;
-	}
-
-	.calendar-group + .calendar-group {
-		border-top: var(--calendar-gap) solid #e5e7eb;
-	}
-
-	.calendar-week {
-		display: grid;
-		grid-template-columns: repeat(7, minmax(0, 1fr));
-		gap: var(--calendar-gap);
-		background: #e5e7eb;
-		height: var(--calendar-row-height);
-		scroll-snap-align: start;
-	}
-
-	.calendar-cell {
-		border: 0;
-		width: 100%;
-		height: 100%;
-		padding: 8px;
-		position: relative;
-		background: #fff;
-		text-align: right;
-		display: flex;
-		align-items: flex-start;
-		justify-content: flex-end;
-		transition: box-shadow 0.2s ease;
-	}
-
-	.calendar-cell-swatch {
-		position: absolute;
-		top: 8px;
-		left: 8px;
-		width: 16px;
-		height: 16px;
-		border-radius: 5px;
-	}
-
-	.calendar-cell:hover:not(.calendar-cell-selected) {
-		box-shadow: none;
-	}
-
-	.calendar-cell-muted {
-		opacity: 1;
-	}
-
-	.calendar-cell-muted .calendar-cell-date {
-		opacity: 0.35;
-	}
-
-	.calendar-cell-selected {
-		box-shadow: inset 0 0 0 2px #0c0a09;
-	}
-
-	.calendar-cell-strong {
-		color: inherit;
-	}
-
-	.calendar-cell-date {
-		display: inline-flex;
-		align-items: center;
-		justify-content: flex-end;
-		width: 22px;
-		height: 22px;
-		color: inherit;
-	}
-
-	.calendar-cell-date-today {
-		justify-content: center;
-		padding: 0;
-		border-radius: 999px;
-		background: #ef4444;
-		color: #fff;
-	}
-
-	@keyframes block-sheen {
-		100% {
-			transform: translateX(100%);
-		}
-	}
-</style>

@@ -241,6 +241,7 @@
 			if (key === 'Escape') {
 				hourMenuOpen = false;
 				e.preventDefault();
+				e.stopPropagation();
 				return;
 			}
 			if (key === 'j' || key === 'ArrowDown') {
@@ -266,6 +267,7 @@
 			if (key === 'Escape') {
 				habitMenuOpen = false;
 				e.preventDefault();
+				e.stopPropagation();
 				return;
 			}
 			if (key === 'j' || key === 'ArrowDown') {
@@ -287,12 +289,15 @@
 		}
 
 		if (key === 'Escape') {
-			if (mode === 'insert') {
+			if (!text.trim()) {
+				onClose();
+			} else if (mode === 'insert') {
 				enterNormalMode();
 			} else {
 				onClose();
 			}
 			e.preventDefault();
+			e.stopPropagation();
 			return;
 		}
 
