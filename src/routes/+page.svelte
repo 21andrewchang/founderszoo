@@ -3,6 +3,7 @@
 	import LogModal from '$lib/components/LogModal.svelte';
 	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
 	import Block from '$lib/components/Block.svelte';
+	import SettingsModal from '$lib/components/SettingsModal.svelte';
 	import { scale, fly } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
 	import type { PlayerStreak } from '$lib/streaks';
@@ -10,11 +11,29 @@
 	import { getContext, onDestroy, onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Writable } from 'svelte/store';
+	import { get } from 'svelte/store';
 	import type { Session } from '$lib/session';
 	import { formatLocalTimestamp } from '$lib/time';
 	import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+	import { fetchCompletionByDate } from '$lib/heatmap';
+	import { heatmapStore } from '$lib/heatmapStore';
+	import { page } from '$app/stores';
 
 	type Person = { label: string; user_id: string };
+	type SummaryCategoryKey = 'body' | 'rest' | 'work' | 'admin' | 'bad';
+	type SummaryCategory = {
+		key: SummaryCategoryKey;
+		label: string;
+		percent: number;
+		hours: number;
+	};
+	type SummaryStats = {
+		planned: number;
+		completed: number;
+		productiveHours: number;
+		score: number;
+		categoryBreakdown: SummaryCategory[];
+	};
 
 	let people = $state<Person[]>([]);
 	const session = getContext<Writable<Session>>('session');
@@ -38,6 +57,12 @@
 	let playerStatusUnsubscribers: (() => void)[] = [];
 	let stopLocalPlayerPresence: (() => void) | null = null;
 	let showTimes = $state(false);
+	let settingsOpen = $state(false);
+	let singlePlayerMode = $state(false);
+	let singlePlayerLoadedFor = $state<string | null>(null);
+	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
+	const EVENT_MODAL_OPEN_EVENT = 'event-modal-open';
+	let completionRefreshTimeout: number | null = null;
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
 		const next = {} as Record<PlayerKey, PlayerDisplay>;
@@ -164,6 +189,45 @@
 	let activeDayDateByUser = $state<Record<string, string | null>>({});
 	let spectatorDate = $state<string | null>(null);
 	let isLoading = $state(true);
+	const isSinglePlayerView = $derived.by(() => Boolean(viewerUserId && singlePlayerMode));
+	const visiblePeople = $derived.by(() => {
+		if (!viewerUserId || !singlePlayerMode) return people;
+		return people.filter((person) => person.user_id === viewerUserId);
+	});
+
+	const singlePlayerStorageKey = (userId: string) => `fz.singlePlayer.${userId}`;
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) {
+			singlePlayerLoadedFor = null;
+			singlePlayerMode = false;
+			return;
+		}
+		if (singlePlayerLoadedFor === viewerUserId) return;
+		const stored = window.localStorage.getItem(singlePlayerStorageKey(viewerUserId));
+		singlePlayerMode = stored === 'true';
+		singlePlayerLoadedFor = viewerUserId;
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) {
+			upcomingEvents = [];
+			return;
+		}
+		void loadUpcomingEvents(viewerUserId);
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		if (!viewerUserId) return;
+		if (singlePlayerLoadedFor !== viewerUserId) return;
+		window.localStorage.setItem(
+			singlePlayerStorageKey(viewerUserId),
+			singlePlayerMode ? 'true' : 'false'
+		);
+	});
 
 	let reviewSubmitting = $state(false);
 	let hideCursor = $state(false);
@@ -171,6 +235,14 @@
 	let lastPointerY = 0;
 	let hasPointer = false;
 	let lastKeyAt = 0;
+
+	type UpcomingEvent = {
+		id: string;
+		title: string;
+		due_date: string;
+	};
+	let upcomingEvents = $state<UpcomingEvent[]>([]);
+	let upcomingEventsLoading = $state(false);
 
 	function setCursorHidden(hidden: boolean) {
 		hideCursor = hidden;
@@ -333,6 +405,11 @@
 	let lastUndoDate = $state<string | null>(null);
 
 	let logOpen = $state(false);
+	let logEventMode = $state(false);
+	let logDueDate = $state('');
+	let logEventId = $state<string | null>(null);
+	let focusPane = $state<'grid' | 'upcoming'>('grid');
+	let upcomingSelectionIndex = $state<number | null>(null);
 	type BlockCarryoverPrompt = {
 		user_id: string;
 		prevHour: number;
@@ -407,9 +484,15 @@
 	let isCopySubmitting = $state(false);
 	let pendingDelete = $state<PendingDelete | null>(null);
 	let isDeleteSubmitting = $state(false);
+	let pendingEventDelete = $state<UpcomingEvent | null>(null);
+	let isEventDeleteSubmitting = $state(false);
+	let cutEvent = $state<UpcomingEvent | null>(null);
+	let cutEventSourceDate = $state<string | null>(null);
 	let isShiftSubmitting = $state(false);
 	let commandCount = $state<number | null>(null);
 	let pendingG = $state(false);
+	let pendingCalendarG = $state(false);
+	let pendingCalendarTimeout: number | null = null;
 	let dragImageEl: HTMLElement | null = null;
 	let cutBlock = $state<CutBlock | null>(null);
 	let copyBlock = $state<CopyBlock | null>(null);
@@ -465,7 +548,13 @@
 
 	const modalOverlayActive = $derived.by(() =>
 		Boolean(
-			logOpen || carryoverPrompt || plannedPrompt || pendingMove || pendingCopy || pendingDelete
+			logOpen ||
+				carryoverPrompt ||
+				plannedPrompt ||
+				pendingMove ||
+				pendingCopy ||
+				pendingDelete ||
+				pendingEventDelete
 		)
 	);
 
@@ -474,6 +563,59 @@
 
 	const formatDateString = (date: Date) =>
 		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+	const formatDisplayDate = (
+		dateStr: string,
+		options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+	) => {
+		const parsed = parseHabitDate(dateStr);
+		if (parsed === null) return dateStr;
+		return new Date(parsed).toLocaleDateString(undefined, options);
+	};
+	const daysUntilLabel = (dateStr: string) => {
+		const parsed = parseHabitDate(dateStr);
+		const todayMs = parseHabitDate(localToday());
+		if (parsed === null || todayMs === null) return '';
+		const diffDays = Math.round((parsed - todayMs) / DAY_MS);
+		const safeDays = Math.max(0, diffDays);
+		if (safeDays > 7) {
+			const weeks = Math.floor(safeDays / 7);
+			const days = safeDays % 7;
+			const weekLabel = `${weeks} week${weeks === 1 ? '' : 's'}`;
+			if (days === 0) return weekLabel;
+			const dayLabel = `${days} day${days === 1 ? '' : 's'}`;
+			return `${weekLabel} ${dayLabel}`;
+		}
+		return `${safeDays} day${safeDays === 1 ? '' : 's'}`;
+	};
+
+	const isMilestoneEvent = (event: UpcomingEvent) => event.id.startsWith('milestone-');
+	const clampUpcomingIndex = (index: number) =>
+		Math.max(0, Math.min(upcomingEvents.length - 1, index));
+	const focusUpcoming = (index?: number) => {
+		if (!isSinglePlayerView) return;
+		focusPane = 'upcoming';
+		hoverBlock = null;
+		if (upcomingEvents.length === 0) {
+			upcomingSelectionIndex = null;
+			return;
+		}
+		if (typeof index === 'number') {
+			upcomingSelectionIndex = clampUpcomingIndex(index);
+			return;
+		}
+		if (upcomingSelectionIndex === null) {
+			upcomingSelectionIndex = 0;
+		}
+	};
+	const focusGrid = () => {
+		focusPane = 'grid';
+	};
+	const moveUpcomingSelection = (delta: 1 | -1) => {
+		if (upcomingEvents.length === 0) return false;
+		const current = upcomingSelectionIndex ?? 0;
+		upcomingSelectionIndex = clampUpcomingIndex(current + delta);
+		return true;
+	};
 	const dateStringNDaysAgo = (days: number) => {
 		const base = getNow();
 		const d = new Date(base);
@@ -488,9 +630,728 @@
 		d.setDate(d.getDate() + days);
 		return formatDateString(d);
 	};
+
+	const HEATMAP_LOOKBACK_DAYS = 365;
+	const HEATMAP_HOURS_BATCH_SIZE = 25;
+	const CALENDAR_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
+		admin: 'var(--summary-admin)',
+		body: 'var(--summary-body)',
+		rest: 'var(--summary-rest)',
+		work: 'var(--summary-work)',
+		bad: 'var(--summary-bad)'
+	};
+	const SUMMARY_CATEGORY_CLASSES: Record<SummaryCategoryKey, string> = {
+		admin: 'text-amber-900/30',
+		body: 'text-rose-300',
+		rest: 'text-violet-300',
+		work: 'text-slate-300',
+		bad: 'text-rose-500'
+	};
+	const initialHeatmap = ($page.data?.heatmapByDate as Record<string, number> | null) ?? {};
+
+	let heatmapOpen = $state(false);
+	let heatmapLoading = $state(Object.keys(initialHeatmap).length === 0);
+	let heatmapAnimated = $state(false);
+	let heatmapByDate = $state<Record<string, number>>(initialHeatmap);
+	let calendarLockedDate = $state<string | null>(null);
+	let calendarHoverDate = $state<string | null>(null);
+	let calendarMonthIndex = $state<number>(new Date().getMonth());
+	let calendarYear = $state<number>(new Date().getFullYear());
+	let calendarSummary = $state<SummaryStats | null>(null);
+	let calendarSummaryDate = $state<string | null>(null);
+	let calendarSummaryLabel = $state<string | null>(null);
+	let calendarSummaryLoading = $state(false);
+	let calendarSummaryRequestId = 0;
+	let calendarHoverPosition = $state<{ x: number; y: number } | null>(null);
+	let calendarActiveGroupIndex = $state(0);
+	let calendarScrollEl = $state<HTMLDivElement | null>(null);
+	let calendarGroupEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarWeekEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarScrollDirection = $state<1 | -1 | 0>(0);
+	let calendarSnapDisabled = $state(false);
+	let calendarDidInitialScroll = $state(false);
+	let calendarAutoScroll = $state(false);
+	let calendarGroupObserver: IntersectionObserver | null = null;
+	let calendarVisibleMonth = $state<{ monthIndex: number; year: number } | null>(null);
+	let calendarScrollSnapTimer: number | null = null;
+	let calendarEventIndex = $state<number | null>(null);
+
+	function parseLocalDate(dateStr: string): Date | null {
+		const [yearStr, monthStr, dayStr] = dateStr.split('-');
+		const year = Number(yearStr);
+		const month = Number(monthStr);
+		const day = Number(dayStr);
+		if (
+			Number.isNaN(year) ||
+			Number.isNaN(month) ||
+			Number.isNaN(day) ||
+			month < 1 ||
+			month > 12 ||
+			day < 1 ||
+			day > 31
+		) {
+			return null;
+		}
+		return new Date(year, month - 1, day);
+	}
+
+	function addMonthsToDateString(dateStr: string, months: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		const day = parsed.getDate();
+		parsed.setMonth(parsed.getMonth() + months);
+		if (parsed.getDate() !== day) {
+			parsed.setDate(0);
+		}
+		return formatDateString(parsed);
+	}
+
+	function heatmapColorClass(pct: number | null) {
+		if (pct === null || Number.isNaN(pct)) return 'bg-white';
+		if (pct >= 75) return 'bg-green-800';
+		if (pct >= 50) return 'bg-green-500';
+		if (pct >= 25) return 'bg-green-200';
+		return 'bg-white';
+	}
+
+	function formatProductiveHours(value: number) {
+		const rounded = Math.round(value * 10) / 10;
+		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function summaryPieStyle(summary: SummaryStats | null) {
+		if (!summary) return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		let offset = 0;
+		const segments = summary.categoryBreakdown
+			.filter((entry) => entry.percent > 0)
+			.map((entry) => {
+				const start = offset;
+				offset += entry.percent;
+				const color = SUMMARY_CATEGORY_COLORS[entry.key] ?? 'var(--summary-empty)';
+				return `${color} ${start}% ${offset}%`;
+			});
+		if (segments.length === 0) {
+			return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		}
+		return `background: conic-gradient(${segments.join(', ')});`;
+	}
+
+	function computeSummaryStats(
+		hours: { title: string | null; status: boolean | null; category: string | null }[],
+		habitCompleted = 0
+	): SummaryStats {
+		let planned = 0;
+		let completed = 0;
+		const categoryCounts: Record<SummaryCategoryKey, number> = {
+			body: 0,
+			rest: 0,
+			work: 0,
+			admin: 0,
+			bad: 0
+		};
+		for (const row of hours) {
+			const title = (row.title ?? '').trim();
+			const category = row.category as SummaryCategoryKey | null;
+			if (title.length > 0) planned += 1;
+			if (title.length > 0 && row.status !== false) completed += 1;
+			if (title.length > 0 && category) {
+				categoryCounts[category] += 1;
+			}
+		}
+		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const totalCompleted = completed + habitCompleted;
+		const categoryBreakdown: SummaryCategory[] = (
+			[
+				{ key: 'body', label: 'Body' },
+				{ key: 'rest', label: 'Rest' },
+				{ key: 'work', label: 'Work' },
+				{ key: 'admin', label: 'Admin' },
+				{ key: 'bad', label: 'Bad' }
+			] as const
+		).map((entry) => ({
+			...entry,
+			percent:
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
+			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
+		}));
+		const score = Math.max(
+			0,
+			Math.min(100, Math.round((totalCompleted / TOTAL_BLOCKS_PER_DAY) * 100))
+		);
+		return {
+			planned,
+			completed: totalCompleted,
+			productiveHours: totalCompleted / 2,
+			score,
+			categoryBreakdown
+		};
+	}
+
+	function buildCalendarWeekRange(baseDateStr: string, monthsCount: number) {
+		const parsed = parseLocalDate(baseDateStr) ?? new Date();
+		const startMonth = new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+		const startWeekday = (startMonth.getDay() + 6) % 7;
+		const start = new Date(startMonth);
+		start.setDate(startMonth.getDate() - startWeekday);
+		const lastMonth = new Date(startMonth);
+		lastMonth.setMonth(startMonth.getMonth() + monthsCount - 1);
+		const lastDay = new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0);
+		const lastWeekday = (lastDay.getDay() + 6) % 7;
+		const end = new Date(lastDay);
+		end.setDate(lastDay.getDate() + (6 - lastWeekday));
+		const weeks: Date[][] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push(days);
+		}
+		return weeks;
+	}
+
+	function chunkWeeks(weeks: Date[][], chunkSize: number) {
+		const groups: Date[][][] = [];
+		for (let i = 0; i < weeks.length; i += chunkSize) {
+			groups.push(weeks.slice(i, i + chunkSize));
+		}
+		return groups;
+	}
+
+	function calendarGroupMonthInfo(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number };
+		const totals = new Map<string, MonthTally>();
+
+		for (const week of group) {
+			for (const day of week) {
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
+			}
+		}
+
+		let best: MonthTally | null = null;
+		for (const entry of totals.values()) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+
+		if (best) {
+			return { monthIndex: best.monthIndex, year: best.year };
+		}
+
+		const fallbackDay = group[Math.floor(group.length / 2)]?.[3] ?? group[0]?.[0];
+		if (!fallbackDay) {
+			return { monthIndex: calendarMonthIndex, year: calendarYear };
+		}
+		return { monthIndex: fallbackDay.getMonth(), year: fallbackDay.getFullYear() };
+	}
+
+	function calendarGroupMonthTotals(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number; rowCount: number };
+		const totals = new Map<string, MonthTally>();
+		for (const week of group) {
+			const weekMonths = new Set<string>();
+			for (const day of week) {
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0,
+					rowCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
+				weekMonths.add(key);
+			}
+			for (const key of weekMonths) {
+				const entry = totals.get(key);
+				if (entry) entry.rowCount += 1;
+			}
+		}
+		return Array.from(totals.values()).sort((a, b) => {
+			if (a.year !== b.year) return a.year - b.year;
+			return a.monthIndex - b.monthIndex;
+		});
+	}
+
+	function calendarGroupLabel(group: Date[][]) {
+		const info = calendarGroupMonthInfo(group);
+		return `${MONTHS[info.monthIndex] ?? MONTHS[0]} ${info.year}`;
+	}
+
+	function setCalendarMonthFromDate(dateStr: string) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return;
+		calendarMonthIndex = parsed.getMonth();
+		calendarYear = parsed.getFullYear();
+	}
+
+	async function loadCalendarSummary(dateStr: string) {
+		if (!viewerUserId) return;
+		const requestId = (calendarSummaryRequestId += 1);
+		calendarSummaryLoading = true;
+		calendarSummaryDate = dateStr;
+		calendarSummaryLabel = heatmapDateLabel(dateStr);
+		try {
+			let habitCompleted = 0;
+			const { data: habitRows, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('completed')
+				.eq('user_id', viewerUserId)
+				.eq('day', dateStr)
+				.eq('completed', true);
+			if (habitError) throw habitError;
+			habitCompleted = (habitRows ?? []).length;
+
+			const { data: dayRow, error: dayError } = await supabase
+				.from('days')
+				.select('id')
+				.eq('user_id', viewerUserId)
+				.eq('date', dateStr)
+				.maybeSingle();
+			if (dayError) throw dayError;
+			let rows: { title: string | null; status: boolean | null; category: string | null }[] = [];
+			if (dayRow?.id) {
+				const { data: hoursRows, error: hoursError } = await supabase
+					.from('hours')
+					.select('title, status, category')
+					.eq('day_id', dayRow.id as string);
+				if (hoursError) throw hoursError;
+				rows = (hoursRows ?? []) as typeof rows;
+			}
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats(rows, habitCompleted);
+		} catch (error) {
+			console.error('calendar summary load error', error);
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats([], 0);
+		} finally {
+			if (requestId === calendarSummaryRequestId) {
+				calendarSummaryLoading = false;
+			}
+		}
+	}
+
+	function handleCalendarHover(dateStr: string, event?: MouseEvent) {
+		calendarHoverDate = dateStr;
+		if (event) {
+			calendarHoverPosition = { x: event.clientX + 16, y: event.clientY + 16 };
+		}
+	}
+
+	function updateCalendarHoverPosition(event: MouseEvent) {
+		if (!calendarHoverDate) return;
+		calendarHoverPosition = { x: event.clientX + 16, y: event.clientY + 16 };
+	}
+
+	function clearCalendarHover() {
+		calendarHoverDate = null;
+		calendarHoverPosition = null;
+	}
+
+	function handleCalendarSelect(dateStr: string, options?: { syncMonth?: boolean }) {
+		const syncMonth = options?.syncMonth ?? true;
+		calendarLockedDate = dateStr;
+		calendarHoverDate = null;
+		calendarHoverPosition = null;
+		if (syncMonth) {
+			setCalendarMonthFromDate(dateStr);
+		}
+		activeDayDateStore?.set(dateStr);
+		calendarEventIndex = null;
+	}
+
+	function calendarRowStep() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		const weekEl = weekEls[0];
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const step = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		return step > 0 ? step : null;
+	}
+
+	function calendarBaseOffset() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		return weekEls[0].offsetTop;
+	}
+
+	function updateCalendarVisibleMonthFromScroll(
+		scrollTop: number,
+		logLabel?: string,
+		meta?: Record<string, number | string>
+	) {
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const maxStart = Math.max(0, calendarWeekRange.length - 1);
+		const startIndex = Math.max(0, Math.min(maxStart, Math.round((scrollTop - baseOffset) / step)));
+		const countStartIndex = Math.min(maxStart, startIndex + 1);
+		const groupWeeks = calendarWeekRange.slice(countStartIndex, countStartIndex + 6);
+		if (!groupWeeks.length) return;
+		const totals = calendarGroupMonthTotals(groupWeeks);
+		let best: { monthIndex: number; year: number; dayCount: number } | null = null;
+		for (const entry of totals) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+		calendarVisibleMonth = best ? { monthIndex: best.monthIndex, year: best.year } : null;
+		if (logLabel) {
+			console.log(
+				logLabel,
+				{ ...meta, startIndex, scrollTop, step },
+				totals.map(
+					(entry) =>
+						`${MONTHS[entry.monthIndex] ?? entry.monthIndex} ${entry.year}: rows ${entry.rowCount}, days ${entry.dayCount}`
+				)
+			);
+		}
+	}
+
+	function moveSelectedByDays(days: number) {
+		const baseDate = calendarPreviewDate ?? activeDayDate;
+		calendarScrollDirection = days > 0 ? 1 : -1;
+		handleCalendarSelect(addDaysToDateString(baseDate, days), { syncMonth: false });
+	}
+
+	function moveSelectedByWeeks(weeks: number) {
+		moveSelectedByDays(weeks * 7);
+	}
+
+	function moveSelectedByMonths(months: number) {
+		const baseDate = calendarPreviewDate ?? activeDayDate;
+		handleCalendarSelect(addMonthsToDateString(baseDate, months));
+	}
+
+	function disableCalendarSnap() {
+		if (!calendarScrollEl) return;
+		const previous = calendarScrollEl.style.scrollSnapType;
+		calendarScrollEl.style.scrollSnapType = 'none';
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.style.scrollSnapType = previous;
+		});
+	}
+
+	function scrollCalendarToDate(dateStr: string, options?: { align?: 'top' | 'nearby' }) {
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex =
+			options?.align === 'top' ? Math.max(0, weekIndex - 1) : Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarAutoScroll = true;
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar jump', {
+				source: 'today-key'
+			});
+			window.setTimeout(() => {
+				calendarAutoScroll = false;
+			}, 120);
+		});
+	}
+
+	function scrollCalendarRowIfNeeded(dateStr: string, direction: 1 | -1) {
+		if (!calendarScrollEl) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		if (calendarAutoScroll) return;
+		const currentTop = calendarScrollEl.scrollTop;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const rowStep = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		const baseOffset = calendarBaseOffset();
+		if (baseOffset === null) return;
+		const firstVisibleIndex = Math.round((currentTop - baseOffset) / rowStep) + 1;
+		if (!Number.isFinite(firstVisibleIndex)) return;
+		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
+		if (direction > 0 && weekIndex > lastVisibleIndex) {
+			const nextTop = Math.min(currentTop + rowStep, maxTop);
+			if (nextTop - currentTop > 0.5) {
+				disableCalendarSnap();
+				calendarAutoScroll = true;
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'down',
+					weekIndex
+				});
+				window.setTimeout(() => {
+					calendarAutoScroll = false;
+				}, 120);
+			}
+			return;
+		}
+		if (direction < 0 && weekIndex < firstVisibleIndex) {
+			const nextTop = Math.max(currentTop - rowStep, 0);
+			if (currentTop - nextTop > 0.5) {
+				disableCalendarSnap();
+				calendarAutoScroll = true;
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'up',
+					weekIndex
+				});
+				window.setTimeout(() => {
+					calendarAutoScroll = false;
+				}, 120);
+			}
+		}
+	}
+
+	async function loadHeatmap(userId: string | null) {
+		if (!userId) {
+			heatmapByDate = {};
+			heatmapStore.set({ userId: null, byDate: {}, loading: false });
+			return;
+		}
+		heatmapLoading = true;
+		heatmapStore.set({ userId, byDate: heatmapByDate, loading: true });
+		const lookbackStart = dateStringNDaysAgo(HEATMAP_LOOKBACK_DAYS);
+		try {
+			const next = await fetchCompletionByDate(
+				supabase,
+				userId,
+				lookbackStart,
+				TOTAL_BLOCKS_PER_DAY,
+				HEATMAP_HOURS_BATCH_SIZE
+			);
+
+			heatmapByDate = next;
+			heatmapStore.set({ userId, byDate: next, loading: false });
+		} catch (error) {
+			console.error('heatmap load error', error);
+			heatmapByDate = {};
+			heatmapStore.set({ userId, byDate: {}, loading: false });
+		} finally {
+			heatmapLoading = false;
+		}
+	}
+
+	const activeDayDate = $derived($activeDayDateStore ?? localToday());
+	const heatmapDateLabel = (dateStr: string) =>
+		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
+	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarSummaryTarget = $derived(calendarHoverDate ?? calendarLockedDate ?? activeDayDate);
+	const calendarRangeAnchorDate = $derived(formatDateString(new Date(calendarYear, 0, 1)));
+	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
+	const calendarWeekRange = $derived(buildCalendarWeekRange(calendarRangeAnchorDate, 12));
+	const calendarWeekGroups = $derived(chunkWeeks(calendarWeekRange, 6));
+	const calendarEventsByDate = $derived.by(() => {
+		const map = new Map<string, UpcomingEvent[]>();
+		for (const event of upcomingEvents) {
+			if (!event.due_date) continue;
+			const list = map.get(event.due_date) ?? [];
+			list.push(event);
+			map.set(event.due_date, list);
+		}
+		return map;
+	});
+	const calendarSelectedEvents = $derived.by(
+		() => calendarEventsByDate.get(calendarSelectedDate) ?? []
+	);
+	$effect(() => {
+		calendarWeekEls = Array.from({ length: calendarWeekRange.length }, () => null);
+	});
+	const calendarHeaderLabel = $derived.by(() => {
+		if (calendarVisibleMonth) {
+			return `${MONTHS[calendarVisibleMonth.monthIndex] ?? MONTHS[0]} ${calendarVisibleMonth.year}`;
+		}
+		const group = calendarWeekGroups[calendarActiveGroupIndex];
+		return group ? calendarGroupLabel(group) : calendarMonthLabel;
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (heatmapLoading) {
+			heatmapAnimated = false;
+			return;
+		}
+		heatmapAnimated = false;
+		requestAnimationFrame(() => {
+			heatmapAnimated = true;
+		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarHoverDate = null;
+			calendarLockedDate = null;
+			return;
+		}
+		calendarHoverDate = null;
+		if (!calendarLockedDate) {
+			const today = localToday();
+			calendarLockedDate = today;
+			setCalendarMonthFromDate(today);
+		}
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarDidInitialScroll = false;
+			return;
+		}
+		if (calendarDidInitialScroll) return;
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const targetDate = localToday();
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === targetDate)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex = Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop);
+			calendarDidInitialScroll = true;
+		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!viewerUserId) return;
+		if (!calendarSummaryTarget) return;
+		if (calendarSummaryTarget === calendarSummaryDate && calendarSummary) return;
+		void loadCalendarSummary(calendarSummaryTarget);
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		if (!calendarPreviewDate) return;
+		if (calendarScrollDirection === 0) return;
+		const direction = calendarScrollDirection;
+		calendarScrollDirection = 0;
+		requestAnimationFrame(() => {
+			scrollCalendarRowIfNeeded(calendarPreviewDate, direction);
+		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		calendarGroupObserver?.disconnect();
+		const groups = calendarGroupEls.filter(Boolean) as HTMLDivElement[];
+		if (!groups.length) return;
+		calendarGroupObserver = new IntersectionObserver(
+			(entries) => {
+				let best: IntersectionObserverEntry | null = null;
+				for (const entry of entries) {
+					if (!best || entry.intersectionRatio > best.intersectionRatio) {
+						best = entry;
+					}
+				}
+				if (!best) return;
+				const indexAttr = best.target.getAttribute('data-group');
+				if (indexAttr === null) return;
+				const index = Number(indexAttr);
+				if (Number.isNaN(index)) return;
+				calendarActiveGroupIndex = index;
+			},
+			{
+				root: calendarScrollEl,
+				threshold: [0.3, 0.6, 0.9]
+			}
+		);
+		for (const group of groups) {
+			calendarGroupObserver.observe(group);
+		}
+		return () => {
+			calendarGroupObserver?.disconnect();
+		};
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		const readyWeeks = calendarWeekEls.filter(Boolean).length;
+		if (!readyWeeks) return;
+		updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop);
+		const handleScroll = () => {
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+			}
+			calendarScrollSnapTimer = window.setTimeout(() => {
+				calendarScrollSnapTimer = null;
+				if (!calendarScrollEl) return;
+				updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop, 'Calendar snap', {
+					source: 'scroll-end'
+				});
+			}, 120);
+		};
+		calendarScrollEl.addEventListener('scroll', handleScroll, { passive: true });
+		return () => {
+			calendarScrollEl?.removeEventListener('scroll', handleScroll);
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+				calendarScrollSnapTimer = null;
+			}
+		};
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarEventIndex = null;
+			return;
+		}
+		const events = calendarSelectedEvents;
+		if (events.length === 0) {
+			calendarEventIndex = null;
+			return;
+		}
+		if (calendarEventIndex !== null && calendarEventIndex >= events.length) {
+			calendarEventIndex = events.length - 1;
+		}
+	});
 	const displayDateForUser = (user_id: string) => {
 		if (!viewerUserId) return localToday();
 		return activeDayDateByUser[user_id] ?? localToday();
+	};
+	const dayLabelForUser = (user_id: string) => {
+		const dateStr = displayDateForUser(user_id);
+		const todayStr = localToday();
+		const dateMs = parseHabitDate(dateStr);
+		const todayMs = parseHabitDate(todayStr);
+		if (dateMs === null || todayMs === null) return dateStr;
+		const diffDays = Math.round((dateMs - todayMs) / DAY_MS);
+		if (diffDays === 0) return 'Today';
+		const absDays = Math.abs(diffDays);
+		return diffDays > 0 ? `Today + ${absDays}` : `Today - ${absDays}`;
 	};
 	const canEditDayForUser = (user_id: string) => {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
@@ -619,6 +1480,16 @@
 		if (currentDate === lastUndoDate) return;
 		clearUndoStacks();
 		lastUndoDate = currentDate;
+	});
+	$effect(() => {
+		if (!isSinglePlayerView || focusPane !== 'upcoming') return;
+		if (upcomingEvents.length === 0) {
+			upcomingSelectionIndex = null;
+			return;
+		}
+		if (upcomingSelectionIndex === null || upcomingSelectionIndex >= upcomingEvents.length) {
+			upcomingSelectionIndex = 0;
+		}
 	});
 
 	function ensureBlockRow(user_id: string, h: number): BlockRow {
@@ -868,6 +1739,37 @@
 			length: streakLength,
 			missesOnLatest: 0
 		};
+	}
+	function completionMapFromRecord(records: Record<string, number>) {
+		return new Map<string, number>(Object.entries(records));
+	}
+	function waitForHeatmap(
+		user_id: string,
+		timeoutMs = 2000
+	): Promise<Record<string, number> | null> {
+		if (typeof window === 'undefined') return Promise.resolve(null);
+		return new Promise((resolve) => {
+			const current = get(heatmapStore);
+			if (current.userId === user_id && !current.loading) {
+				resolve(current.byDate);
+				return;
+			}
+			let resolved = false;
+			const timeout = window.setTimeout(() => {
+				if (resolved) return;
+				resolved = true;
+				unsub();
+				resolve(null);
+			}, timeoutMs);
+			const unsub = heatmapStore.subscribe((state) => {
+				if (state.userId !== user_id || state.loading) return;
+				if (resolved) return;
+				resolved = true;
+				window.clearTimeout(timeout);
+				unsub();
+				resolve(state.byDate);
+			});
+		});
 	}
 
 	async function startNextDayPlanning() {
@@ -1245,6 +2147,60 @@
 		return true;
 	}
 
+	function promptDeleteSelectedEvent(event: UpcomingEvent | null) {
+		if (!viewerUserId || !event) return false;
+		if (isMilestoneEvent(event)) return false;
+		pendingEventDelete = event;
+		return true;
+	}
+
+	function cutSelectedCalendarEvent() {
+		const index = calendarEventIndex ?? null;
+		if (index === null) return false;
+		const event = calendarSelectedEvents[index];
+		if (!event || isMilestoneEvent(event)) return false;
+		cutEvent = event;
+		cutEventSourceDate = event.due_date;
+		upcomingEvents = upcomingEvents.filter((entry) => entry.id !== event.id);
+		calendarEventIndex = null;
+		return true;
+	}
+
+	async function pasteCutCalendarEvent() {
+		if (!cutEvent) return false;
+		const targetDate = calendarSelectedDate;
+		const originalEvent = cutEvent;
+		const previousEvents = upcomingEvents;
+		const updatedEvent = { ...originalEvent, due_date: targetDate };
+		upcomingEvents = [
+			...upcomingEvents.filter((entry) => entry.id !== originalEvent.id),
+			updatedEvent
+		].sort((a, b) => a.due_date.localeCompare(b.due_date));
+		cutEvent = null;
+		cutEventSourceDate = null;
+		calendarEventIndex = null;
+		if (isOptimisticEvent(updatedEvent)) return true;
+		try {
+			const { error } = await supabase
+				.from('events')
+				.update({ due_date: targetDate })
+				.eq('id', updatedEvent.id)
+				.eq('user_id', viewerUserId);
+			if (error) throw error;
+			return true;
+		} catch (error) {
+			console.error('event move error', { user_id: viewerUserId, error });
+			upcomingEvents = previousEvents;
+			cutEvent = originalEvent;
+			cutEventSourceDate = originalEvent.due_date;
+			return false;
+		}
+	}
+
+	function isOptimisticEvent(event: UpcomingEvent) {
+		return event.id.startsWith('optimistic-');
+	}
+
 	function triggerBadStatusShake(user_id: string, hour: number, half: 0 | 1) {
 		const prevNonce = badStatusShake?.nonce ?? 0;
 		badStatusShake = { user_id, hour, half, nonce: prevNonce + 1 };
@@ -1514,7 +2470,7 @@
 		hourIndex: number
 	) {
 		if (!canDragBlock(user_id, hour, half)) return;
-
+		focusGrid();
 		setSelectedBlock(null);
 		hoverBlock = null;
 		dragHoverBlock = null;
@@ -1612,6 +2568,7 @@
 	function handleBlockPointerEnter(user_id: string, hourIndex: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return;
 		if (suppressHoverSelection) return;
+		focusGrid();
 		hoverBlock = { hourIndex, half };
 		if (draggingBlock) return;
 		setSelectedBlock({ hourIndex, half });
@@ -1628,6 +2585,48 @@
 		if (isTypingTarget(event.target)) return;
 		const key = event.key;
 		const normalized = key.length === 1 ? key.toLowerCase() : key;
+		if (event.ctrlKey && !event.metaKey && !event.altKey) {
+			if (normalized === 'l') {
+				focusUpcoming();
+				event.preventDefault();
+				return;
+			}
+			if (normalized === 'h') {
+				focusGrid();
+				ensureSelectionExists();
+				event.preventDefault();
+				return;
+			}
+		}
+		if (focusPane === 'upcoming') {
+			if (normalized === 'j') {
+				if (moveUpcomingSelection(1)) event.preventDefault();
+				return;
+			}
+			if (normalized === 'k') {
+				if (moveUpcomingSelection(-1)) event.preventDefault();
+				return;
+			}
+			if (normalized === 'd') {
+				const idx = upcomingSelectionIndex ?? 0;
+				const entry = upcomingEvents[idx];
+				if (entry && !isMilestoneEvent(entry)) {
+					promptDeleteSelectedEvent(entry);
+					event.preventDefault();
+				}
+				return;
+			}
+			if (normalized === 'i') {
+				const idx = upcomingSelectionIndex ?? 0;
+				const entry = upcomingEvents[idx];
+				if (entry && !isMilestoneEvent(entry)) {
+					openEventModal(entry);
+				}
+				event.preventDefault();
+				return;
+			}
+			return;
+		}
 		const allowWithModifier =
 			(event.metaKey || event.ctrlKey) && (normalized === 'n' || normalized === 'p');
 		if ((event.metaKey || event.ctrlKey || event.altKey) && !allowWithModifier) return;
@@ -2151,7 +3150,18 @@
 			console.error('habit day status update error', error);
 			return false;
 		}
+		scheduleCompletionRefresh(user_id);
 		return true;
+	}
+	function scheduleCompletionRefresh(user_id: string) {
+		if (typeof window === 'undefined') return;
+		if (completionRefreshTimeout !== null) {
+			window.clearTimeout(completionRefreshTimeout);
+		}
+		completionRefreshTimeout = window.setTimeout(() => {
+			window.dispatchEvent(new CustomEvent(HEATMAP_REFRESH_EVENT));
+			void loadCompletionStreakForUser(user_id);
+		}, 200);
 	}
 	function optimisticUpdateHabitStatus(user_id: string, habitId: string, completed: boolean) {
 		const day = localToday();
@@ -2200,79 +3210,20 @@
 	async function loadCompletionStreakForUser(user_id: string) {
 		const lookbackStart = dateStringNDaysAgo(COMPLETION_STREAK_LOOKBACK_DAYS);
 		try {
-			const today = localToday();
-			const { data: daysData, error: daysError } = await supabase
-				.from('days')
-				.select('id, date')
-				.eq('user_id', user_id)
-				.gte('date', lookbackStart)
-				.order('date', { ascending: true });
-			if (daysError) throw daysError;
-
-			const dayIdByDate = new Map<string, string>();
-			for (const row of daysData ?? []) {
-				const date = (row.date as string | null) ?? null;
-				const id = (row.id as string | null) ?? null;
-				if (!date || !id) continue;
-				dayIdByDate.set(id, date);
+			let completionByDate: Record<string, number> | null = null;
+			if (viewerUserId && user_id === viewerUserId) {
+				completionByDate = await waitForHeatmap(user_id);
 			}
-
-			const { data: habitData, error: habitError } = await supabase
-				.from('habit_day_status')
-				.select('day, completed')
-				.eq('user_id', user_id)
-				.gte('day', lookbackStart);
-			if (habitError) throw habitError;
-
-			const habitCounts = new Map<string, number>();
-			for (const row of habitData ?? []) {
-				const day = (row.day as string | null) ?? null;
-				if (!day || !row.completed) continue;
-				habitCounts.set(day, (habitCounts.get(day) ?? 0) + 1);
-			}
-
-			const completedCounts = new Map<string, number>();
-			if (dayIdByDate.size > 0) {
-				const dayIds = Array.from(dayIdByDate.keys());
-				const { data: hoursData, error: hoursError } = await supabase
-					.from('hours')
-					.select('day_id, status, title')
-					.in('day_id', dayIds)
-					.or('status.is.null,status.eq.true');
-				if (hoursError) throw hoursError;
-
-				for (const row of hoursData ?? []) {
-					const dayId = (row.day_id as string | null) ?? null;
-					const title = (row.title as string | null) ?? '';
-					const status = row.status as boolean | null;
-					if (!dayId) continue;
-					if (title.trim().length === 0) continue;
-					if (status === false) continue;
-					completedCounts.set(dayId, (completedCounts.get(dayId) ?? 0) + 1);
-				}
-			}
-
-			const days = new Map<string, number>();
-			for (const [dayId, date] of dayIdByDate.entries()) {
-				if (date === today) continue;
-				const completed = (completedCounts.get(dayId) ?? 0) + (habitCounts.get(date) ?? 0);
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
+			if (!completionByDate) {
+				completionByDate = await fetchCompletionByDate(
+					supabase,
+					user_id,
+					lookbackStart,
+					TOTAL_BLOCKS_PER_DAY
 				);
-				days.set(date, pct);
 			}
 
-			for (const [date, completed] of habitCounts.entries()) {
-				if (date === today) continue;
-				if (days.has(date)) continue;
-				const pct = Math.max(
-					0,
-					Math.min(100, Math.round((completed / TOTAL_BLOCKS_PER_DAY) * 100))
-				);
-				days.set(date, pct);
-			}
-
+			const days = completionMapFromRecord(completionByDate);
 			streakByUser = {
 				...streakByUser,
 				[user_id]: computeBracketStreak(days)
@@ -2281,16 +3232,88 @@
 			console.error('load completion streak error', { user_id, error });
 		}
 	}
+
+	async function loadUpcomingEvents(user_id: string) {
+		upcomingEventsLoading = true;
+		try {
+			const now = new Date();
+			const today = localToday();
+			const yearEnd = formatDateString(endOfYear(now));
+			const { data, error } = await supabase
+				.from('events')
+				.select('id, title, due_date')
+				.eq('user_id', user_id)
+				.order('due_date', { ascending: true });
+			if (error) throw error;
+			const dbEvents = (data ?? [])
+				.map((row) => ({
+					id: row.id as string,
+					title: (row.title as string | null) ?? '',
+					due_date: (row.due_date as string | null) ?? ''
+				}))
+				.filter((event) => Boolean(event.title && event.due_date))
+				.filter((event) => event.due_date >= today && event.due_date <= yearEnd);
+			const milestoneEvents: UpcomingEvent[] = [
+				{
+					id: 'milestone-week',
+					title: 'End of week review',
+					due_date: formatDateString(endOfWeek(now))
+				},
+				{
+					id: 'milestone-month',
+					title: 'End of month review',
+					due_date: formatDateString(endOfMonth(now))
+				},
+				{
+					id: 'milestone-quarter',
+					title: `End of ${quarterLabel(now)} review`,
+					due_date: formatDateString(endOfQuarter(now))
+				},
+				{ id: 'milestone-year', title: 'End of year review', due_date: yearEnd }
+			].filter((event) => event.due_date >= today && event.due_date <= yearEnd);
+			upcomingEvents = [...milestoneEvents, ...dbEvents].sort((a, b) =>
+				a.due_date.localeCompare(b.due_date)
+			);
+		} catch (error) {
+			console.error('events load error', { user_id, error });
+			upcomingEvents = [];
+		} finally {
+			upcomingEventsLoading = false;
+		}
+	}
 	function blockHasElapsed(hour: number, half: 0 | 1) {
 		if (currentHour < 0) return false;
 		if (currentHour > hour) return true;
 		if (currentHour === hour && currentHalf > half) return true;
 		return false;
 	}
+	function endOfWeek(date: Date) {
+		const end = new Date(date);
+		const day = end.getDay();
+		const diff = (7 - day) % 7;
+		end.setDate(end.getDate() + diff);
+		return end;
+	}
+	function endOfMonth(date: Date) {
+		return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+	}
+	function endOfQuarter(date: Date) {
+		const quarterIndex = Math.floor(date.getMonth() / 3);
+		const endMonth = quarterIndex * 3 + 2;
+		return new Date(date.getFullYear(), endMonth + 1, 0);
+	}
+	function quarterLabel(date: Date) {
+		const quarterIndex = Math.floor(date.getMonth() / 3) + 1;
+		return `Q${quarterIndex}`;
+	}
+	function endOfYear(date: Date) {
+		return new Date(date.getFullYear(), 11, 31);
+	}
 
 	let editorMode = $state(false);
 	function openEditor(user_id: string, h: number, half01: 0 | 1, normal?: boolean) {
 		if (viewerUserId !== user_id) return;
+		logEventMode = false;
 		const hourIndex = getHourIndex(h);
 		if (hourIndex !== -1) {
 			setSelectedBlock({ hourIndex, half: half01 });
@@ -2312,8 +3335,48 @@
 		logOpen = true;
 	}
 
+	function openEventModal(event?: UpcomingEvent) {
+		if (!viewerUserId) return;
+		const fallback = localToday();
+		logEventMode = true;
+		logEventId = event?.id ?? null;
+		logDueDate = event?.due_date ?? fallback;
+		draft = {
+			user_id: viewerUserId,
+			hour: START_HOUR,
+			half: 0,
+			title: event?.title ?? '',
+			status: null,
+			category: null,
+			habit: null
+		};
+		editorMode = false;
+		logOpen = true;
+	}
+
+	function openEventModalForDate(dateStr: string) {
+		if (!viewerUserId) return;
+		logEventMode = true;
+		logEventId = null;
+		logDueDate = dateStr;
+		draft = {
+			user_id: viewerUserId,
+			hour: START_HOUR,
+			half: 0,
+			title: '',
+			status: null,
+			category: null,
+			habit: null
+		};
+		editorMode = false;
+		logOpen = true;
+	}
+
 	function closeLogModal() {
 		logOpen = false;
+		logEventMode = false;
+		logEventId = null;
+		logDueDate = '';
 		if (!viewerUserId) return;
 		hoverBlock = null;
 		suppressHoverSelection = true;
@@ -2326,10 +3389,71 @@
 		half: 0 | 1,
 		blockCount: number,
 		category: BlockCategory | null,
-		habitConfig: HabitSaveConfig | null
+		habitConfig: HabitSaveConfig | null,
+		eventMode: boolean,
+		dueDate: string
 	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
+		if (eventMode) {
+			const trimmedTitle = text.trim();
+			const trimmedDate = dueDate.trim();
+			if (!trimmedTitle || !trimmedDate) return;
+			const prevUpcomingEvents = upcomingEvents;
+			try {
+				if (logEventId) {
+					upcomingEvents = upcomingEvents.map((event) =>
+						event.id === logEventId
+							? { ...event, title: trimmedTitle, due_date: trimmedDate }
+							: event
+					);
+					const { error } = await supabase
+						.from('events')
+						.update({ title: trimmedTitle, due_date: trimmedDate })
+						.eq('id', logEventId)
+						.eq('user_id', user_id);
+					if (error) throw error;
+				} else {
+					const tempId = `optimistic-${Date.now()}`;
+					const optimisticEvent: UpcomingEvent = {
+						id: tempId,
+						title: trimmedTitle,
+						due_date: trimmedDate
+					};
+					upcomingEvents = [...upcomingEvents, optimisticEvent].sort((a, b) =>
+						a.due_date.localeCompare(b.due_date)
+					);
+					const { data, error } = await supabase
+						.from('events')
+						.insert({
+							user_id,
+							title: trimmedTitle,
+							due_date: trimmedDate
+						})
+						.select('id, title, due_date')
+						.single();
+					if (error) throw error;
+					if (data) {
+						upcomingEvents = upcomingEvents
+							.map((event) =>
+								event.id === tempId
+									? {
+											id: data.id as string,
+											title: (data.title as string | null) ?? trimmedTitle,
+											due_date: (data.due_date as string | null) ?? trimmedDate
+										}
+									: event
+							)
+							.sort((a, b) => a.due_date.localeCompare(b.due_date));
+					}
+				}
+				logEventId = null;
+			} catch (error) {
+				console.error('event save error', { user_id, error });
+				upcomingEvents = prevUpcomingEvents;
+			}
+			return;
+		}
 		const day_id = dayIdByUser[user_id];
 		if (!day_id) return;
 
@@ -2409,6 +3533,7 @@
 			} catch (error) {
 				console.error('save habit error', error);
 			}
+			scheduleCompletionRefresh(user_id);
 			closeLogModal();
 			return;
 		}
@@ -2528,6 +3653,7 @@
 				suppressHoverSelection = true;
 			}
 		}
+		scheduleCompletionRefresh(user_id);
 
 		closeLogModal();
 	}
@@ -2641,6 +3767,8 @@
 				| { error?: unknown }
 				| undefined;
 			if (errorResult?.error) throw errorResult.error;
+			const targetUserId = action.entries[0]?.user_id;
+			if (targetUserId) scheduleCompletionRefresh(targetUserId);
 		} catch (error) {
 			console.error('undo error', error);
 		}
@@ -2705,6 +3833,7 @@
 		for (const update of updates) {
 			setStatus(user_id, update.hour, update.half ? 1 : 0, nextStatus);
 		}
+		scheduleCompletionRefresh(user_id);
 	}
 
 	function cancelPendingMove() {
@@ -2785,6 +3914,7 @@
 					setSelectedBlock({ hourIndex, half: toHalf });
 				}
 			}
+			scheduleCompletionRefresh(user_id);
 			return true;
 		} finally {
 			isCopySubmitting = false;
@@ -2845,6 +3975,7 @@
 					setSelectedBlock({ hourIndex, half: toHalf });
 				}
 			}
+			scheduleCompletionRefresh(user_id);
 			return true;
 		}
 		if (destinationHabit) return false;
@@ -2925,12 +4056,17 @@
 			setTitle(user_id, fromHour, fromHalf, '', null, null);
 		}
 
+		scheduleCompletionRefresh(user_id);
 		return true;
 	}
 
 	function cancelPendingDelete() {
 		if (isDeleteSubmitting) return;
 		pendingDelete = null;
+	}
+	function cancelPendingEventDelete() {
+		if (isEventDeleteSubmitting) return;
+		pendingEventDelete = null;
 	}
 	async function confirmPendingDelete() {
 		if (!pendingDelete || isDeleteSubmitting) return;
@@ -2940,6 +4076,33 @@
 			if (success) pendingDelete = null;
 		} finally {
 			isDeleteSubmitting = false;
+		}
+	}
+
+	async function confirmPendingEventDelete() {
+		if (!pendingEventDelete || isEventDeleteSubmitting) return;
+		if (!viewerUserId) return;
+		isEventDeleteSubmitting = true;
+		const target = pendingEventDelete;
+		const previousEvents = upcomingEvents;
+		upcomingEvents = upcomingEvents.filter((event) => event.id !== target.id);
+		try {
+			if (isOptimisticEvent(target)) {
+				pendingEventDelete = null;
+				return;
+			}
+			const { error } = await supabase
+				.from('events')
+				.delete()
+				.eq('id', target.id)
+				.eq('user_id', viewerUserId);
+			if (error) throw error;
+			pendingEventDelete = null;
+		} catch (error) {
+			console.error('event delete error', { user_id: viewerUserId, error });
+			upcomingEvents = previousEvents;
+		} finally {
+			isEventDeleteSubmitting = false;
 		}
 	}
 	async function deleteBlock(action: PendingDelete): Promise<boolean> {
@@ -2955,6 +4118,7 @@
 			}
 			setHabitEntry(user_id, hour, half, null);
 			clearHabitStatusById(user_id, habitEntry.id);
+			scheduleCompletionRefresh(user_id);
 			return true;
 		}
 		const title = (getTitle(user_id, hour, half) ?? '').trim();
@@ -3016,6 +4180,7 @@
 		}
 
 		setTitle(user_id, hour, half, '', null);
+		scheduleCompletionRefresh(user_id);
 		return true;
 	}
 
@@ -3057,6 +4222,7 @@
 			}
 
 			setStatus(user_id, prevHour, prevHalf, true);
+			scheduleCompletionRefresh(user_id);
 
 			// Close prompt and open editor for the current block
 			carryoverPrompt = null;
@@ -3151,6 +4317,7 @@
 			}
 
 			carryoverPrompt = null;
+			scheduleCompletionRefresh(user_id);
 			// You can choose whether to auto-open the editor here.
 			// Spec says just copy it, so no openEditor() call.
 		} finally {
@@ -3576,6 +4743,15 @@
 			hoverBlock = null;
 			cancelCutBlock();
 		}
+		const serverHeatmap = $page.data?.heatmapByDate as Record<string, number> | null | undefined;
+		const serverHeatmapUserId = $page.data?.heatmapUserId as string | null | undefined;
+		if (viewerUserId && serverHeatmap && serverHeatmapUserId === viewerUserId) {
+			heatmapByDate = serverHeatmap;
+			heatmapLoading = false;
+			heatmapStore.set({ userId: viewerUserId, byDate: serverHeatmap, loading: false });
+		} else {
+			await loadHeatmap(viewerUserId);
+		}
 
 		try {
 			const { data: rows, error: uerr } = await supabase
@@ -3657,6 +4833,133 @@
 		const keyHandler = (event: KeyboardEvent) => {
 			lastKeyAt = Date.now();
 			setCursorHidden(true);
+			if (modalOverlayActive) return;
+			if (isTypingTarget(event.target)) return;
+			const normalized = event.key.toLowerCase();
+			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+				if (normalized === 'g') {
+					pendingCalendarG = true;
+					if (pendingCalendarTimeout !== null) window.clearTimeout(pendingCalendarTimeout);
+					pendingCalendarTimeout = window.setTimeout(() => {
+						pendingCalendarG = false;
+						pendingCalendarTimeout = null;
+					}, 900);
+				} else if (pendingCalendarG && normalized === 't') {
+					pendingCalendarG = false;
+					if (pendingCalendarTimeout !== null) window.clearTimeout(pendingCalendarTimeout);
+					pendingCalendarTimeout = null;
+					const nextOpen = !heatmapOpen;
+					heatmapOpen = nextOpen;
+					if (nextOpen && viewerUserId) {
+						void loadHeatmap(viewerUserId);
+					}
+					event.preventDefault();
+					return;
+				} else if (pendingCalendarG) {
+					pendingCalendarG = false;
+					if (pendingCalendarTimeout !== null) window.clearTimeout(pendingCalendarTimeout);
+					pendingCalendarTimeout = null;
+				}
+			}
+			if (heatmapOpen && event.ctrlKey && !event.metaKey && !event.altKey) {
+				if (normalized === 'n' || normalized === 'p') {
+					const events = calendarSelectedEvents;
+					if (events.length > 0) {
+						if (calendarEventIndex === null) {
+							calendarEventIndex = normalized === 'n' ? 0 : events.length - 1;
+						} else {
+							const delta = normalized === 'n' ? 1 : -1;
+							const current = calendarEventIndex;
+							const next = Math.max(0, Math.min(events.length - 1, current + delta));
+							calendarEventIndex = next;
+						}
+						event.preventDefault();
+						return;
+					}
+				}
+			}
+			if (!heatmapOpen && event.key === 'T') {
+				const today = localToday();
+				activeDayDateStore?.set(today);
+				event.preventDefault();
+				return;
+			}
+			if (heatmapOpen) {
+				let handled = true;
+				switch (normalized) {
+					case 'x': {
+						handled = cutSelectedCalendarEvent();
+						break;
+					}
+					case 't': {
+						if (event.key !== 'T') {
+							handled = false;
+							break;
+						}
+						const today = localToday();
+						handleCalendarSelect(today);
+						scrollCalendarToDate(today, { align: 'top' });
+						break;
+					}
+					case 'd': {
+						const events = calendarSelectedEvents;
+						const index = calendarEventIndex ?? 0;
+						const event = events[index];
+						if (event && !isMilestoneEvent(event)) {
+							promptDeleteSelectedEvent(event);
+						}
+						break;
+					}
+					case 'h':
+						moveSelectedByDays(-1);
+						break;
+					case 'l':
+						moveSelectedByDays(1);
+						break;
+					case 'j':
+						moveSelectedByWeeks(1);
+						break;
+					case 'k':
+						moveSelectedByWeeks(-1);
+						break;
+					case 'p':
+						if (cutEvent) {
+							void pasteCutCalendarEvent();
+							break;
+						}
+						handled = false;
+						break;
+					case 'enter':
+						heatmapOpen = false;
+						activeDayDateStore?.set(calendarSelectedDate);
+						break;
+					case 'i':
+						if (calendarEventIndex !== null) {
+							const event = calendarSelectedEvents[calendarEventIndex];
+							if (event && !isMilestoneEvent(event)) {
+								openEventModal(event);
+							} else {
+								openEventModalForDate(calendarSelectedDate);
+							}
+						} else {
+							openEventModalForDate(calendarSelectedDate);
+						}
+						break;
+					case 'escape': {
+						const today = localToday();
+						handleCalendarSelect(today);
+						heatmapOpen = false;
+						activeDayDateStore?.set(today);
+						break;
+					}
+					default:
+						handled = false;
+				}
+				if (handled) {
+					event.preventDefault();
+				}
+				return;
+			}
 			handleGlobalKeydown(event);
 		};
 		const pointerHandler = (event: PointerEvent) => {
@@ -3695,182 +4998,524 @@
 	});
 </script>
 
-<div
-	class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 select-none"
-	class:cursor-none={hideCursor}
->
-	<div class="flex flex-row space-x-4">
-		{#if isLoading}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
-				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center"></div>
-				{/each}
-			</div>
-		{:else}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
-				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center">
-						{#if showTimes}
-							<div
-								class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
-								in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 200 }}
-							>
-								{hh(h)}
-							</div>
-						{/if}
-						{#if isCurrent(h)}
-							<div
-								class="absolute h-7 w-7 rounded-md bg-stone-700"
-								in:scale|global={{ start: 0.6, duration: 100, delay: 1000 }}
-							></div>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{/if}
+{#if viewerUserId}
+	<div class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col items-end">
+		<div class="pointer-events-auto relative flex items-center">
+			<button
+				type="button"
+				class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
+				aria-label="Toggle calendar"
+				onclick={() => {
+					const nextOpen = !heatmapOpen;
+					heatmapOpen = nextOpen;
+					if (nextOpen) {
+						void loadHeatmap(viewerUserId);
+					}
+				}}
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					width="18"
+					height="18"
+					fill="currentColor"
+					class="bi bi-calendar-fill"
+					viewBox="0 0 16 16"
+				>
+					<path
+						d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5h16V4H0V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5"
+					/>
+				</svg>
+			</button>
+		</div>
+	</div>
+{/if}
 
-		<div class="flex w-full flex-col">
-			<div class="flex w-full flex-row gap-4">
-				{#if isLoading}
-					{#each loadingPlaceholderColumns as _}
-						<div class="flex w-full flex-col space-y-1" aria-hidden="true">
-							<div class="flex h-6 items-center gap-2">
-								<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
-							</div>
-							{#each hours as _}
-								<div class="flex h-7 w-full flex-row space-x-1">
-									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
-									<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
-								</div>
+{#if heatmapOpen}
+	<div class="calendar-shell text-stone-800">
+		<div class="calendar-header">
+			<div class="calendar-month-label">{calendarHeaderLabel}</div>
+			<div class="calendar-weekdays">
+				{#each CALENDAR_WEEKDAYS as label}
+					<div class="calendar-weekday">{label}</div>
+				{/each}
+			</div>
+		</div>
+		<div class="calendar-scroll" bind:this={calendarScrollEl}>
+			{#each calendarWeekGroups as group, groupIndex}
+				{@const groupMonth = calendarGroupMonthInfo(group)}
+				<div
+					class="calendar-group"
+					data-group={groupIndex}
+					bind:this={calendarGroupEls[groupIndex]}
+				>
+					{#each group as week, weekIndex}
+						{@const globalWeekIndex = groupIndex * 6 + weekIndex}
+						<div class="calendar-week" bind:this={calendarWeekEls[globalWeekIndex]}>
+							{#each week as day}
+								{@const dateKey = formatDateString(day)}
+								{@const activeMonth = calendarVisibleMonth ?? groupMonth}
+								{@const isCurrentMonth =
+									day.getMonth() === activeMonth.monthIndex &&
+									day.getFullYear() === activeMonth.year}
+								{@const isSelected = dateKey === calendarSelectedDate}
+								{@const isToday = dateKey === localToday()}
+								{@const pct = heatmapByDate[dateKey] ?? 0}
+								{@const isStrong = pct >= 50}
+								{@const dayEvents = calendarEventsByDate.get(dateKey) ?? []}
+								<button
+									type="button"
+									class={`calendar-cell ${
+										isCurrentMonth ? '' : 'calendar-cell-muted'
+									} ${isSelected ? 'calendar-cell-selected' : ''} ${
+										isStrong ? 'calendar-cell-strong' : ''
+									} ${!isSelected && isToday ? 'calendar-cell-today' : ''}`}
+									ondblclick={(event) => {
+										event.preventDefault();
+										event.stopPropagation();
+										handleCalendarSelect(dateKey);
+										openEventModalForDate(dateKey);
+									}}
+									onclick={(event) => {
+										handleCalendarSelect(dateKey);
+										if (event.detail !== 2) return;
+										event.preventDefault();
+										event.stopPropagation();
+										openEventModalForDate(dateKey);
+									}}
+								>
+									<span
+										class={`calendar-cell-swatch ${heatmapColorClass(pct)}`}
+										onmouseenter={(event) => handleCalendarHover(dateKey, event)}
+										onmousemove={updateCalendarHoverPosition}
+										onmouseleave={clearCalendarHover}
+									></span>
+									<span
+										class={`calendar-cell-date text-xs font-normal ${
+											isToday ? 'calendar-cell-date-today' : ''
+										}`}
+									>
+										{day.getDate()}
+									</span>
+									{#if dayEvents.length > 0}
+										<div class="calendar-cell-events">
+											{#each dayEvents as event, index}
+												{@const isPastEvent = event.due_date < localToday()}
+												{@const isMilestone = isMilestoneEvent(event)}
+												<button
+													type="button"
+													class={`calendar-event-item ${
+														isSelected && calendarEventIndex === index
+															? 'calendar-event-selected'
+															: ''
+													} ${isPastEvent && !isMilestone ? 'calendar-event-past' : ''} ${
+														isMilestone ? 'calendar-event-milestone' : ''
+													}`}
+													disabled={isMilestoneEvent(event)}
+													onclick={(e) => {
+														e.stopPropagation();
+														handleCalendarSelect(dateKey);
+														if (!isMilestoneEvent(event)) openEventModal(event);
+													}}
+												>
+													<span class="calendar-event-title">{event.title}</span>
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</button>
 							{/each}
 						</div>
 					{/each}
+				</div>
+			{/each}
+		</div>
+		{#if calendarHoverDate && calendarHoverPosition}
+			{@const hoverMatchesSummary = calendarSummaryDate === calendarHoverDate}
+			<div
+				class="pointer-events-none fixed z-[9999] w-[360px] rounded-2xl border border-stone-200 bg-white p-4 shadow-2xl"
+				style={`left: ${calendarHoverPosition.x}px; top: ${calendarHoverPosition.y}px;`}
+			>
+				<div class="text-sm font-semibold text-stone-900">
+					{heatmapDateLabel(calendarHoverDate)}
+				</div>
+				{#if calendarSummaryLoading || !hoverMatchesSummary}
+					<div class="mt-2 text-xs text-stone-400">Loading summary...</div>
 				{:else}
-					{#each people as person}
-						{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
-						<div class="flex w-full flex-col space-y-1 transition-opacity">
-							<div class="flex h-6 items-center gap-2">
-								{#if trackedKey}
-									<PlayerStatusTag
-										label={playerDisplays[trackedKey]?.label ?? null}
-										status={playerStatuses[trackedKey]}
-										me={person.user_id === viewerUserId}
-										streak={streakByUser[person.user_id] ?? null}
-									/>
-								{/if}
-							</div>
-
-							{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
-								{#each hours as _}
-									<div class="flex h-7 w-full flex-row space-x-1">
-										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
-										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+					<div class="mt-3 space-y-2 text-sm text-stone-700">
+						<div class="flex items-center justify-between">
+							<span>Tasks planned</span>
+							<span class="font-semibold text-stone-900">{calendarSummary?.planned ?? 0}</span>
+						</div>
+						<div class="flex items-center justify-between">
+							<span>Tasks completed</span>
+							<span class="font-semibold text-stone-900">{calendarSummary?.completed ?? 0}</span>
+						</div>
+						<div class="flex items-center justify-between">
+							<span>Productive hours</span>
+							<span class="font-semibold text-stone-900"
+								>{formatProductiveHours(calendarSummary?.productiveHours ?? 0)}</span
+							>
+						</div>
+					</div>
+					<div class="mt-4 flex items-start justify-between gap-4">
+						<div class="flex items-center justify-center">
+							<div
+								class="summary-pie h-24 w-24 rounded-full"
+								style={summaryPieStyle(calendarSummary)}
+							></div>
+						</div>
+						<div class="space-y-2 text-sm text-stone-700">
+							{#each calendarSummary?.categoryBreakdown ?? [] as category}
+								<div class="flex w-40 items-center justify-between">
+									<div class="flex items-center gap-2">
+										<span class={SUMMARY_CATEGORY_CLASSES[category.key]}>
+											{#if category.key === 'rest'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													class="h-3 w-3"
+													fill="currentColor"
+												>
+													<path
+														d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+													/>
+												</svg>
+											{:else if category.key === 'body'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													class="h-3 w-3"
+													fill="currentColor"
+												>
+													<path
+														d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+													/>
+												</svg>
+											{:else if category.key === 'work'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													class="h-3 w-3"
+													fill="currentColor"
+												>
+													<path
+														d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+													/>
+												</svg>
+											{:else if category.key === 'admin'}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													class="h-3 w-3"
+													fill="currentColor"
+												>
+													<path
+														d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+													/>
+												</svg>
+											{:else}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													class="h-3 w-3"
+													fill="currentColor"
+												>
+													<path
+														d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+													/>
+												</svg>
+											{/if}
+										</span>
+										<span>{category.label}</span>
 									</div>
-								{/each}
-							{:else}
-								{#each hours as h, hourIndex}
-									{@const blockIsCutA = blockIsCut(person.user_id, h, 0)}
-									{@const blockIsCutB = blockIsCut(person.user_id, h, 1)}
-									{@const blockIsCopiedA = blockIsCopied(person.user_id, h, 0)}
-									{@const blockIsCopiedB = blockIsCopied(person.user_id, h, 1)}
-									<div
-										class="hover:none flex h-7 w-full flex-row space-x-1"
-										class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
+									<span class="font-semibold text-stone-900"
+										>{formatProductiveHours(category.hours)}h</span
 									>
-										<div
-											class="flex w-full min-w-0 bg-transparent"
-											role="presentation"
-											draggable={canDragBlock(person.user_id, h, 0)}
-											onpointerdown={(e) =>
-												handleBlockPointerDown(e, person.user_id, h, 0, hourIndex)}
-											onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 0)}
-											onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 0)}
-											ondragstart={(event) => {
-												handleBlockDragStart(event, person.user_id, h, 0, hourIndex);
-											}}
-											ondragover={(event) =>
-												handleBlockDragOver(event, person.user_id, 0, hourIndex)}
-											ondrop={(event) => handleBlockDrop(event, person.user_id, h, 0)}
-											ondragend={handleBlockDragEnd}
-										>
-											<Block
-												title={getTitle(person.user_id, h, 0)}
-												status={getDisplayStatus(person.user_id, h, 0)}
-												category={getDisplayCategory(person.user_id, h, 0)}
-												showStatus={blockShowsStatus(person.user_id, h, 0)}
-												editable={canEditDayForUser(person.user_id)}
-												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
-												onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
-												onCycleStatus={() => handleBlockCycle(person.user_id, h, 0)}
-												badShakeNonce={badStatusShake &&
-												badStatusShake.user_id === person.user_id &&
-												badStatusShake.hour === h &&
-												badStatusShake.half === 0
-													? badStatusShake.nonce
-													: 0}
-												habit={getHabitTitle(person.user_id, h, 0)}
-												habitStreak={habitStreakForBlock(person.user_id, h, 0)}
-												selected={blockIsHighlighted(person.user_id, hourIndex, 0)}
-												isCurrent={blockIsCurrent(h, 0)}
-												isCut={blockIsCutA}
-												isCopied={blockIsCopiedA}
-											/>
-										</div>
-										<div
-											class="flex w-full min-w-0 bg-transparent"
-											role="presentation"
-											draggable={canDragBlock(person.user_id, h, 1)}
-											onpointerdown={(e) =>
-												handleBlockPointerDown(e, person.user_id, h, 1, hourIndex)}
-											onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 1)}
-											onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 1)}
-											ondragstart={(event) => {
-												handleBlockDragStart(event, person.user_id, h, 1, hourIndex);
-											}}
-											ondragover={(event) =>
-												handleBlockDragOver(event, person.user_id, 1, hourIndex)}
-											ondrop={(event) => handleBlockDrop(event, person.user_id, h, 1)}
-											ondragend={handleBlockDragEnd}
-										>
-											<Block
-												title={getTitle(person.user_id, h, 1)}
-												status={getDisplayStatus(person.user_id, h, 1)}
-												category={getDisplayCategory(person.user_id, h, 1)}
-												showStatus={blockShowsStatus(person.user_id, h, 1)}
-												editable={canEditDayForUser(person.user_id)}
-												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
-												onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
-												onCycleStatus={() => handleBlockCycle(person.user_id, h, 1)}
-												badShakeNonce={badStatusShake &&
-												badStatusShake.user_id === person.user_id &&
-												badStatusShake.hour === h &&
-												badStatusShake.half === 1
-													? badStatusShake.nonce
-													: 0}
-												habit={getHabitTitle(person.user_id, h, 1)}
-												habitStreak={habitStreakForBlock(person.user_id, h, 1)}
-												selected={blockIsHighlighted(person.user_id, hourIndex, 1)}
-												isCurrent={blockIsCurrent(h, 1)}
-												isCut={blockIsCutB}
-												isCopied={blockIsCopiedB}
-											/>
-										</div>
-									</div>
-								{/each}
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+{:else}
+	<div
+		class="relative flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-8 select-none"
+		class:cursor-none={hideCursor}
+	>
+		<div class="flex flex-row space-x-4">
+			{#if isLoading}
+				<div class="flex flex-col space-y-2">
+					<div class="h-9 w-9 text-stone-50">T</div>
+					{#each hours as h, i}
+						<div class="relative flex h-10 w-10 items-center justify-center"></div>
+					{/each}
+				</div>
+			{:else}
+				<div class="flex flex-col space-y-2">
+					<div class="h-10 w-10 text-stone-50">T</div>
+					{#each hours as h, i}
+						<div class="relative flex h-10 w-10 items-center justify-center">
+							{#if showTimes}
+								<div
+									class="z-20 flex h-10 w-10 items-center justify-center rounded text-xl text-stone-300"
+									in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 200 }}
+								>
+									{hh(h)}
+								</div>
+							{/if}
+							{#if isCurrent(h)}
+								<div
+									class="absolute top-1/2 left-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-md bg-stone-700"
+									in:scale|global={{ start: 0.6, duration: 100, delay: 1000 }}
+								></div>
 							{/if}
 						</div>
 					{/each}
-				{/if}
+				</div>
+			{/if}
+
+			<div class="flex w-full flex-col">
+				<div class="flex w-full flex-row gap-6">
+					{#if isLoading}
+						{#each loadingPlaceholderColumns as _}
+							<div class="flex w-full flex-col space-y-2" aria-hidden="true">
+								<div class="flex h-10 items-center gap-3">
+									<div class="loading-sheen h-6 w-32 rounded bg-stone-200"></div>
+								</div>
+								{#each hours as _}
+									<div class="flex h-10 w-full flex-row space-x-2">
+										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+										<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+									</div>
+								{/each}
+							</div>
+						{/each}
+					{:else}
+						{#each visiblePeople as person}
+							{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
+							<div class="flex min-w-0 flex-1 flex-col space-y-2 transition-opacity">
+								<div class="flex h-10 items-center gap-3">
+									{#if trackedKey}
+										<PlayerStatusTag
+											label={isSinglePlayerView
+												? dayLabelForUser(person.user_id)
+												: (playerDisplays[trackedKey]?.label ?? null)}
+											status={playerStatuses[trackedKey]}
+											me={person.user_id === viewerUserId}
+											streak={streakByUser[person.user_id] ?? null}
+										/>
+									{/if}
+								</div>
+
+								{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+									{#each hours as _}
+										<div class="flex h-10 w-full flex-row space-x-2">
+											<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+											<div class="loading-block flex w-full rounded-md bg-stone-100"></div>
+										</div>
+									{/each}
+								{:else}
+									{#each hours as h, hourIndex}
+										{@const blockIsCutA = blockIsCut(person.user_id, h, 0)}
+										{@const blockIsCutB = blockIsCut(person.user_id, h, 1)}
+										{@const blockIsCopiedA = blockIsCopied(person.user_id, h, 0)}
+										{@const blockIsCopiedB = blockIsCopied(person.user_id, h, 1)}
+										<div
+											class="hover:none flex h-10 w-full flex-row space-x-2"
+											class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
+										>
+											<div
+												class="flex w-full min-w-0 bg-transparent"
+												role="presentation"
+												draggable={canDragBlock(person.user_id, h, 0)}
+												onpointerdown={(e) =>
+													handleBlockPointerDown(e, person.user_id, h, 0, hourIndex)}
+												onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 0)}
+												onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 0)}
+												ondragstart={(event) => {
+													handleBlockDragStart(event, person.user_id, h, 0, hourIndex);
+												}}
+												ondragover={(event) =>
+													handleBlockDragOver(event, person.user_id, 0, hourIndex)}
+												ondrop={(event) => handleBlockDrop(event, person.user_id, h, 0)}
+												ondragend={handleBlockDragEnd}
+											>
+												<Block
+													title={getTitle(person.user_id, h, 0)}
+													status={getDisplayStatus(person.user_id, h, 0)}
+													category={getDisplayCategory(person.user_id, h, 0)}
+													showStatus={blockShowsStatus(person.user_id, h, 0)}
+													editable={canEditDayForUser(person.user_id)}
+													onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
+													onSelect={() => handleBlockSelect(person.user_id, h, 0, false)}
+													onCycleStatus={() => handleBlockCycle(person.user_id, h, 0)}
+													badShakeNonce={badStatusShake &&
+													badStatusShake.user_id === person.user_id &&
+													badStatusShake.hour === h &&
+													badStatusShake.half === 0
+														? badStatusShake.nonce
+														: 0}
+													habit={getHabitTitle(person.user_id, h, 0)}
+													habitStreak={habitStreakForBlock(person.user_id, h, 0)}
+													selected={focusPane === 'grid' &&
+														blockIsHighlighted(person.user_id, hourIndex, 0)}
+													isCurrent={blockIsCurrent(h, 0)}
+													isCut={blockIsCutA}
+													isCopied={blockIsCopiedA}
+												/>
+											</div>
+											<div
+												class="flex w-full min-w-0 bg-transparent"
+												role="presentation"
+												draggable={canDragBlock(person.user_id, h, 1)}
+												onpointerdown={(e) =>
+													handleBlockPointerDown(e, person.user_id, h, 1, hourIndex)}
+												onpointerenter={() => handleBlockPointerEnter(person.user_id, hourIndex, 1)}
+												onpointerleave={() => handleBlockPointerLeave(person.user_id, hourIndex, 1)}
+												ondragstart={(event) => {
+													handleBlockDragStart(event, person.user_id, h, 1, hourIndex);
+												}}
+												ondragover={(event) =>
+													handleBlockDragOver(event, person.user_id, 1, hourIndex)}
+												ondrop={(event) => handleBlockDrop(event, person.user_id, h, 1)}
+												ondragend={handleBlockDragEnd}
+											>
+												<Block
+													title={getTitle(person.user_id, h, 1)}
+													status={getDisplayStatus(person.user_id, h, 1)}
+													category={getDisplayCategory(person.user_id, h, 1)}
+													showStatus={blockShowsStatus(person.user_id, h, 1)}
+													editable={canEditDayForUser(person.user_id)}
+													onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
+													onSelect={() => handleBlockSelect(person.user_id, h, 1, false)}
+													onCycleStatus={() => handleBlockCycle(person.user_id, h, 1)}
+													badShakeNonce={badStatusShake &&
+													badStatusShake.user_id === person.user_id &&
+													badStatusShake.hour === h &&
+													badStatusShake.half === 1
+														? badStatusShake.nonce
+														: 0}
+													habit={getHabitTitle(person.user_id, h, 1)}
+													habitStreak={habitStreakForBlock(person.user_id, h, 1)}
+													selected={focusPane === 'grid' &&
+														blockIsHighlighted(person.user_id, hourIndex, 1)}
+													isCurrent={blockIsCurrent(h, 1)}
+													isCut={blockIsCutB}
+													isCopied={blockIsCopiedB}
+												/>
+											</div>
+										</div>
+									{/each}
+								{/if}
+							</div>
+						{/each}
+						{#if isSinglePlayerView}
+							<div class="relative flex min-w-0 flex-1 flex-col gap-2 pl-0" aria-label="Upcoming">
+								<div class="flex h-10 items-center justify-between">
+									<div class="text-xl font-medium text-stone-800">Upcoming</div>
+									<button
+										type="button"
+										class="flex h-8 w-8 items-center justify-center rounded-md text-lg font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
+										aria-label="New event"
+										onclick={() => openEventModal()}
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="20"
+											height="20"
+											fill="currentColor"
+											class="bi bi-plus"
+											viewBox="0 0 16 16"
+											aria-hidden="true"
+										>
+											<path
+												d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4"
+											/>
+										</svg>
+									</button>
+								</div>
+								<div class="space-y-4">
+									{#if upcomingEventsLoading}
+										<div class="text-sm text-stone-400">Loading...</div>
+									{:else if upcomingEvents.length === 0}
+										<div class="text-sm text-stone-400">No upcoming events yet.</div>
+									{:else}
+										{#each upcomingEvents as event, index}
+											<button
+												type="button"
+												disabled={isMilestoneEvent(event)}
+												class={`flex w-full flex-row justify-between rounded-lg p-5 text-left transition disabled:cursor-default ${
+													isMilestoneEvent(event) ? 'bg-stone-50' : 'bg-stone-100'
+												}`}
+												class:ring-1={focusPane === 'upcoming' && upcomingSelectionIndex === index}
+												class:ring-stone-400={focusPane === 'upcoming' &&
+													upcomingSelectionIndex === index}
+												class:ring-offset-1={focusPane === 'upcoming' &&
+													upcomingSelectionIndex === index}
+												class:ring-offset-stone-50={focusPane === 'upcoming' &&
+													upcomingSelectionIndex === index}
+												onpointerenter={() => focusUpcoming(index)}
+												onpointerdown={() => focusUpcoming(index)}
+												onclick={() => {
+													if (!isMilestoneEvent(event)) openEventModal(event);
+												}}
+											>
+												<div class="text-sm font-medium text-stone-800">{event.title}</div>
+												<div class="flex items-center justify-end gap-2 text-sm text-stone-500">
+													<span>{daysUntilLabel(event.due_date)}</span>
+													<span class="text-stone-300">·</span>
+													<span>{formatDisplayDate(event.due_date)}</span>
+												</div>
+											</button>
+										{/each}
+									{/if}
+								</div>
+							</div>
+						{/if}
+					{/if}
+				</div>
 			</div>
 		</div>
 	</div>
-</div>
+{/if}
+
+<button
+	class="no-drag fixed bottom-4 left-4 z-50 flex h-6 w-6 items-center justify-center text-stone-200 transition hover:text-stone-500"
+	type="button"
+	aria-label="Open settings"
+	onclick={() => (settingsOpen = true)}
+>
+	<svg
+		xmlns="http://www.w3.org/2000/svg"
+		width="14"
+		height="14"
+		fill="currentColor"
+		class="bi bi-gear-fill"
+		viewBox="0 0 16 16"
+		aria-hidden="true"
+	>
+		<path
+			d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"
+		/>
+	</svg>
+</button>
 
 {#if modalOverlayActive}
 	<div class="pointer-events-none fixed inset-0 z-40 bg-black/40" aria-hidden="true"></div>
 {/if}
+
+<SettingsModal
+	open={settingsOpen}
+	onClose={() => (settingsOpen = false)}
+	{singlePlayerMode}
+	singlePlayerDisabled={!viewerUserId}
+	onToggleSinglePlayer={(next) => {
+		if (!viewerUserId) return;
+		singlePlayerMode = next;
+	}}
+/>
 
 <LogModal
 	normal={editorMode}
@@ -3883,6 +5528,8 @@
 	initialStatus={draft.status}
 	initialCategory={draft.category}
 	initialHabit={draft.habit ? { id: draft.habit.id, repeatDays: draft.habit.repeatDays } : null}
+	initialEventMode={logEventMode}
+	initialDueDate={logDueDate}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
 	startHour={START_HOUR}
@@ -4014,6 +5661,21 @@
 	mode="delete"
 	loading={isDeleteSubmitting}
 />
+<ConfirmMoveModal
+	open={pendingEventDelete !== null}
+	onCancel={cancelPendingEventDelete}
+	onConfirm={() => void confirmPendingEventDelete()}
+	blockLabel={pendingEventDelete?.title ?? ''}
+	fromLabel={pendingEventDelete ? formatDisplayDate(pendingEventDelete.due_date) : ''}
+	toLabel={pendingEventDelete ? formatDisplayDate(pendingEventDelete.due_date) : ''}
+	destinationLabel={null}
+	hasDestinationContent={false}
+	isHabit={false}
+	mode="delete"
+	itemType="event"
+	warningText="This will permanently delete this event."
+	loading={isEventDeleteSubmitting}
+/>
 
 <style>
 	.loading-block,
@@ -4041,5 +5703,236 @@
 		100% {
 			transform: translateX(100%);
 		}
+	}
+
+	:global(:root) {
+		--summary-body: #fda4af;
+		--summary-rest: #c4b5fd;
+		--summary-work: #cbd5e1;
+		--summary-admin: rgba(120, 53, 15, 0.3);
+		--summary-bad: #f43f5e;
+		--summary-empty: #e5e7eb;
+	}
+
+	.summary-pie {
+		background: conic-gradient(var(--summary-empty) 0% 100%);
+	}
+
+	.calendar-shell {
+		--calendar-top-offset: 64px;
+		--calendar-header-height: 72px;
+		--calendar-gap: 1px;
+		--calendar-row-height: calc(
+			(
+					100vh - var(--calendar-top-offset) - var(--calendar-header-height) -
+						(5 * var(--calendar-gap))
+				) /
+				6
+		);
+		box-sizing: border-box;
+		height: 100vh;
+		padding-top: var(--calendar-top-offset);
+		overflow: hidden;
+		background: #fff;
+	}
+
+	.calendar-header {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		background: #fff;
+		padding-bottom: 0;
+	}
+
+	.calendar-month-label {
+		font-size: 20px;
+		font-weight: 600;
+		color: #1c1917;
+		padding: 8px 0 6px 16px;
+	}
+
+	.calendar-weekdays {
+		display: grid;
+		grid-template-columns: repeat(7, minmax(0, 1fr));
+		gap: 0;
+		background: transparent;
+		border-bottom: 1px solid #e5e7eb;
+		margin-bottom: 0;
+	}
+
+	.calendar-weekday {
+		background: #fff;
+		text-align: center;
+		font-size: 12px;
+		font-weight: 400;
+		color: #6b7280;
+		height: 26px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.calendar-scroll {
+		height: calc(100vh - var(--calendar-top-offset) - var(--calendar-header-height));
+		overflow-y: auto;
+		scroll-snap-type: y proximity;
+		scroll-padding-top: 0;
+	}
+
+	.calendar-group {
+		display: flex;
+		flex-direction: column;
+		gap: var(--calendar-gap);
+		background: #e5e7eb;
+	}
+
+	.calendar-group + .calendar-group {
+		border-top: var(--calendar-gap) solid #e5e7eb;
+	}
+
+	.calendar-week {
+		display: grid;
+		grid-template-columns: repeat(7, minmax(0, 1fr));
+		gap: var(--calendar-gap);
+		background: #e5e7eb;
+		height: var(--calendar-row-height);
+		scroll-snap-align: start;
+	}
+
+	.calendar-cell {
+		border: 0;
+		width: 100%;
+		height: 100%;
+		padding: 8px;
+		position: relative;
+		background: #fff;
+		text-align: right;
+		display: flex;
+		align-items: flex-start;
+		justify-content: flex-end;
+		transition: box-shadow 0.2s ease;
+	}
+
+	.calendar-cell-swatch {
+		position: absolute;
+		top: 8px;
+		left: 8px;
+		width: 16px;
+		height: 16px;
+		border-radius: 5px;
+	}
+
+	.calendar-cell:hover:not(.calendar-cell-selected) {
+		box-shadow: none;
+	}
+
+	.calendar-cell-muted {
+		opacity: 1;
+	}
+
+	.calendar-cell-muted .calendar-cell-date {
+		opacity: 0.35;
+	}
+
+	.calendar-cell-selected {
+		box-shadow: inset 0 0 0 2px #0c0a09;
+	}
+
+	.calendar-cell-strong {
+		color: inherit;
+	}
+
+	.calendar-cell-date {
+		display: inline-flex;
+		align-items: center;
+		justify-content: flex-end;
+		width: 22px;
+		height: 22px;
+		color: inherit;
+	}
+
+	.calendar-cell-date-today {
+		justify-content: center;
+		padding: 0;
+		border-radius: 8px;
+		background: #ef4444;
+		color: #fff;
+	}
+
+	.calendar-cell-events {
+		position: absolute;
+		left: 8px;
+		right: 8px;
+		bottom: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.calendar-event-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 12px 4px 10px;
+		background: #fff7ed;
+		color: #9a3412;
+		font-size: 12.5px;
+		line-height: 1.2;
+		text-align: left;
+		border-radius: 8px;
+		cursor: pointer;
+		border: 0;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.calendar-event-item::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 4px;
+		background: #c2410c;
+		border-radius: 8px;
+	}
+
+	.calendar-event-item:disabled {
+		cursor: default;
+		opacity: 0.6;
+	}
+
+	.calendar-event-selected {
+		background: #c2410c;
+		color: #fff;
+	}
+
+	.calendar-event-selected::before {
+		display: none;
+	}
+
+	.calendar-event-milestone {
+		background: #f3f4f6;
+		color: #6b7280;
+	}
+
+	.calendar-event-milestone::before {
+		background: #9ca3af;
+	}
+
+	.calendar-event-selected.calendar-event-milestone {
+		background: #9ca3af;
+		color: #fff;
+	}
+
+	.calendar-event-past {
+		opacity: 0.55;
+	}
+
+	.calendar-event-title {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>

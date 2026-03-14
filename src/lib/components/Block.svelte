@@ -104,7 +104,7 @@
 		}
 	}
 	const streakArrowClass = $derived.by(() => {
-		const base = 'h-2 w-2 transition-transform';
+		const base = 'h-2.5 w-2.5 transition-transform';
 		if (!habitStreak) return `${base} text-stone-400`;
 		const color = habitStreak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
 		const rotation = habitStreak.kind === 'positive' ? '' : 'rotate-180';
@@ -240,7 +240,7 @@
 	onclick={handleBlockClick}
 	onkeydown={handleBlockKeydown}
 >
-	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-xs">
+	<span class="flex w-full min-w-0 items-center justify-between gap-2 truncate text-left text-base">
 		<div class="flex flex-row items-center gap-0.5">
 			{#if showCategoryIcon}
 				<span
@@ -262,7 +262,7 @@
 							width="16"
 							height="16"
 							fill="currentColor"
-							class="bi bi-car-front-fill h-2.5 w-2.5"
+							class="bi bi-car-front-fill h-3.5 w-3.5"
 							viewBox="0 0 16 16"
 							aria-hidden="true"
 						>
@@ -274,7 +274,7 @@
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
-							class="h-2.5 w-2.5"
+							class="h-3.5 w-3.5"
 							fill="currentColor"
 							aria-hidden="true"
 						>
@@ -284,7 +284,7 @@
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
-							class="h-2.5 w-2.5"
+							class="h-3.5 w-3.5"
 							fill="currentColor"
 							aria-hidden="true"
 						>
@@ -296,7 +296,7 @@
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
-							class="h-2.5 w-2.5"
+							class="h-3.5 w-3.5"
 							fill="currentColor"
 							aria-hidden="true"
 						>
@@ -308,7 +308,7 @@
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							viewBox="0 0 16 16"
-							class="h-2.5 w-2.5"
+							class="h-3.5 w-3.5"
 							fill="currentColor"
 							aria-hidden="true"
 						>
@@ -324,7 +324,7 @@
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
 						viewBox="0 0 16 16"
-						class="h-2.5 w-2.5"
+						class="h-3.5 w-3.5"
 						fill="currentColor"
 						aria-hidden="true"
 					>
@@ -347,7 +347,7 @@
 		</div>
 		{#if showHabitStreak}
 			<span
-				class={`inline-flex shrink-0 items-center gap-0.5 rounded-sm text-[10px] font-semibold tracking-wider uppercase ${habitStreakClasses}`}
+				class={`inline-flex shrink-0 items-center gap-0.5 rounded-sm text-xs font-semibold tracking-wider uppercase ${habitStreakClasses}`}
 				class:habit-bounce-up={streakAnim === 'up'}
 				class:habit-bounce-down={streakAnim === 'down'}
 			>

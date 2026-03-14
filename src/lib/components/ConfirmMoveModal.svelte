@@ -12,6 +12,8 @@
 		hasDestinationContent = false,
 		isHabit = false,
 		mode = 'move',
+		itemType = null,
+		warningText = null,
 		loading = false
 	} = $props<{
 		open?: boolean;
@@ -24,12 +26,15 @@
 		hasDestinationContent?: boolean;
 		isHabit?: boolean;
 		mode?: 'move' | 'swap' | 'delete' | 'copy';
+		itemType?: string | null;
+		warningText?: string | null;
 		loading?: boolean;
 	}>();
 
 	const isSwap = $derived(mode === 'swap');
 	const isDelete = $derived(mode === 'delete');
 	const isCopy = $derived(mode === 'copy');
+	const itemLabel = $derived(itemType ?? (isHabit ? 'habit' : 'block'));
 	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : isCopy ? 'Copy' : 'Move');
 	const actionVerbIng = $derived(
 		isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : isCopy ? 'Copying…' : 'Moving…'
@@ -77,12 +82,12 @@
 		role="dialog"
 		aria-modal="true"
 		aria-label={isDelete
-			? 'Delete block confirmation'
+			? `Delete ${itemLabel} confirmation`
 			: isSwap
-				? 'Swap blocks confirmation'
+				? `Swap ${itemLabel}s confirmation`
 				: isCopy
-					? 'Copy block confirmation'
-					: 'Move block confirmation'}
+					? `Copy ${itemLabel} confirmation`
+					: `Move ${itemLabel} confirmation`}
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
@@ -94,27 +99,23 @@
 			<div class="space-y-3 px-5 py-5 text-sm text-stone-600">
 				<div class="text-base font-semibold text-stone-900">
 					{#if isDelete}
-						Delete {isHabit ? 'habit' : 'block'}?
+						Delete {itemLabel}?
 					{:else if isSwap}
-						Swap blocks?
+						Swap {itemLabel}s?
 					{:else if isCopy}
-						Copy block?
+						Copy {itemLabel}?
 					{:else}
-						Move {isHabit ? 'habit' : 'block'}?
+						Move {itemLabel}?
 					{/if}
 				</div>
 				{#if isDelete}
 					<p>
-						<span class="font-medium text-stone-900"
-							>{blockLabel || (isHabit ? 'this habit' : 'this block')}</span
-						>
+						<span class="font-medium text-stone-900">{blockLabel || `this ${itemLabel}`}</span>
 						at <span class="font-medium text-stone-900">{fromLabel}</span>
 					</p>
 				{:else}
 					<p>
-						<span class="font-medium text-stone-900"
-							>{blockLabel || (isHabit ? 'this habit' : 'this block')}</span
-						>
+						<span class="font-medium text-stone-900">{blockLabel || `this ${itemLabel}`}</span>
 						{#if isCopy}
 							copy to <span class="font-medium text-stone-900">{toLabel}</span>?
 						{:else}
@@ -126,7 +127,8 @@
 				{#if warningShouldRender}
 					<div class={`rounded-lg border px-3 py-2 text-xs ${warningClasses}`}>
 						{#if isDelete}
-							This will permanently clear this block including progress and habits.
+							{warningText ??
+								'This will permanently clear this block including progress and habits.'}
 						{:else if hasDestinationContent}
 							{#if isSwap}
 								This will swap with

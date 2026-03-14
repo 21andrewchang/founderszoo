@@ -58,7 +58,6 @@ const createWindow = async () => {
 		}
 	});
 
-	win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 	win.setFullScreenable(false);
 
 	win.once('ready-to-show', () => {
