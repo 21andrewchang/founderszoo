@@ -115,7 +115,7 @@
 			}
 			messageType = 'success';
 			message = '';
-			await runSuccessSequence();
+			await runSuccessSequence(user);
 		} catch (err) {
 			console.error('sign in error', err);
 			messageType = 'error';
@@ -125,13 +125,26 @@
 		}
 	}
 
-	async function runSuccessSequence() {
+	async function runSuccessSequence(user: { id: string } | null) {
 		if (showSuccessAnimation) return;
 		showSuccessAnimation = true;
 
 		// Beam/title animation lasts ~2000ms; fade overlaps 900ms. Add a short dwell.
 		const total = 2000 + 900 + HOLD_MS;
 		await new Promise((r) => setTimeout(r, total));
+		if (!user) {
+			goto('/');
+			return;
+		}
+		const { data: userRow } = await supabase
+			.from('users')
+			.select('username')
+			.eq('id', user.id)
+			.maybeSingle();
+		if (userRow?.username) {
+			goto(`/${userRow.username}`);
+			return;
+		}
 		goto('/');
 	}
 </script>

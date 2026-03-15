@@ -4,16 +4,27 @@
 	let {
 		open = false,
 		onClose = () => {},
-		singlePlayerMode = false,
-		singlePlayerDisabled = false,
-		onToggleSinglePlayer = () => {}
+		username = null,
+		usernameSaving = false,
+		usernameError = null,
+		onSaveUsername = () => {},
+		onLogout = () => {}
 	} = $props<{
 		open?: boolean;
 		onClose?: () => void;
-		singlePlayerMode?: boolean;
-		singlePlayerDisabled?: boolean;
-		onToggleSinglePlayer?: (next: boolean) => void;
+		username?: string | null;
+		usernameSaving?: boolean;
+		usernameError?: string | null;
+		onSaveUsername?: (next: string) => void;
+		onLogout?: () => void;
 	}>();
+
+	let usernameDraft = $state('');
+
+	$effect(() => {
+		if (!open) return;
+		usernameDraft = username ?? '';
+	});
 
 	function handleBackdropClick(event: MouseEvent) {
 		if (event.target === event.currentTarget) onClose();
@@ -47,30 +58,41 @@
 		>
 			<div class="space-y-4 px-5 py-5 text-sm text-stone-600">
 				<div class="text-base font-semibold text-stone-900">Settings</div>
-				<div class="flex items-center justify-between gap-4">
-					<div class="space-y-1">
-						<div class="text-sm font-semibold text-stone-900">Single player mode</div>
-						<div class="text-xs text-stone-500">
-							Show only your grid and keep the right side empty.
-						</div>
-					</div>
-					<label class="flex items-center gap-2 text-xs font-medium text-stone-600">
+				<div class="space-y-2">
+					<div class="text-sm font-semibold text-stone-900">Workspace username</div>
+					<div class="text-xs text-stone-500">This controls your workspace URL.</div>
+					<div class="flex items-center gap-2">
 						<input
-							type="checkbox"
-							class="h-4 w-4 rounded border-stone-300 text-stone-900 focus:ring-stone-500"
-							checked={singlePlayerMode}
-							disabled={singlePlayerDisabled}
-							onchange={(event) =>
-								onToggleSinglePlayer((event.currentTarget as HTMLInputElement).checked)}
+							type="text"
+							class="w-full rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-900 outline-none focus:border-stone-400"
+							placeholder="your-username"
+							bind:value={usernameDraft}
+							disabled={!username || usernameSaving}
 						/>
-						<span>{singlePlayerMode ? 'On' : 'Off'}</span>
-					</label>
+						<button
+							type="button"
+							class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-3 py-2 text-xs font-medium text-stone-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={!username || usernameSaving || usernameDraft.trim().length === 0}
+							onclick={() => onSaveUsername(usernameDraft)}
+						>
+							{usernameSaving ? 'Saving...' : 'Save'}
+						</button>
+					</div>
+					{#if !username}
+						<div class="text-xs text-stone-400">Sign in to edit your username.</div>
+					{:else if usernameError}
+						<div class="text-xs text-rose-500">{usernameError}</div>
+					{/if}
 				</div>
-				{#if singlePlayerDisabled}
-					<div class="text-xs text-stone-400">Sign in to enable single player mode.</div>
-				{/if}
 			</div>
 			<div class="flex items-center justify-end border-t border-stone-100 px-5 py-4">
+				<button
+					type="button"
+					class="mr-auto inline-flex items-center justify-center rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-medium text-rose-600 transition hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none"
+					onclick={onLogout}
+				>
+					Log out
+				</button>
 				<button
 					type="button"
 					class="inline-flex items-center justify-center rounded-lg border border-stone-200 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none"

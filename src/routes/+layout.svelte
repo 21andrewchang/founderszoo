@@ -1,5 +1,4 @@
 <script lang="ts">
-	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { onMount, setContext } from 'svelte';
 	import { fly, blur, scale, fade } from 'svelte/transition';
 	import '../app.css';
@@ -11,7 +10,6 @@
 	import type { User } from '@supabase/supabase-js';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
-	import { useGlobalPresence } from '$lib/presence';
 	import { fetchCompletionByDate } from '$lib/heatmap';
 	import { heatmapStore } from '$lib/heatmapStore';
 	import GrogathLogin from './grogath/+page.svelte';
@@ -22,16 +20,6 @@
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
 	const TRACKED_ROOMS = ['/', '/manifesto', '/collection', '/fundamentals'];
-	const links = [
-		{ href: '/manifesto', label: 'Manifesto' },
-		{ href: '/fundamentals', label: 'Fundamentals' },
-		{ href: '/collection', label: 'Collection' }
-	];
-
-	const isActive = (href: string, pathname: string) => {
-		if (href === '/') return pathname === '/';
-		return pathname === href || pathname.startsWith(href + '/');
-	};
 
 	const START_HOUR = 8;
 	const END_HOUR = 24;
@@ -60,7 +48,6 @@
 
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
-	let store = $derived(useGlobalPresence(viewerId));
 
 	const applyUser = (u: User | null) => {
 		session.set({
@@ -1504,19 +1491,6 @@
 		}
 	}
 
-	let presenceCounts = $state({ tabs: 0, unique: 0, connected: false });
-
-	$effect(() => {
-		if (!browser) {
-			presenceCounts = { tabs: 0, unique: 0, connected: false };
-			return;
-		}
-		const unsubscribe = store.subscribe((v) => {
-			presenceCounts = v;
-		});
-		return () => unsubscribe();
-	});
-
 	onMount(() => {
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
@@ -1695,7 +1669,44 @@
 	$inspect(authSet);
 	$inspect($session.user);
 	$inspect(currentCombinedPct);
-	$inspect(presenceCounts.connected);
+
+	type GoalBarEntry = {
+		displayGoalKey: GoalRotationKey;
+		displayRangeLabel: string;
+		displayGoalEntry: GoalEntry;
+		pinnedGoalKey: GoalRotationKey | null;
+		yearGoalTitle: string;
+		currentRangeLabel: string;
+		viewerId: string | null;
+	};
+
+	const goalBarStore = writable<GoalBarEntry>({
+		displayGoalKey,
+		displayRangeLabel,
+		displayGoalEntry,
+		pinnedGoalKey,
+		yearGoalTitle,
+		currentRangeLabel,
+		viewerId
+	});
+
+	setContext('goalBar', goalBarStore);
+	setContext('goalBarActions', {
+		togglePinnedGoal,
+		openGoalModal
+	});
+
+	$effect(() => {
+		goalBarStore.set({
+			displayGoalKey,
+			displayRangeLabel,
+			displayGoalEntry,
+			pinnedGoalKey,
+			yearGoalTitle,
+			currentRangeLabel,
+			viewerId
+		});
+	});
 
 	let { children, suppressSpectator = false, desktopMode = false } = $props();
 </script>
@@ -1709,131 +1720,7 @@
 {#if authSet == null}
 	<div></div>
 {:else if !authSet && !suppressSpectator}
-	<div in:fly={{ y: 2, duration: 400 }}>
-		<OnlineCount dedupe={false} counts={presenceCounts} />
-		<nav
-			class="fixed left-0 z-67 flex h-15 w-full items-center justify-center bg-white pt-5 pb-5 select-none selection:bg-stone-600 selection:text-stone-100"
-			style="font-family: 'Cormorant Garamond', serif"
-		>
-			<a href="/" class="absolute left-5 text-xl tracking-wide text-stone-700"> founders zoo. </a>
-
-			<div class="flex gap-6 text-sm text-stone-400">
-				{#each links as link}
-					<a
-						href={link.href}
-						class={`transition-colors duration-200 ease-out ${
-							isActive(link.href, $page.url.pathname)
-								? 'text-stone-800'
-								: 'text-stone-400 hover:text-stone-800'
-						}`}
-					>
-						{link.label}
-					</a>
-				{/each}
-			</div>
-		</nav>
-	</div>
-{:else if authSet && $session.user}
-	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
-		<div class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start">
-			<div class="pointer-events-auto relative flex items-center">
-				<button
-					type="button"
-					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-					aria-label="Previous day"
-					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="18"
-						height="18"
-						fill="currentColor"
-						class="bi bi-chevron-left"
-						viewBox="0 0 16 16"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
-						/>
-					</svg>
-				</button>
-				<button
-					type="button"
-					class="flex h-9 w-32 items-center justify-center gap-2 rounded-sm px-3 py-2 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
-					disabled={isActiveDayToday}
-					onclick={() => {
-						activeDayDateStore.set(localToday());
-					}}
-					aria-label="Jump to today"
-				>
-					<span>{activeDayLabel}</span>
-				</button>
-				<button
-					type="button"
-					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-					aria-label="Next day"
-					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="18"
-						height="18"
-						fill="currentColor"
-						class="bi bi-chevron-right"
-						viewBox="0 0 16 16"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-						/>
-					</svg>
-				</button>
-			</div>
-		</div>
-
-		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2 translate-y-0.5">
-			{#if viewerId}
-				<div
-					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase transition"
-				>
-					{#key displayGoalKey}
-						<span
-							in:fly={{ y: 4, delay: 400, duration: 200 }}
-							out:fade={{ duration: 160 }}
-							class="flex h-11 items-center gap-2 rounded-sm px-4"
-						>
-							<button
-								type="button"
-								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
-								onclick={() => togglePinnedGoal(displayGoalKey)}
-							>
-								<span class="font-semibold tracking-wide text-stone-400">
-									{displayRangeLabel}
-								</span>
-							</button>
-							<button
-								type="button"
-								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-								onclick={openGoalModal}
-							>
-								{displayGoalEntry.title || 'Milestone'}
-							</button>
-						</span>
-					{/key}
-				</div>
-			{:else}
-				<div
-					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase"
-				>
-					<span>{yearGoalTitle}</span>
-					<span class="text-[15px] font-semibold tracking-wide text-stone-400">
-						{currentRangeLabel}
-					</span>
-				</div>
-			{/if}
-		</div>
-	</div>
+	<div></div>
 {/if}
 
 {#if isGoalModalOpen}
