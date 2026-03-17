@@ -71,7 +71,7 @@
 	const goalBarStore = getContext<Writable<GoalBarState>>('goalBar');
 	const goalBarActions = getContext<{
 		togglePinnedGoal: (key: GoalRotationKey) => void;
-		openGoalModal: () => void;
+		openGoalModal: (forceOpen?: boolean) => void;
 	}>('goalBarActions');
 	const goalModalStore = getContext<Writable<GoalModalState>>('goalModal');
 	const goalModalActions = getContext<{
@@ -601,6 +601,7 @@
 	let pendingCalendarG = $state(false);
 	let pendingCalendarTimeout: number | null = null;
 	let pendingOTimer: number | null = null;
+	let debugShortcuts = $state(false);
 	let dragImageEl: HTMLElement | null = null;
 	let cutBlock = $state<CutBlock | null>(null);
 	let copyBlock = $state<CopyBlock | null>(null);
@@ -711,6 +712,8 @@
 	const isGoalEvent = (event: UpcomingEvent) => event.id.startsWith('goal-');
 	const eventCategoryClass = (category: BlockCategory | null | undefined) =>
 		(category ? SUMMARY_CATEGORY_CLASSES[category] : null) ?? 'text-stone-400';
+	const calendarEventAccent = (category: BlockCategory | null | undefined) =>
+		(category ? SUMMARY_CATEGORY_COLORS[category] : null) ?? null;
 	const clampUpcomingIndex = (index: number) =>
 		Math.max(0, Math.min(upcomingEvents.length - 1, index));
 	const focusUpcoming = (index?: number) => {
@@ -1176,6 +1179,37 @@
 		});
 	}
 
+	function calendarMonthInfoForAlignedIndex(alignedIndex: number) {
+		const maxStart = Math.max(0, calendarWeekRange.length - 1);
+		const startIndex = Math.max(0, Math.min(maxStart, alignedIndex));
+		const countStartIndex = Math.min(maxStart, startIndex + 1);
+		const groupWeeks = calendarWeekRange.slice(countStartIndex, countStartIndex + 6);
+		if (!groupWeeks.length) return null;
+		const totals = calendarGroupMonthTotals(groupWeeks);
+		let best: { monthIndex: number; year: number; dayCount: number } | null = null;
+		for (const entry of totals) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+		return best ? { monthIndex: best.monthIndex, year: best.year } : null;
+	}
+
+	function calendarAlignedIndexForDate(weekIndex: number, targetDate: Date) {
+		let alignedIndex = Math.max(0, weekIndex - 1);
+		const targetMonth = targetDate.getMonth();
+		const targetYear = targetDate.getFullYear();
+		for (let i = 0; i < 6; i += 1) {
+			const info = calendarMonthInfoForAlignedIndex(alignedIndex);
+			if (info && info.monthIndex === targetMonth && info.year === targetYear) {
+				return alignedIndex;
+			}
+			if (alignedIndex === 0) break;
+			alignedIndex -= 1;
+		}
+		return alignedIndex;
+	}
+
 	function scrollCalendarToDate(dateStr: string, options?: { align?: 'top' | 'nearby' }) {
 		if (!calendarScrollEl) return;
 		const step = calendarRowStep();
@@ -1185,9 +1219,12 @@
 			week.some((day) => formatDateString(day) === dateStr)
 		);
 		if (weekIndex === -1) return;
+		const targetDate = parseLocalDate(dateStr) ?? new Date();
 		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
 		const alignedIndex =
-			options?.align === 'top' ? Math.max(0, weekIndex - 1) : Math.max(0, weekIndex - 1);
+			options?.align === 'top'
+				? calendarAlignedIndexForDate(weekIndex, targetDate)
+				: calendarAlignedIndexForDate(weekIndex, targetDate);
 		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
 		disableCalendarSnap();
 		calendarAutoScroll = true;
@@ -1389,8 +1426,9 @@
 		if (weekIndex === -1) return;
 		const weekEl = calendarWeekEls[weekIndex];
 		if (!weekEl) return;
+		const parsedTarget = parseLocalDate(targetDate) ?? new Date();
 		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
-		const alignedIndex = Math.max(0, weekIndex - 1);
+		const alignedIndex = calendarAlignedIndexForDate(weekIndex, parsedTarget);
 		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
 		disableCalendarSnap();
 		calendarScrollEl.scrollTop = nextTop;
@@ -4415,7 +4453,10 @@
 		if (isEventDeleteSubmitting) return;
 		pendingEventDelete = null;
 	}
-	function resetPendingO() {
+	function resetPendingO(reason = 'unknown') {
+		if (debugShortcuts) {
+			console.log('shortcut:resetO', { reason, pendingO });
+		}
 		pendingO = false;
 		if (pendingOTimer !== null) {
 			window.clearTimeout(pendingOTimer);
@@ -5190,36 +5231,80 @@
 		updateCurrentTime();
 		scheduleClockTick();
 		init();
+		try {
+			debugShortcuts = window.localStorage.getItem('debug-shortcuts') === '1';
+		} catch (e) {
+			debugShortcuts = false;
+		}
+		if (debugShortcuts) {
+			console.log('shortcut:debug-enabled');
+		}
+		const debugCaptureHandler = (event: KeyboardEvent) => {
+			if (!debugShortcuts) return;
+			const target = event.target instanceof HTMLElement ? event.target.tagName : null;
+			console.log('shortcut:capture', {
+				key: event.key,
+				code: event.code,
+				meta: event.metaKey,
+				ctrl: event.ctrlKey,
+				alt: event.altKey,
+				shift: event.shiftKey,
+				target
+			});
+		};
 		const keyHandler = (event: KeyboardEvent) => {
 			lastKeyAt = Date.now();
 			setCursorHidden(true);
-			if (isTypingTarget(event.target)) return;
+			const typingTarget = isTypingTarget(event.target);
+			if (debugShortcuts) {
+				console.log('shortcut:keydown', {
+					key: event.key,
+					code: event.code,
+					meta: event.metaKey,
+					ctrl: event.ctrlKey,
+					alt: event.altKey,
+					shift: event.shiftKey,
+					typingTarget,
+					pendingO,
+					modalOverlayActive,
+					goalModalOpen: $goalModalStore?.isOpen ?? false,
+					heatmapOpen
+				});
+			}
+			if (typingTarget) return;
 			const normalized = event.key.toLowerCase();
+			const keyCode = event.code;
+			const isKeyO = normalized === 'o' || keyCode === 'KeyO';
+			const isKeyG = normalized === 'g' || keyCode === 'KeyG';
+			const isKeyC = normalized === 'c' || keyCode === 'KeyC';
 			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
 				if (pendingO) {
-					if (normalized === 'g') {
-						goalBarActions?.openGoalModal();
-						resetPendingO();
+					if (isKeyG) {
+						if (debugShortcuts) console.log('shortcut:openGoals');
+						goalBarActions?.openGoalModal(true);
+						resetPendingO('goals');
 						event.preventDefault();
 						return;
 					}
-					if (normalized === 'c') {
+					if (isKeyC) {
+						if (debugShortcuts) console.log('shortcut:toggleHeatmap');
 						const nextOpen = !heatmapOpen;
 						heatmapOpen = nextOpen;
 						if (nextOpen && viewerUserId) {
 							void loadHeatmap(viewerUserId);
 						}
-						resetPendingO();
+						resetPendingO('heatmap');
 						event.preventDefault();
 						return;
 					}
-					resetPendingO();
+					resetPendingO('mismatch');
 				}
-				if (normalized === 'o') {
+				if (isKeyO) {
 					pendingO = true;
+					if (debugShortcuts) console.log('shortcut:pendingO', { pendingO });
 					if (pendingOTimer !== null) window.clearTimeout(pendingOTimer);
 					pendingOTimer = window.setTimeout(() => {
-						resetPendingO();
+						resetPendingO('timeout');
 					}, 900);
 					event.preventDefault();
 					return;
@@ -5386,12 +5471,14 @@
 			if (now - lastKeyAt < 150) return;
 			setCursorHidden(false);
 		};
+		window.addEventListener('keydown', debugCaptureHandler, { capture: true });
 		window.addEventListener('keydown', keyHandler);
 		window.addEventListener('pointermove', pointerHandler);
 		window.addEventListener('pointerdown', pointerHandler);
 		requestAnimationFrame(() => (showTimes = true));
 		return () => {
 			stopClockTick();
+			window.removeEventListener('keydown', debugCaptureHandler, { capture: true });
 			window.removeEventListener('keydown', keyHandler);
 			window.removeEventListener('pointermove', pointerHandler);
 			window.removeEventListener('pointerdown', pointerHandler);
@@ -5850,6 +5937,8 @@
 												{@const isPastEvent = event.due_date < localToday()}
 												{@const isMilestone = isMilestoneEvent(event)}
 												{@const isGoal = isGoalEvent(event)}
+												{@const eventCategory = event.category ?? null}
+												{@const showCategory = Boolean(eventCategory) && !isMilestone && !isGoal}
 												<button
 													type="button"
 													class={`calendar-event-item ${
@@ -5858,7 +5947,12 @@
 															: ''
 													} ${isPastEvent && !isMilestone ? 'calendar-event-past' : ''} ${
 														isMilestone ? 'calendar-event-milestone' : ''
-													} ${isGoal ? 'calendar-event-goal' : ''}`}
+													} ${isGoal ? 'calendar-event-goal' : ''} ${
+														showCategory ? 'calendar-event-category' : ''
+													}`}
+													style={showCategory && eventCategory
+														? `--event-accent: ${calendarEventAccent(eventCategory)}`
+														: ''}
 													disabled={isMilestone}
 													onclick={(e) => {
 														e.stopPropagation();
@@ -5866,6 +5960,81 @@
 														if (!isMilestone) openEventModal(event);
 													}}
 												>
+													<span class="calendar-event-icon">
+														{#if isMilestone}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																width="12"
+																height="12"
+																fill="currentColor"
+																viewBox="0 0 16 16"
+															>
+																<path
+																	d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+																/>
+																<path
+																	fill-rule="evenodd"
+																	d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+																/>
+															</svg>
+														{:else if eventCategory === 'rest'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-3 w-3"
+																fill="currentColor"
+															>
+																<path
+																	d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+																/>
+															</svg>
+														{:else if eventCategory === 'body'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-3 w-3"
+																fill="currentColor"
+															>
+																<path
+																	d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+																/>
+															</svg>
+														{:else if eventCategory === 'work'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-3 w-3"
+																fill="currentColor"
+															>
+																<path
+																	d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+																/>
+															</svg>
+														{:else if eventCategory === 'admin'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-3 w-3"
+																fill="currentColor"
+															>
+																<path
+																	d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+																/>
+															</svg>
+														{:else}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-3 w-3"
+																fill="currentColor"
+																aria-hidden="true"
+															>
+																<path
+																	d="M2 2v13.5a.5.5 0 0 0 .74.439L8 13.069l5.26 2.87A.5.5 0 0 0 14 15.5V2a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2"
+																/>
+															</svg>
+														{/if}
+													</span>
 													<span class="calendar-event-title">{event.title}</span>
 												</button>
 											{/each}
@@ -6724,6 +6893,7 @@
 	}
 
 	.calendar-event-item {
+		--event-accent: #c2410c;
 		display: flex;
 		align-items: center;
 		gap: 8px;
@@ -6740,6 +6910,11 @@
 		overflow: hidden;
 	}
 
+	.calendar-event-category {
+		background: color-mix(in srgb, var(--event-accent) 18%, #ffffff);
+		color: color-mix(in srgb, var(--event-accent) 80%, #111827);
+	}
+
 	.calendar-event-item::before {
 		content: '';
 		position: absolute;
@@ -6747,7 +6922,7 @@
 		top: 0;
 		bottom: 0;
 		width: 4px;
-		background: #c2410c;
+		background: var(--event-accent);
 		border-radius: 8px;
 	}
 
@@ -6758,6 +6933,11 @@
 
 	.calendar-event-selected {
 		background: #c2410c;
+		color: #fff;
+	}
+
+	.calendar-event-selected.calendar-event-category {
+		background: color-mix(in srgb, var(--event-accent) 75%, #1f2937);
 		color: #fff;
 	}
 
@@ -6802,5 +6982,12 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.calendar-event-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex: 0 0 auto;
 	}
 </style>
