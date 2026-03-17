@@ -2,7 +2,7 @@
 	export let viewerEmail: string | null = null;
 	export let workspaceUsername: string | null = null;
 
-	const backLabel = 'Back to Linear';
+	const backLabel = 'Back to Home';
 	const title = 'Authentication error';
 	const message = "You don't have access to this workspace.";
 	const helpText = 'Please contact a workspace admin for access.';
@@ -24,18 +24,6 @@
 
 	<main class="mx-auto flex w-full max-w-2xl flex-col items-center px-6 pt-10 text-center">
 		<div class="flex h-12 w-12 items-center justify-center rounded-full bg-stone-900/90 text-white">
-			<svg
-				width="24"
-				height="24"
-				viewBox="0 0 24 24"
-				fill="none"
-				xmlns="http://www.w3.org/2000/svg"
-				aria-hidden="true"
-			>
-				<circle cx="12" cy="12" r="10" stroke="white" stroke-width="2" />
-				<path d="M6 16l6-4 6-4" stroke="white" stroke-width="2" stroke-linecap="round" />
-				<path d="M8 19l6-4 4-3" stroke="white" stroke-width="2" stroke-linecap="round" />
-			</svg>
 		</div>
 		<h1 class="mt-6 text-2xl font-semibold text-stone-900">{title}</h1>
 		<p class="mt-3 text-stone-500">{message}</p>

@@ -4,7 +4,7 @@
 	import PlayerStatusTag from '$lib/components/PlayerStatusTag.svelte';
 	import Block from '$lib/components/Block.svelte';
 	import SettingsModal from '$lib/components/SettingsModal.svelte';
-	import { scale, fly, fade } from 'svelte/transition';
+	import { scale, fly, fade, slide } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
 	import type { PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
@@ -36,7 +36,7 @@
 		categoryBreakdown: SummaryCategory[];
 	};
 
-	type GoalRotationKey = 'year' | 'quarter' | 'month' | 'week' | 'yc-app';
+	type GoalRotationKey = 'year' | 'month' | 'week';
 	type GoalEntry = {
 		id: string | null;
 		title: string;
@@ -54,6 +54,18 @@
 		viewerId: string | null;
 	};
 
+	type GoalModalState = {
+		isOpen: boolean;
+		selectedMonthKey: string;
+		yearGoalEntry: GoalEntry;
+		monthStructure: {
+			key: string;
+			label: string;
+			goal: GoalEntry;
+			weeks: { label: string; key: string; goal: GoalEntry }[];
+		}[];
+	};
+
 	let people = $state<Person[]>([]);
 	const session = getContext<Writable<Session>>('session');
 	const goalBarStore = getContext<Writable<GoalBarState>>('goalBar');
@@ -61,6 +73,13 @@
 		togglePinnedGoal: (key: GoalRotationKey) => void;
 		openGoalModal: () => void;
 	}>('goalBarActions');
+	const goalModalStore = getContext<Writable<GoalModalState>>('goalModal');
+	const goalModalActions = getContext<{
+		setSelectedMonthKey: (key: string) => void;
+		updateGoalDraft: (goalKey: string, value: string) => void;
+		handleGoalKeydown: (goalKey: string, event: KeyboardEvent) => void;
+		saveGoal: (goalKey: string) => Promise<void>;
+	}>('goalModalActions');
 	const activeDayDateStore = getContext<Writable<string | null>>('activeDayDate');
 	let isDragging = $state(false);
 	let suppressNextClick = $state(false);
@@ -89,6 +108,19 @@
 	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
 	const EVENT_MODAL_OPEN_EVENT = 'event-modal-open';
 	let completionRefreshTimeout: number | null = null;
+	const GOAL_YEAR = new Date().getFullYear();
+	const GOAL_FILTERS = ['This Year', 'Q1', 'Q2', 'Q3', 'Q4', 'Life Goals'] as const;
+	type GoalFilter = (typeof GOAL_FILTERS)[number];
+	let goalFilter = $state<GoalFilter>('This Year');
+	let collapsedGoalSections = $state<Record<string, boolean>>({});
+
+	const isGoalSectionCollapsed = (key: string) => Boolean(collapsedGoalSections[key]);
+	const toggleGoalSection = (key: string) => {
+		collapsedGoalSections = {
+			...collapsedGoalSections,
+			[key]: !collapsedGoalSections[key]
+		};
+	};
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
 		const next = {} as Record<PlayerKey, PlayerDisplay>;
@@ -252,9 +284,30 @@
 	let isLoading = $state(true);
 	const isSinglePlayerView = $derived.by(() => !showMultiGrid && Boolean(viewerUserId));
 	const renderPeople = $derived.by(() => {
-		if (showMultiGrid) return people;
+		if (showMultiGrid) {
+			if (viewerUserId) return people;
+			const allowed = new Set(['andrew', 'nico']);
+			return people.filter((person) => allowed.has(person.label.toLowerCase()));
+		}
 		if (!viewerUserId) return people.slice(0, 1);
 		return people.filter((person) => person.user_id === viewerUserId);
+	});
+	const todayHeatmapPctForUser = (userId: string | null) => {
+		if (!userId || userId !== viewerUserId) return null;
+		const today = localToday();
+		const pct = heatmapByDate[today];
+		if (pct === undefined || pct === null) return null;
+		return pct;
+	};
+	const filteredGoalMonths = $derived.by(() => {
+		if (!$goalModalStore) return [] as GoalModalState['monthStructure'];
+		const months = $goalModalStore.monthStructure;
+		if (goalFilter === 'This Year') return months;
+		if (goalFilter === 'Q1') return months.slice(0, 3);
+		if (goalFilter === 'Q2') return months.slice(3, 6);
+		if (goalFilter === 'Q3') return months.slice(6, 9);
+		if (goalFilter === 'Q4') return months.slice(9, 12);
+		return [];
 	});
 
 	$effect(() => {
@@ -282,6 +335,7 @@
 		id: string;
 		title: string;
 		due_date: string;
+		category?: BlockCategory | null;
 	};
 	let upcomingEvents = $state<UpcomingEvent[]>([]);
 	let upcomingEventsLoading = $state(false);
@@ -381,6 +435,12 @@
 		toHour: number;
 		toHalf: 0 | 1;
 		value: BlockValue;
+	};
+	type PendingEventPaste = {
+		user_id: string;
+		toHour: number;
+		toHalf: 0 | 1;
+		event: UpcomingEvent;
 	};
 	type ShiftEntry = {
 		index: number;
@@ -526,15 +586,21 @@
 	let isCopySubmitting = $state(false);
 	let pendingDelete = $state<PendingDelete | null>(null);
 	let isDeleteSubmitting = $state(false);
+	let deleteInFlight = $state<{ key: string; promise: Promise<boolean> } | null>(null);
 	let pendingEventDelete = $state<UpcomingEvent | null>(null);
 	let isEventDeleteSubmitting = $state(false);
 	let cutEvent = $state<UpcomingEvent | null>(null);
 	let cutEventSourceDate = $state<string | null>(null);
+	let copyEvent = $state<UpcomingEvent | null>(null);
+	let pendingEventPaste = $state<PendingEventPaste | null>(null);
+	let isEventPasteSubmitting = $state(false);
 	let isShiftSubmitting = $state(false);
 	let commandCount = $state<number | null>(null);
 	let pendingG = $state(false);
+	let pendingO = $state(false);
 	let pendingCalendarG = $state(false);
 	let pendingCalendarTimeout: number | null = null;
+	let pendingOTimer: number | null = null;
 	let dragImageEl: HTMLElement | null = null;
 	let cutBlock = $state<CutBlock | null>(null);
 	let copyBlock = $state<CopyBlock | null>(null);
@@ -574,6 +640,20 @@
 			mode: 'copy' as const
 		};
 	});
+	const pendingEventPasteSummary = $derived.by(() => {
+		if (!pendingEventPaste) return null;
+		const { user_id, toHour, toHalf, event } = pendingEventPaste;
+		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
+		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		const destinationHasContent = destinationTitle.length > 0 || destinationHabit.length > 0;
+		return {
+			blockLabel: event.title,
+			fromLabel: formatDisplayDate(event.due_date),
+			toLabel: formatBlockLabel(toHour, toHalf),
+			destinationLabel: destinationTitle || destinationHabit || null,
+			hasDestinationContent: destinationHasContent
+		};
+	});
 	const pendingDeleteSummary = $derived.by(() => {
 		if (!pendingDelete) return null;
 		const { user_id, hour, half } = pendingDelete;
@@ -596,7 +676,8 @@
 				pendingMove ||
 				pendingCopy ||
 				pendingDelete ||
-				pendingEventDelete
+				pendingEventDelete ||
+				pendingEventPaste
 		)
 	);
 
@@ -619,18 +700,17 @@
 		if (parsed === null || todayMs === null) return '';
 		const diffDays = Math.round((parsed - todayMs) / DAY_MS);
 		const safeDays = Math.max(0, diffDays);
-		if (safeDays > 7) {
-			const weeks = Math.floor(safeDays / 7);
-			const days = safeDays % 7;
-			const weekLabel = `${weeks} week${weeks === 1 ? '' : 's'}`;
-			if (days === 0) return weekLabel;
-			const dayLabel = `${days} day${days === 1 ? '' : 's'}`;
-			return `${weekLabel} ${dayLabel}`;
+		if (safeDays >= 7) {
+			const weeks = Math.max(1, Math.ceil(safeDays / 7));
+			return `${weeks} week${weeks === 1 ? '' : 's'}`;
 		}
 		return `${safeDays} day${safeDays === 1 ? '' : 's'}`;
 	};
 
 	const isMilestoneEvent = (event: UpcomingEvent) => event.id.startsWith('milestone-');
+	const isGoalEvent = (event: UpcomingEvent) => event.id.startsWith('goal-');
+	const eventCategoryClass = (category: BlockCategory | null | undefined) =>
+		(category ? SUMMARY_CATEGORY_CLASSES[category] : null) ?? 'text-stone-400';
 	const clampUpcomingIndex = (index: number) =>
 		Math.max(0, Math.min(upcomingEvents.length - 1, index));
 	const focusUpcoming = (index?: number) => {
@@ -755,6 +835,16 @@
 		if (pct >= 50) return 'bg-green-500';
 		if (pct >= 25) return 'bg-green-200';
 		return 'bg-white';
+	}
+
+	function heatmapDotClass(pct: number | null) {
+		if (pct === null || Number.isNaN(pct)) {
+			return 'bg-stone-400 shadow-[0_0_8px_rgba(148,163,184,0.6)]';
+		}
+		if (pct >= 75) return 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.55)]';
+		if (pct >= 50) return 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.55)]';
+		if (pct >= 25) return 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.55)]';
+		return 'bg-stone-400 shadow-[0_0_8px_rgba(148,163,184,0.55)]';
 	}
 
 	function formatProductiveHours(value: number) {
@@ -1208,9 +1298,33 @@
 	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
 	const calendarWeekRange = $derived(buildCalendarWeekRange(calendarRangeAnchorDate, 12));
 	const calendarWeekGroups = $derived(chunkWeeks(calendarWeekRange, 6));
+	const goalMilestoneEvents = $derived.by(() => {
+		if (!goalModalStore) return [] as UpcomingEvent[];
+		const state = $goalModalStore;
+		const events: UpcomingEvent[] = [];
+		const addEntry = (entry: GoalEntry | null | undefined) => {
+			if (!entry) return;
+			const title = entry.title?.trim();
+			if (!title || !entry.due_date) return;
+			events.push({
+				id: `goal-${entry.goal_key}`,
+				title,
+				due_date: entry.due_date,
+				category: null
+			});
+		};
+		addEntry(state.yearGoalEntry);
+		for (const month of state.monthStructure ?? []) {
+			addEntry(month.goal);
+			for (const week of month.weeks ?? []) {
+				addEntry(week.goal);
+			}
+		}
+		return events;
+	});
 	const calendarEventsByDate = $derived.by(() => {
 		const map = new Map<string, UpcomingEvent[]>();
-		for (const event of upcomingEvents) {
+		for (const event of [...upcomingEvents, ...goalMilestoneEvents]) {
 			if (!event.due_date) continue;
 			const list = map.get(event.due_date) ?? [];
 			list.push(event);
@@ -2028,6 +2142,7 @@
 		const habitEntry = getHabitEntry(user_id, hour, half);
 		if (!blockHasContent(user_id, hour, half)) return false;
 		if (habitEntry) return false;
+		copyEvent = null;
 		cancelCutBlock();
 		const sourceValue = getBlock(user_id, hour, half);
 		cutBlock = {
@@ -2061,6 +2176,7 @@
 		const habitEntry = getHabitEntry(user_id, hour, half);
 		if (!blockHasContent(user_id, hour, half)) return false;
 		if (habitEntry) return false;
+		copyEvent = null;
 		const sourceValue = getBlock(user_id, hour, half);
 		copyBlock = {
 			user_id,
@@ -2087,6 +2203,13 @@
 	function pasteCutBlockToTarget(hour: number, half: 0 | 1) {
 		if (!cutBlock) return false;
 		const { user_id, hour: fromHour, half: fromHalf } = cutBlock;
+		if (
+			waitForDeleteThen(user_id, hour, half, () => {
+				if (cutBlock) pasteCutBlockToTarget(hour, half);
+			})
+		) {
+			return true;
+		}
 		if (hour === fromHour && half === fromHalf) {
 			cancelCutBlock();
 			return true;
@@ -2122,7 +2245,16 @@
 	function pasteCopyBlockToTarget(hour: number, half: 0 | 1) {
 		if (!copyBlock) return false;
 		const { user_id, hour: fromHour, half: fromHalf, value } = copyBlock;
-		if (hour === fromHour && half === fromHalf) return true;
+		if (
+			waitForDeleteThen(user_id, hour, half, () => {
+				if (copyBlock) pasteCopyBlockToTarget(hour, half);
+			})
+		) {
+			return true;
+		}
+		if (hour === fromHour && half === fromHalf) {
+			if (blockHasContent(user_id, hour, half)) return true;
+		}
 		if (getHabitEntry(user_id, hour, half)) return false;
 		const copy: PendingCopy = {
 			user_id,
@@ -2144,6 +2276,51 @@
 		const hour = hours[selectedBlock.hourIndex];
 		if (hour === undefined) return false;
 		return pasteCopyBlockToTarget(hour, selectedBlock.half);
+	}
+
+	async function submitEventPaste(paste: PendingEventPaste): Promise<boolean> {
+		if (isEventPasteSubmitting) return false;
+		isEventPasteSubmitting = true;
+		try {
+			const { user_id, toHour, toHalf, event } = paste;
+			if (viewerUserId !== user_id) return false;
+			const day_id = dayIdByUser[user_id];
+			if (!day_id) return false;
+			const destinationHabit = getHabitEntry(user_id, toHour, toHalf);
+			if (destinationHabit) return false;
+
+			pushUndoAction(user_id, day_id, [{ hour: toHour, half: toHalf }]);
+
+			const { error } = await supabase.from('hours').upsert(
+				[
+					{
+						day_id,
+						hour: toHour,
+						half: toHalf === 1,
+						title: event.title ?? '',
+						status: null,
+						category: event.category ?? null
+					}
+				],
+				{ onConflict: 'day_id,hour,half' }
+			);
+			if (error) {
+				console.error('event paste error', error);
+				return false;
+			}
+
+			setTitle(user_id, toHour, toHalf, event.title ?? '', null, event.category ?? null);
+			if (viewerUserId === user_id) {
+				const hourIndex = getHourIndex(toHour);
+				if (hourIndex !== -1) {
+					setSelectedBlock({ hourIndex, half: toHalf });
+				}
+			}
+			scheduleCompletionRefresh(user_id);
+			return true;
+		} finally {
+			isEventPasteSubmitting = false;
+		}
 	}
 	function maybeHandlePaste(user_id: string, hour: number, half: 0 | 1) {
 		if (!viewerUserId || viewerUserId !== user_id) return false;
@@ -2193,10 +2370,66 @@
 		return true;
 	}
 
+	function deleteSelectedBlockImmediate() {
+		if (!viewerUserId || !selectedBlock || isDeleteSubmitting) return false;
+		const hour = hours[selectedBlock.hourIndex];
+		if (hour === undefined) return false;
+		if (!blockHasContent(viewerUserId, hour, selectedBlock.half)) return false;
+		cancelCutBlock();
+		copyBlockAt(viewerUserId, hour, selectedBlock.half);
+		isDeleteSubmitting = true;
+		const action: PendingDelete = { user_id: viewerUserId, hour, half: selectedBlock.half };
+		const deleteKey = blockKey(
+			viewerUserId,
+			displayDateForUser(viewerUserId),
+			hour,
+			selectedBlock.half
+		);
+		const deletePromise = (async () => {
+			const success = await deleteBlock(action);
+			if (success) pendingDelete = null;
+			return success;
+		})();
+		deleteInFlight = { key: deleteKey, promise: deletePromise };
+		void deletePromise.finally(() => {
+			if (deleteInFlight?.key === deleteKey) {
+				deleteInFlight = null;
+			}
+			isDeleteSubmitting = false;
+		});
+		return true;
+	}
+
+	function waitForDeleteThen(user_id: string, hour: number, half: 0 | 1, action: () => void) {
+		const deleteKey = blockKey(user_id, displayDateForUser(user_id), hour, half);
+		if (!deleteInFlight || deleteInFlight.key !== deleteKey) return false;
+		void deleteInFlight.promise.then(() => {
+			action();
+		});
+		return true;
+	}
+
 	function promptDeleteSelectedEvent(event: UpcomingEvent | null) {
 		if (!viewerUserId || !event) return false;
 		if (isMilestoneEvent(event)) return false;
 		pendingEventDelete = event;
+		return true;
+	}
+
+	function copySelectedUpcomingEvent() {
+		const index = upcomingSelectionIndex ?? null;
+		if (index === null) {
+			copyEvent = null;
+			return false;
+		}
+		const event = upcomingEvents[index];
+		if (!event) {
+			copyEvent = null;
+			return false;
+		}
+		cancelCutBlock();
+		copyBlock = null;
+		copyEvent = event;
 		return true;
 	}
 
@@ -2241,6 +2474,48 @@
 			cutEventSourceDate = originalEvent.due_date;
 			return false;
 		}
+	}
+
+	function cancelPendingEventPaste() {
+		pendingEventPaste = null;
+	}
+
+	function shouldConfirmEventPaste(paste: PendingEventPaste) {
+		const { user_id, toHour, toHalf } = paste;
+		const destinationTitle = getDisplayTitle(user_id, toHour, toHalf);
+		const destinationHabit = (getHabitTitle(user_id, toHour, toHalf) ?? '').trim();
+		return destinationTitle.length > 0 || destinationHabit.length > 0;
+	}
+
+	function pasteCopiedEventToTarget(hour: number, half: 0 | 1) {
+		if (!viewerUserId || !copyEvent) return false;
+		if (
+			waitForDeleteThen(viewerUserId, hour, half, () => {
+				if (copyEvent) pasteCopiedEventToTarget(hour, half);
+			})
+		) {
+			return true;
+		}
+		if (getHabitEntry(viewerUserId, hour, half)) return false;
+		const paste: PendingEventPaste = {
+			user_id: viewerUserId,
+			toHour: hour,
+			toHalf: half,
+			event: copyEvent
+		};
+		if (shouldConfirmEventPaste(paste)) {
+			pendingEventPaste = paste;
+			return true;
+		}
+		void submitEventPaste(paste);
+		return true;
+	}
+
+	function pasteCopiedEventAtSelection() {
+		if (!viewerUserId || !copyEvent || !selectedBlock) return false;
+		const hour = hours[selectedBlock.hourIndex];
+		if (hour === undefined) return false;
+		return pasteCopiedEventToTarget(hour, selectedBlock.half);
 	}
 
 	function isOptimisticEvent(event: UpcomingEvent) {
@@ -2653,6 +2928,10 @@
 				if (moveUpcomingSelection(-1)) event.preventDefault();
 				return;
 			}
+			if (normalized === 'y') {
+				if (copySelectedUpcomingEvent()) event.preventDefault();
+				return;
+			}
 			if (normalized === 'd') {
 				const idx = upcomingSelectionIndex ?? 0;
 				const entry = upcomingEvents[idx];
@@ -2687,6 +2966,11 @@
 				event.preventDefault();
 				return;
 			}
+			if (copyEvent) {
+				copyEvent = null;
+				event.preventDefault();
+				return;
+			}
 			return;
 		}
 		if ((normalized === 'n' || normalized === 'p') && !modalOverlayActive) {
@@ -2714,11 +2998,7 @@
 			event.preventDefault();
 			return;
 		}
-		if (
-			!['h', 'j', 'k', 'l', 'g', 'm', '>', '<', 'Enter', 'i', 'd', 'x', 'y', 'p'].includes(
-				normalized
-			)
-		)
+		if (!['h', 'j', 'k', 'l', 'g', 'm', '>', '<', 'Enter', 'i', 'd', 'y', 'p'].includes(normalized))
 			return;
 		hoverBlock = null;
 		ensureSelectionExists();
@@ -2774,10 +3054,7 @@
 				handled = openSelectedBlockEditorFromKeyboard(false);
 				break;
 			case 'd':
-				handled = promptDeleteSelectedBlock();
-				break;
-			case 'x':
-				handled = cutSelectedBlock();
+				handled = deleteSelectedBlockImmediate();
 				break;
 			case 'y':
 				handled = copySelectedBlock();
@@ -2787,6 +3064,8 @@
 					handled = pasteCutBlockAtSelection();
 				} else if (copyBlock) {
 					handled = pasteCopyBlockAtSelection();
+				} else if (copyEvent) {
+					handled = pasteCopiedEventAtSelection();
 				}
 				break;
 		}
@@ -3287,7 +3566,7 @@
 			const yearEnd = formatDateString(endOfYear(now));
 			const { data, error } = await supabase
 				.from('events')
-				.select('id, title, due_date')
+				.select('id, title, due_date, category')
 				.eq('user_id', user_id)
 				.order('due_date', { ascending: true });
 			if (error) throw error;
@@ -3295,7 +3574,8 @@
 				.map((row) => ({
 					id: row.id as string,
 					title: (row.title as string | null) ?? '',
-					due_date: (row.due_date as string | null) ?? ''
+					due_date: (row.due_date as string | null) ?? '',
+					category: normalizeBlockCategory(row.category)
 				}))
 				.filter((event) => Boolean(event.title && event.due_date))
 				.filter((event) => event.due_date >= today && event.due_date <= yearEnd);
@@ -3303,19 +3583,22 @@
 				{
 					id: 'milestone-week',
 					title: 'End of week review',
-					due_date: formatDateString(endOfWeek(now))
+					due_date: formatDateString(endOfWeek(now)),
+					category: null
 				},
 				{
 					id: 'milestone-month',
 					title: 'End of month review',
-					due_date: formatDateString(endOfMonth(now))
+					due_date: formatDateString(endOfMonth(now)),
+					category: null
 				},
 				{
 					id: 'milestone-quarter',
 					title: `End of ${quarterLabel(now)} review`,
-					due_date: formatDateString(endOfQuarter(now))
+					due_date: formatDateString(endOfQuarter(now)),
+					category: null
 				},
-				{ id: 'milestone-year', title: 'End of year review', due_date: yearEnd }
+				{ id: 'milestone-year', title: 'End of year review', due_date: yearEnd, category: null }
 			].filter((event) => event.due_date >= today && event.due_date <= yearEnd);
 			upcomingEvents = [...milestoneEvents, ...dbEvents].sort((a, b) =>
 				a.due_date.localeCompare(b.due_date)
@@ -3393,7 +3676,7 @@
 			half: 0,
 			title: event?.title ?? '',
 			status: null,
-			category: null,
+			category: event?.category ?? null,
 			habit: null
 		};
 		editorMode = false;
@@ -3448,14 +3731,21 @@
 			const prevUpcomingEvents = upcomingEvents;
 			try {
 				if (logEventId) {
-					upcomingEvents = upcomingEvents.map((event) =>
-						event.id === logEventId
-							? { ...event, title: trimmedTitle, due_date: trimmedDate }
-							: event
-					);
+					upcomingEvents = upcomingEvents
+						.map((event) =>
+							event.id === logEventId
+								? {
+										...event,
+										title: trimmedTitle,
+										due_date: trimmedDate,
+										category: category ?? null
+									}
+								: event
+						)
+						.sort((a, b) => a.due_date.localeCompare(b.due_date));
 					const { error } = await supabase
 						.from('events')
-						.update({ title: trimmedTitle, due_date: trimmedDate })
+						.update({ title: trimmedTitle, due_date: trimmedDate, category: category ?? null })
 						.eq('id', logEventId)
 						.eq('user_id', user_id);
 					if (error) throw error;
@@ -3464,7 +3754,8 @@
 					const optimisticEvent: UpcomingEvent = {
 						id: tempId,
 						title: trimmedTitle,
-						due_date: trimmedDate
+						due_date: trimmedDate,
+						category: category ?? null
 					};
 					upcomingEvents = [...upcomingEvents, optimisticEvent].sort((a, b) =>
 						a.due_date.localeCompare(b.due_date)
@@ -3474,9 +3765,10 @@
 						.insert({
 							user_id,
 							title: trimmedTitle,
-							due_date: trimmedDate
+							due_date: trimmedDate,
+							category: category ?? null
 						})
-						.select('id, title, due_date')
+						.select('id, title, due_date, category')
 						.single();
 					if (error) throw error;
 					if (data) {
@@ -3486,7 +3778,8 @@
 									? {
 											id: data.id as string,
 											title: (data.title as string | null) ?? trimmedTitle,
-											due_date: (data.due_date as string | null) ?? trimmedDate
+											due_date: (data.due_date as string | null) ?? trimmedDate,
+											category: normalizeBlockCategory(data.category)
 										}
 									: event
 							)
@@ -3909,6 +4202,14 @@
 			pendingCopy = null;
 		}
 	}
+	async function confirmPendingEventPaste() {
+		if (!pendingEventPaste) return;
+		const paste = pendingEventPaste;
+		const success = await submitEventPaste(paste);
+		if (success) {
+			pendingEventPaste = null;
+		}
+	}
 	function shouldConfirmMove(move: PendingMove) {
 		const { user_id, fromHour, fromHalf, toHour, toHalf } = move;
 		const sourceHabit = getHabitEntry(user_id, fromHour, fromHalf);
@@ -4114,8 +4415,17 @@
 		if (isEventDeleteSubmitting) return;
 		pendingEventDelete = null;
 	}
+	function resetPendingO() {
+		pendingO = false;
+		if (pendingOTimer !== null) {
+			window.clearTimeout(pendingOTimer);
+			pendingOTimer = null;
+		}
+	}
 	async function confirmPendingDelete() {
 		if (!pendingDelete || isDeleteSubmitting) return;
+		cancelCutBlock();
+		copyBlockAt(pendingDelete.user_id, pendingDelete.hour, pendingDelete.half);
 		isDeleteSubmitting = true;
 		try {
 			const success = await deleteBlock(pendingDelete);
@@ -4883,9 +5193,61 @@
 		const keyHandler = (event: KeyboardEvent) => {
 			lastKeyAt = Date.now();
 			setCursorHidden(true);
-			if (modalOverlayActive) return;
 			if (isTypingTarget(event.target)) return;
 			const normalized = event.key.toLowerCase();
+			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+				if (pendingO) {
+					if (normalized === 'g') {
+						goalBarActions?.openGoalModal();
+						resetPendingO();
+						event.preventDefault();
+						return;
+					}
+					if (normalized === 'c') {
+						const nextOpen = !heatmapOpen;
+						heatmapOpen = nextOpen;
+						if (nextOpen && viewerUserId) {
+							void loadHeatmap(viewerUserId);
+						}
+						resetPendingO();
+						event.preventDefault();
+						return;
+					}
+					resetPendingO();
+				}
+				if (normalized === 'o') {
+					pendingO = true;
+					if (pendingOTimer !== null) window.clearTimeout(pendingOTimer);
+					pendingOTimer = window.setTimeout(() => {
+						resetPendingO();
+					}, 900);
+					event.preventDefault();
+					return;
+				}
+			}
+			if (modalOverlayActive) return;
+			if ($goalModalStore?.isOpen && !event.metaKey && !event.ctrlKey && !event.altKey) {
+				if (normalized === '1') {
+					goalFilter = 'Q1';
+					event.preventDefault();
+					return;
+				}
+				if (normalized === '2') {
+					goalFilter = 'Q2';
+					event.preventDefault();
+					return;
+				}
+				if (normalized === '3') {
+					goalFilter = 'Q3';
+					event.preventDefault();
+					return;
+				}
+				if (normalized === '4') {
+					goalFilter = 'Q4';
+					event.preventDefault();
+					return;
+				}
+			}
 			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
 				if (normalized === 'g') {
 					pendingCalendarG = true;
@@ -4937,10 +5299,6 @@
 			if (heatmapOpen) {
 				let handled = true;
 				switch (normalized) {
-					case 'x': {
-						handled = cutSelectedCalendarEvent();
-						break;
-					}
 					case 't': {
 						if (event.key !== 'T') {
 							handled = false;
@@ -5048,97 +5406,322 @@
 	});
 </script>
 
+{#if goalModalStore && $goalModalStore.isOpen}
+	<div class="fixed inset-0 z-[200] bg-white text-stone-800">
+		<div class="absolute inset-x-0 top-16 bottom-0 flex flex-col">
+			<div class="shrink-0 bg-white">
+				<div class="mx-auto w-full max-w-[1600px] px-4 pt-4 pb-2">
+					<div class="space-y-4">
+						<div class="text-2xl font-semibold text-stone-900">Goals</div>
+						<div class="flex flex-wrap gap-2">
+							{#each GOAL_FILTERS as filter}
+								<button
+									type="button"
+									class={`rounded-full border px-4 py-1.5 text-sm font-medium transition ${
+										goalFilter === filter
+											? 'border-stone-200 bg-stone-100 text-stone-900'
+											: 'border-stone-200 bg-white text-stone-500 hover:bg-stone-50'
+									}`}
+									onclick={() => (goalFilter = filter)}
+								>
+									{filter}
+								</button>
+							{/each}
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="flex-1 overflow-y-auto">
+				<div class="mx-auto w-full max-w-[1600px] px-4 pt-1 pb-6">
+					<div class="space-y-1">
+						<div class="rounded-md bg-white">
+							<div
+								class="flex items-center gap-3 rounded-md bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700"
+							>
+								<button
+									type="button"
+									class={`flex h-6 w-6 items-center justify-center text-stone-400 transition hover:text-stone-900 ${
+										isGoalSectionCollapsed('year') ? '-rotate-90' : 'rotate-0'
+									}`}
+									aria-label="Toggle year goals"
+									aria-expanded={!isGoalSectionCollapsed('year')}
+									onclick={() => toggleGoalSection('year')}
+								>
+									<svg
+										viewBox="0 0 16 16"
+										width="14"
+										height="14"
+										fill="currentColor"
+										aria-hidden="true"
+									>
+										<path
+											d="M3.204 5.5a.75.75 0 0 1 1.06-.083L8 8.33l3.736-2.913a.75.75 0 0 1 .977 1.133l-4.2 3.27a.75.75 0 0 1-.977 0l-4.2-3.27a.75.75 0 0 1-.083-1.06z"
+										/>
+									</svg>
+								</button>
+								<span>{GOAL_YEAR}</span>
+							</div>
+							{#if !isGoalSectionCollapsed('year')}
+								<div class="space-y-0 px-4 pt-2 pb-1" transition:slide={{ duration: 180 }}>
+									<div class="flex items-center gap-3">
+										<div class="w-14 text-sm font-medium text-stone-400 uppercase">Year</div>
+										<input
+											class="flex-1 rounded-lg bg-transparent px-3 py-2 text-base text-stone-800 outline-none"
+											placeholder="No goal set"
+											value={$goalModalStore.yearGoalEntry.title}
+											oninput={(event) =>
+												goalModalActions?.updateGoalDraft(
+													$goalModalStore.yearGoalEntry.goal_key,
+													(event.currentTarget as HTMLInputElement).value
+												)}
+											onchange={() =>
+												void goalModalActions?.saveGoal($goalModalStore.yearGoalEntry.goal_key)}
+											onkeydown={(event) =>
+												goalModalActions?.handleGoalKeydown(
+													$goalModalStore.yearGoalEntry.goal_key,
+													event
+												)}
+											onblur={() =>
+												void goalModalActions?.saveGoal($goalModalStore.yearGoalEntry.goal_key)}
+										/>
+									</div>
+								</div>
+							{/if}
+						</div>
+
+						{#each filteredGoalMonths as month}
+							<div class="rounded-md bg-white">
+								<div
+									class="flex items-center gap-3 rounded-md bg-stone-100 px-4 py-2 text-sm font-semibold text-stone-700"
+								>
+									<button
+										type="button"
+										class={`flex h-6 w-6 items-center justify-center text-stone-400 transition hover:text-stone-900 ${
+											isGoalSectionCollapsed(month.key) ? '-rotate-90' : 'rotate-0'
+										}`}
+										aria-label={`Toggle ${month.label} goals`}
+										aria-expanded={!isGoalSectionCollapsed(month.key)}
+										onclick={() => toggleGoalSection(month.key)}
+									>
+										<svg
+											viewBox="0 0 16 16"
+											width="14"
+											height="14"
+											fill="currentColor"
+											aria-hidden="true"
+										>
+											<path
+												d="M3.204 5.5a.75.75 0 0 1 1.06-.083L8 8.33l3.736-2.913a.75.75 0 0 1 .977 1.133l-4.2 3.27a.75.75 0 0 1-.977 0l-4.2-3.27a.75.75 0 0 1-.083-1.06z"
+											/>
+										</svg>
+									</button>
+									<span>{month.label}</span>
+								</div>
+								{#if !isGoalSectionCollapsed(month.key)}
+									<div class="space-y-0 px-4 pt-2 pb-1" transition:slide={{ duration: 180 }}>
+										<div class="flex items-center gap-3">
+											<div class="w-14 text-sm font-medium text-stone-400 uppercase">Month</div>
+											<input
+												class="flex-1 rounded-lg bg-transparent px-3 py-2 text-base text-stone-800 outline-none"
+												placeholder="No goal set"
+												value={month.goal.title}
+												oninput={(event) =>
+													goalModalActions?.updateGoalDraft(
+														month.goal.goal_key,
+														(event.currentTarget as HTMLInputElement).value
+													)}
+												onchange={() => void goalModalActions?.saveGoal(month.goal.goal_key)}
+												onkeydown={(event) =>
+													goalModalActions?.handleGoalKeydown(month.goal.goal_key, event)}
+												onblur={() => void goalModalActions?.saveGoal(month.goal.goal_key)}
+											/>
+										</div>
+										{#each month.weeks as week}
+											<div class="flex items-center gap-3">
+												<div class="w-14 text-sm font-medium text-stone-400 uppercase">
+													{week.label}
+												</div>
+												<input
+													class="flex-1 rounded-lg bg-transparent px-3 py-2 text-base text-stone-700 outline-none"
+													placeholder="No goal set"
+													value={week.goal.title}
+													oninput={(event) =>
+														goalModalActions?.updateGoalDraft(
+															week.goal.goal_key,
+															(event.currentTarget as HTMLInputElement).value
+														)}
+													onchange={() => void goalModalActions?.saveGoal(week.goal.goal_key)}
+													onkeydown={(event) =>
+														goalModalActions?.handleGoalKeydown(week.goal.goal_key, event)}
+													onblur={() => void goalModalActions?.saveGoal(week.goal.goal_key)}
+												/>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
 {#if viewerUserId}
-	<div class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start">
+	<div class="pointer-events-none fixed top-4 left-4 z-[300] flex flex-col items-start">
 		<div class="pointer-events-auto relative flex items-center">
-			<button
-				type="button"
-				class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-				aria-label="Previous day"
-				onclick={() => activeDayDateStore?.set(addDaysToDateString(activeDayDate, -1))}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					width="18"
-					height="18"
-					fill="currentColor"
-					class="bi bi-chevron-left"
-					viewBox="0 0 16 16"
+			<div class="group relative">
+				<button
+					type="button"
+					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
+					aria-label="Previous day"
+					onclick={() => activeDayDateStore?.set(addDaysToDateString(activeDayDate, -1))}
 				>
-					<path
-						fill-rule="evenodd"
-						d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
-					/>
-				</svg>
-			</button>
-			<button
-				type="button"
-				class="flex h-9 w-32 items-center justify-center gap-2 rounded-sm px-3 py-2 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
-				disabled={isActiveDayToday}
-				onclick={() => {
-					activeDayDateStore?.set(localToday());
-				}}
-				aria-label="Jump to today"
-			>
-				<span>{activeDayLabel}</span>
-			</button>
-			<button
-				type="button"
-				class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-				aria-label="Next day"
-				onclick={() => activeDayDateStore?.set(addDaysToDateString(activeDayDate, 1))}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					width="18"
-					height="18"
-					fill="currentColor"
-					class="bi bi-chevron-right"
-					viewBox="0 0 16 16"
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="18"
+						height="18"
+						fill="currentColor"
+						class="bi bi-chevron-left"
+						viewBox="0 0 16 16"
+					>
+						<path
+							fill-rule="evenodd"
+							d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
+						/>
+					</svg>
+				</button>
+				<div
+					role="tooltip"
+					class="pointer-events-none absolute top-full left-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 				>
-					<path
-						fill-rule="evenodd"
-						d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-					/>
-				</svg>
-			</button>
+					<span>Previous day</span>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>ctrl</span
+					>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>p</span
+					>
+				</div>
+			</div>
+			<div class="group relative">
+				<button
+					type="button"
+					class="flex h-9 w-32 items-center justify-center gap-2 rounded-sm text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
+					disabled={isActiveDayToday}
+					onclick={() => {
+						activeDayDateStore?.set(localToday());
+					}}
+					aria-label="Jump to today"
+				>
+					<span>{activeDayLabel}</span>
+				</button>
+				<div
+					role="tooltip"
+					class="pointer-events-none absolute top-full left-1/2 mt-2 flex -translate-x-1/2 items-center gap-2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+				>
+					<span>Today</span>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>T</span
+					>
+				</div>
+			</div>
+			<div class="group relative">
+				<button
+					type="button"
+					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
+					aria-label="Next day"
+					onclick={() => activeDayDateStore?.set(addDaysToDateString(activeDayDate, 1))}
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="18"
+						height="18"
+						fill="currentColor"
+						class="bi bi-chevron-right"
+						viewBox="0 0 16 16"
+					>
+						<path
+							fill-rule="evenodd"
+							d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
+						/>
+					</svg>
+				</button>
+				<div
+					role="tooltip"
+					class="pointer-events-none absolute top-full right-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+				>
+					<span>Next day</span>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>ctrl</span
+					>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>n</span
+					>
+				</div>
+			</div>
 		</div>
 	</div>
 
-	<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2 translate-y-0.5">
+	<div class="pointer-events-none fixed top-4 left-1/2 z-[300] -translate-x-1/2">
 		{#if $goalBarStore.viewerId}
 			<div
-				class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase transition"
+				class="pointer-events-auto flex flex-col items-center gap-1 text-[17px] leading-none font-semibold tracking-wide text-stone-800 uppercase transition"
 			>
 				{#key $goalBarStore.displayGoalKey}
 					<span
 						in:fly={{ y: 4, delay: 400, duration: 200 }}
 						out:fade={{ duration: 160 }}
-						class="flex h-11 items-center gap-2 rounded-sm px-4"
+						class="flex h-9 items-center gap-0 rounded-sm px-4"
 					>
-						<button
-							type="button"
-							class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-							class:bg-stone-100={$goalBarStore.pinnedGoalKey === $goalBarStore.displayGoalKey}
-							onclick={() => goalBarActions?.togglePinnedGoal($goalBarStore.displayGoalKey)}
-						>
-							<span class="font-semibold tracking-wide text-stone-400">
-								{$goalBarStore.displayRangeLabel}
-							</span>
-						</button>
-						<button
-							type="button"
-							class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-							onclick={() => goalBarActions?.openGoalModal()}
-						>
-							{$goalBarStore.displayGoalEntry.title || 'Milestone'}
-						</button>
+						<div class="group relative">
+							<button
+								type="button"
+								class="h-9 rounded-sm px-3 hover:bg-stone-100"
+								class:bg-stone-100={$goalBarStore.pinnedGoalKey === $goalBarStore.displayGoalKey}
+								onclick={() => goalBarActions?.togglePinnedGoal($goalBarStore.displayGoalKey)}
+							>
+								<span class="font-semibold tracking-wide text-stone-400">
+									{$goalBarStore.displayRangeLabel}
+								</span>
+							</button>
+							<div
+								role="tooltip"
+								class="pointer-events-none absolute top-full left-1/2 mt-2 -translate-x-1/2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium tracking-normal whitespace-nowrap text-white normal-case opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+							>
+								Pin goal
+							</div>
+						</div>
+						<div class="group relative">
+							<button
+								type="button"
+								class="h-9 rounded-sm px-3 hover:bg-stone-100"
+								onclick={() => goalBarActions?.openGoalModal()}
+							>
+								{$goalBarStore.displayGoalEntry.title || 'Milestone'}
+							</button>
+							<div
+								role="tooltip"
+								class="pointer-events-none absolute top-full left-1/2 mt-2 flex -translate-x-1/2 items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium tracking-normal whitespace-nowrap text-white normal-case opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+							>
+								<span>Goals</span>
+								<span
+									class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+									>o</span
+								>
+								<span
+									class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+									>g</span
+								>
+							</div>
+						</div>
 					</span>
 				{/key}
 			</div>
 		{:else}
 			<div
-				class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase"
+				class="pointer-events-auto flex flex-col items-center gap-1 text-[17px] leading-none font-semibold tracking-wide text-stone-800 uppercase"
 			>
 				<span>{$goalBarStore.yearGoalTitle || 'Milestone'}</span>
 				<span class="text-[15px] font-semibold tracking-wide text-stone-400">
@@ -5150,33 +5733,47 @@
 {/if}
 
 {#if viewerUserId}
-	<div class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col items-end">
+	<div class="pointer-events-none fixed top-4 right-4 z-[300] flex flex-col items-end">
 		<div class="pointer-events-auto relative flex items-center">
-			<button
-				type="button"
-				class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
-				aria-label="Toggle calendar"
-				onclick={() => {
-					const nextOpen = !heatmapOpen;
-					heatmapOpen = nextOpen;
-					if (nextOpen) {
-						void loadHeatmap(viewerUserId);
-					}
-				}}
-			>
-				<svg
-					xmlns="http://www.w3.org/2000/svg"
-					width="18"
-					height="18"
-					fill="currentColor"
-					class="bi bi-calendar-fill"
-					viewBox="0 0 16 16"
+			<div class="group relative">
+				<button
+					type="button"
+					class="rounded-sm p-2 text-stone-500 transition hover:bg-stone-300/50"
+					aria-label="Toggle calendar"
+					onclick={() => {
+						const nextOpen = !heatmapOpen;
+						heatmapOpen = nextOpen;
+						if (nextOpen) {
+							void loadHeatmap(viewerUserId);
+						}
+					}}
 				>
-					<path
-						d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5h16V4H0V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5"
-					/>
-				</svg>
-			</button>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="18"
+						height="18"
+						fill="currentColor"
+						class="bi bi-calendar-fill"
+						viewBox="0 0 16 16"
+					>
+						<path
+							d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V5h16V4H0V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5"
+						/>
+					</svg>
+				</button>
+				<div
+					role="tooltip"
+					class="pointer-events-none absolute top-full right-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+				>
+					<span>Calendar</span>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>o</span
+					>
+					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+						>c</span
+					>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}
@@ -5252,6 +5849,7 @@
 											{#each dayEvents as event, index}
 												{@const isPastEvent = event.due_date < localToday()}
 												{@const isMilestone = isMilestoneEvent(event)}
+												{@const isGoal = isGoalEvent(event)}
 												<button
 													type="button"
 													class={`calendar-event-item ${
@@ -5260,12 +5858,12 @@
 															: ''
 													} ${isPastEvent && !isMilestone ? 'calendar-event-past' : ''} ${
 														isMilestone ? 'calendar-event-milestone' : ''
-													}`}
-													disabled={isMilestoneEvent(event)}
+													} ${isGoal ? 'calendar-event-goal' : ''}`}
+													disabled={isMilestone}
 													onclick={(e) => {
 														e.stopPropagation();
 														handleCalendarSelect(dateKey);
-														if (!isMilestoneEvent(event)) openEventModal(event);
+														if (!isMilestone) openEventModal(event);
 													}}
 												>
 													<span class="calendar-event-title">{event.title}</span>
@@ -5446,16 +6044,19 @@
 							{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
 							<div class="flex min-w-0 flex-1 flex-col space-y-2 transition-opacity">
 								<div class="flex h-10 items-center gap-3">
-									{#if trackedKey}
-										<PlayerStatusTag
-											label={isSinglePlayerView
-												? dayLabelForUser(person.user_id)
-												: (playerDisplays[trackedKey]?.label ?? null)}
-											status={playerStatuses[trackedKey]}
-											me={person.user_id === viewerUserId}
-											streak={streakByUser[person.user_id] ?? null}
-										/>
-									{/if}
+									<PlayerStatusTag
+										label={isSinglePlayerView
+											? dayLabelForUser(person.user_id)
+											: trackedKey
+												? (playerDisplays[trackedKey]?.label ?? null)
+												: person.label}
+										status={trackedKey ? playerStatuses[trackedKey] : 'offline'}
+										me={person.user_id === viewerUserId}
+										streak={trackedKey ? (streakByUser[person.user_id] ?? null) : null}
+										dotClass={person.user_id === viewerUserId
+											? heatmapDotClass(todayHeatmapPctForUser(person.user_id))
+											: null}
+									/>
 								</div>
 
 								{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
@@ -5592,11 +6193,13 @@
 										<div class="text-sm text-stone-400">No upcoming events yet.</div>
 									{:else}
 										{#each upcomingEvents as event, index}
+											{@const isMilestone = isMilestoneEvent(event)}
+											{@const eventCategory = event.category ?? null}
 											<button
 												type="button"
-												disabled={isMilestoneEvent(event)}
-												class={`flex w-full flex-row justify-between rounded-lg p-5 text-left transition disabled:cursor-default ${
-													isMilestoneEvent(event) ? 'bg-stone-50' : 'bg-stone-100'
+												aria-disabled={isMilestone}
+												class={`flex w-full flex-row justify-between rounded-lg p-5 text-left transition ${
+													isMilestone ? 'cursor-default bg-stone-50' : 'bg-stone-100'
 												}`}
 												class:ring-1={focusPane === 'upcoming' && upcomingSelectionIndex === index}
 												class:ring-stone-400={focusPane === 'upcoming' &&
@@ -5607,11 +6210,92 @@
 													upcomingSelectionIndex === index}
 												onpointerenter={() => focusUpcoming(index)}
 												onpointerdown={() => focusUpcoming(index)}
+												onfocus={() => focusUpcoming(index)}
 												onclick={() => {
-													if (!isMilestoneEvent(event)) openEventModal(event);
+													focusUpcoming(index);
+													if (!isMilestone) openEventModal(event);
 												}}
 											>
-												<div class="text-sm font-medium text-stone-800">{event.title}</div>
+												<div class="flex items-center gap-2 text-sm font-medium text-stone-800">
+													<span
+														class={`flex h-4 w-4 items-center justify-center ${eventCategoryClass(eventCategory)}`}
+													>
+														{#if isMilestone}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																width="16"
+																height="16"
+																fill="currentColor"
+																viewBox="0 0 16 16"
+															>
+																<path
+																	d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+																/>
+																<path
+																	fill-rule="evenodd"
+																	d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+																/>
+															</svg>
+														{:else if eventCategory === 'rest'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-4 w-4"
+																fill="currentColor"
+															>
+																<path
+																	d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+																/>
+															</svg>
+														{:else if eventCategory === 'body'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-4 w-4"
+																fill="currentColor"
+															>
+																<path
+																	d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+																/>
+															</svg>
+														{:else if eventCategory === 'work'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-4 w-4"
+																fill="currentColor"
+															>
+																<path
+																	d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+																/>
+															</svg>
+														{:else if eventCategory === 'admin'}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-4 w-4"
+																fill="currentColor"
+															>
+																<path
+																	d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+																/>
+															</svg>
+														{:else}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 16 16"
+																class="h-4 w-4"
+																fill="currentColor"
+																aria-hidden="true"
+															>
+																<path
+																	d="M2 2v13.5a.5.5 0 0 0 .74.439L8 13.069l5.26 2.87A.5.5 0 0 0 14 15.5V2a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2"
+																/>
+															</svg>
+														{/if}
+													</span>
+													<span>{event.title}</span>
+												</div>
 												<div class="flex items-center justify-end gap-2 text-sm text-stone-500">
 													<span>{daysUntilLabel(event.due_date)}</span>
 													<span class="text-stone-300">·</span>
@@ -5803,6 +6487,20 @@
 	isHabit={false}
 	mode="copy"
 	loading={isCopySubmitting}
+/>
+<ConfirmMoveModal
+	open={pendingEventPaste !== null}
+	onCancel={cancelPendingEventPaste}
+	onConfirm={() => void confirmPendingEventPaste()}
+	blockLabel={pendingEventPasteSummary?.blockLabel ?? ''}
+	fromLabel={pendingEventPasteSummary?.fromLabel ?? ''}
+	toLabel={pendingEventPasteSummary?.toLabel ?? ''}
+	destinationLabel={pendingEventPasteSummary?.destinationLabel ?? null}
+	hasDestinationContent={pendingEventPasteSummary?.hasDestinationContent ?? false}
+	isHabit={false}
+	mode="copy"
+	itemType="event"
+	loading={isEventPasteSubmitting}
 />
 <ConfirmMoveModal
 	open={pendingDelete !== null}
@@ -6078,6 +6776,20 @@
 
 	.calendar-event-selected.calendar-event-milestone {
 		background: #9ca3af;
+		color: #fff;
+	}
+
+	.calendar-event-goal {
+		background: #fef9c3;
+		color: #92400e;
+	}
+
+	.calendar-event-goal::before {
+		background: #facc15;
+	}
+
+	.calendar-event-selected.calendar-event-goal {
+		background: #eab308;
 		color: #fff;
 	}
 
