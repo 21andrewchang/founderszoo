@@ -114,11 +114,21 @@
 	let goalFilter = $state<GoalFilter>('This Year');
 	let collapsedGoalSections = $state<Record<string, boolean>>({});
 
-	const isGoalSectionCollapsed = (key: string) => Boolean(collapsedGoalSections[key]);
+	const isGoalSectionCollapsed = (key: string) => {
+		const hasExplicitSetting = Object.prototype.hasOwnProperty.call(collapsedGoalSections, key);
+		if (hasExplicitSetting) return Boolean(collapsedGoalSections[key]);
+		if (key === 'year') return false;
+		if (goalFilter !== 'This Year') {
+			const monthIndex = MONTH_INDEX_BY_KEY.get(key);
+			if (monthIndex !== undefined && monthIndex < CURRENT_MONTH_INDEX) return true;
+		}
+		return false;
+	};
 	const toggleGoalSection = (key: string) => {
+		const nextCollapsed = !isGoalSectionCollapsed(key);
 		collapsedGoalSections = {
 			...collapsedGoalSections,
-			[key]: !collapsedGoalSections[key]
+			[key]: nextCollapsed
 		};
 	};
 
@@ -240,6 +250,8 @@
 		'November',
 		'December'
 	];
+	const CURRENT_MONTH_INDEX = new Date().getMonth();
+	const MONTH_INDEX_BY_KEY = new Map(MONTHS.map((month, index) => [month.toLowerCase(), index]));
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
 	const blockTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;
@@ -336,6 +348,7 @@
 		title: string;
 		due_date: string;
 		category?: BlockCategory | null;
+		done?: boolean | null;
 	};
 	let upcomingEvents = $state<UpcomingEvent[]>([]);
 	let upcomingEventsLoading = $state(false);
@@ -510,6 +523,8 @@
 	let logEventMode = $state(false);
 	let logDueDate = $state('');
 	let logEventId = $state<string | null>(null);
+	let logTodoMode = $state(false);
+	let logTodoDone = $state<boolean | null>(null);
 	let focusPane = $state<'grid' | 'upcoming'>('grid');
 	let upcomingSelectionIndex = $state<number | null>(null);
 	type BlockCarryoverPrompt = {
@@ -598,10 +613,14 @@
 	let commandCount = $state<number | null>(null);
 	let pendingG = $state(false);
 	let pendingO = $state(false);
+	let pendingN = $state(false);
 	let pendingCalendarG = $state(false);
 	let pendingCalendarTimeout: number | null = null;
 	let pendingOTimer: number | null = null;
+	let pendingNTimer: number | null = null;
 	let debugShortcuts = $state(false);
+	let todoEventByBlockKey = $state<Record<string, string>>({});
+	let todoAnimByEvent = $state<Record<string, 'none' | 'check' | 'uncheck'>>({});
 	let dragImageEl: HTMLElement | null = null;
 	let cutBlock = $state<CutBlock | null>(null);
 	let copyBlock = $state<CopyBlock | null>(null);
@@ -710,6 +729,44 @@
 
 	const isMilestoneEvent = (event: UpcomingEvent) => event.id.startsWith('milestone-');
 	const isGoalEvent = (event: UpcomingEvent) => event.id.startsWith('goal-');
+	const isTodoEvent = (event: UpcomingEvent) => event.done !== null && event.done !== undefined;
+	const todoEventForBlock = (user_id: string, hour: number, half: 0 | 1) => {
+		const dateStr = displayDateForUser(user_id);
+		const key = blockKey(user_id, dateStr, hour, half);
+		const mappedId = todoEventByBlockKey[key];
+		if (mappedId) {
+			return upcomingEvents.find((event) => event.id === mappedId) ?? null;
+		}
+		const title = getTitle(user_id, hour, half).trim();
+		if (!title) return null;
+		return (
+			upcomingEvents.find(
+				(event) => isTodoEvent(event) && event.title.trim() === title && event.due_date === dateStr
+			) ?? null
+		);
+	};
+	const triggerTodoAnim = (eventId: string, kind: 'check' | 'uncheck') => {
+		if (typeof window === 'undefined') return;
+		todoAnimByEvent = { ...todoAnimByEvent, [eventId]: 'none' };
+		requestAnimationFrame(() => {
+			todoAnimByEvent = { ...todoAnimByEvent, [eventId]: kind };
+			window.setTimeout(() => {
+				todoAnimByEvent = { ...todoAnimByEvent, [eventId]: 'none' };
+			}, 220);
+		});
+	};
+	const sortUpcomingEvents = (events: UpcomingEvent[]) =>
+		[...events].sort((a, b) => {
+			const aTodo = isTodoEvent(a) ? 0 : 1;
+			const bTodo = isTodoEvent(b) ? 0 : 1;
+			if (aTodo !== bTodo) return aTodo - bTodo;
+			if (aTodo === 0 && bTodo === 0) {
+				const aDone = a.done === true ? 1 : 0;
+				const bDone = b.done === true ? 1 : 0;
+				if (aDone !== bDone) return aDone - bDone;
+			}
+			return a.due_date.localeCompare(b.due_date);
+		});
 	const eventCategoryClass = (category: BlockCategory | null | undefined) =>
 		(category ? SUMMARY_CATEGORY_CLASSES[category] : null) ?? 'text-stone-400';
 	const calendarEventAccent = (category: BlockCategory | null | undefined) =>
@@ -1347,7 +1404,8 @@
 				id: `goal-${entry.goal_key}`,
 				title,
 				due_date: entry.due_date,
-				category: null
+				category: null,
+				done: null
 			});
 		};
 		addEntry(state.yearGoalEntry);
@@ -2326,6 +2384,8 @@
 			if (!day_id) return false;
 			const destinationHabit = getHabitEntry(user_id, toHour, toHalf);
 			if (destinationHabit) return false;
+			const isTodo = isTodoEvent(event);
+			const nextStatus = isTodo ? (event.done ?? false) : null;
 
 			pushUndoAction(user_id, day_id, [{ hour: toHour, half: toHalf }]);
 
@@ -2336,7 +2396,7 @@
 						hour: toHour,
 						half: toHalf === 1,
 						title: event.title ?? '',
-						status: null,
+						status: nextStatus,
 						category: event.category ?? null
 					}
 				],
@@ -2347,7 +2407,12 @@
 				return false;
 			}
 
-			setTitle(user_id, toHour, toHalf, event.title ?? '', null, event.category ?? null);
+			setTitle(user_id, toHour, toHalf, event.title ?? '', nextStatus, event.category ?? null);
+			if (isTodo) {
+				const dateStr = displayDateForUser(user_id);
+				const key = blockKey(user_id, dateStr, toHour, toHalf);
+				todoEventByBlockKey = { ...todoEventByBlockKey, [key]: event.id };
+			}
 			if (viewerUserId === user_id) {
 				const hourIndex = getHourIndex(toHour);
 				if (hourIndex !== -1) {
@@ -2489,10 +2554,10 @@
 		const originalEvent = cutEvent;
 		const previousEvents = upcomingEvents;
 		const updatedEvent = { ...originalEvent, due_date: targetDate };
-		upcomingEvents = [
+		upcomingEvents = sortUpcomingEvents([
 			...upcomingEvents.filter((entry) => entry.id !== originalEvent.id),
 			updatedEvent
-		].sort((a, b) => a.due_date.localeCompare(b.due_date));
+		]);
 		cutEvent = null;
 		cutEventSourceDate = null;
 		calendarEventIndex = null;
@@ -2558,6 +2623,57 @@
 
 	function isOptimisticEvent(event: UpcomingEvent) {
 		return event.id.startsWith('optimistic-');
+	}
+
+	async function toggleTodoDone(event: UpcomingEvent) {
+		if (!viewerUserId) return false;
+		if (!isTodoEvent(event) || isMilestoneEvent(event)) return false;
+		const nextDone = !event.done;
+		triggerTodoAnim(event.id, nextDone ? 'check' : 'uncheck');
+		const previousEvents = upcomingEvents;
+		upcomingEvents = sortUpcomingEvents(
+			upcomingEvents.map((entry) => (entry.id === event.id ? { ...entry, done: nextDone } : entry))
+		);
+		if (isOptimisticEvent(event)) return true;
+		try {
+			const { error } = await supabase
+				.from('events')
+				.update({ done: nextDone })
+				.eq('id', event.id)
+				.eq('user_id', viewerUserId);
+			if (error) throw error;
+			return true;
+		} catch (error) {
+			console.error('todo toggle error', { user_id: viewerUserId, error });
+			upcomingEvents = previousEvents;
+			return false;
+		}
+	}
+
+	async function setTodoDone(eventId: string, done: boolean) {
+		if (!viewerUserId) return false;
+		const target = upcomingEvents.find((event) => event.id === eventId);
+		if (!target || !isTodoEvent(target) || isMilestoneEvent(target)) return false;
+		if (target.done === done) return false;
+		triggerTodoAnim(eventId, done ? 'check' : 'uncheck');
+		const previousEvents = upcomingEvents;
+		upcomingEvents = sortUpcomingEvents(
+			upcomingEvents.map((entry) => (entry.id === eventId ? { ...entry, done } : entry))
+		);
+		if (isOptimisticEvent(target)) return true;
+		try {
+			const { error } = await supabase
+				.from('events')
+				.update({ done })
+				.eq('id', eventId)
+				.eq('user_id', viewerUserId);
+			if (error) throw error;
+			return true;
+		} catch (error) {
+			console.error('todo update error', { user_id: viewerUserId, error });
+			upcomingEvents = previousEvents;
+			return false;
+		}
 	}
 
 	function triggerBadStatusShake(user_id: string, hour: number, half: 0 | 1) {
@@ -2986,6 +3102,15 @@
 					openEventModal(entry);
 				}
 				event.preventDefault();
+				return;
+			}
+			if (normalized === 'Enter') {
+				const idx = upcomingSelectionIndex ?? 0;
+				const entry = upcomingEvents[idx];
+				if (entry && isTodoEvent(entry) && !isMilestoneEvent(entry)) {
+					void toggleTodoDone(entry);
+					event.preventDefault();
+				}
 				return;
 			}
 			return;
@@ -3604,7 +3729,7 @@
 			const yearEnd = formatDateString(endOfYear(now));
 			const { data, error } = await supabase
 				.from('events')
-				.select('id, title, due_date, category')
+				.select('id, title, due_date, category, done')
 				.eq('user_id', user_id)
 				.order('due_date', { ascending: true });
 			if (error) throw error;
@@ -3613,7 +3738,8 @@
 					id: row.id as string,
 					title: (row.title as string | null) ?? '',
 					due_date: (row.due_date as string | null) ?? '',
-					category: normalizeBlockCategory(row.category)
+					category: normalizeBlockCategory(row.category),
+					done: (row.done as boolean | null) ?? null
 				}))
 				.filter((event) => Boolean(event.title && event.due_date))
 				.filter((event) => event.due_date >= today && event.due_date <= yearEnd);
@@ -3622,25 +3748,32 @@
 					id: 'milestone-week',
 					title: 'End of week review',
 					due_date: formatDateString(endOfWeek(now)),
-					category: null
+					category: null,
+					done: null
 				},
 				{
 					id: 'milestone-month',
 					title: 'End of month review',
 					due_date: formatDateString(endOfMonth(now)),
-					category: null
+					category: null,
+					done: null
 				},
 				{
 					id: 'milestone-quarter',
 					title: `End of ${quarterLabel(now)} review`,
 					due_date: formatDateString(endOfQuarter(now)),
-					category: null
+					category: null,
+					done: null
 				},
-				{ id: 'milestone-year', title: 'End of year review', due_date: yearEnd, category: null }
+				{
+					id: 'milestone-year',
+					title: 'End of year review',
+					due_date: yearEnd,
+					category: null,
+					done: null
+				}
 			].filter((event) => event.due_date >= today && event.due_date <= yearEnd);
-			upcomingEvents = [...milestoneEvents, ...dbEvents].sort((a, b) =>
-				a.due_date.localeCompare(b.due_date)
-			);
+			upcomingEvents = sortUpcomingEvents([...milestoneEvents, ...dbEvents]);
 		} catch (error) {
 			console.error('events load error', { user_id, error });
 			upcomingEvents = [];
@@ -3708,6 +3841,29 @@
 		logEventMode = true;
 		logEventId = event?.id ?? null;
 		logDueDate = event?.due_date ?? fallback;
+		logTodoMode = event?.done !== null && event?.done !== undefined;
+		logTodoDone = event?.done ?? null;
+		draft = {
+			user_id: viewerUserId,
+			hour: START_HOUR,
+			half: 0,
+			title: event?.title ?? '',
+			status: null,
+			category: event?.category ?? null,
+			habit: null
+		};
+		editorMode = false;
+		logOpen = true;
+	}
+
+	function openTodoModal(event?: UpcomingEvent) {
+		if (!viewerUserId) return;
+		const fallback = localToday();
+		logEventMode = true;
+		logEventId = event?.id ?? null;
+		logDueDate = event?.due_date ?? fallback;
+		logTodoMode = true;
+		logTodoDone = event?.done ?? false;
 		draft = {
 			user_id: viewerUserId,
 			hour: START_HOUR,
@@ -3726,6 +3882,8 @@
 		logEventMode = true;
 		logEventId = null;
 		logDueDate = dateStr;
+		logTodoMode = false;
+		logTodoDone = null;
 		draft = {
 			user_id: viewerUserId,
 			hour: START_HOUR,
@@ -3744,6 +3902,8 @@
 		logEventMode = false;
 		logEventId = null;
 		logDueDate = '';
+		logTodoMode = false;
+		logTodoDone = null;
 		if (!viewerUserId) return;
 		hoverBlock = null;
 		suppressHoverSelection = true;
@@ -3758,7 +3918,9 @@
 		category: BlockCategory | null,
 		habitConfig: HabitSaveConfig | null,
 		eventMode: boolean,
-		dueDate: string
+		dueDate: string,
+		todoMode: boolean,
+		todoDone: boolean | null
 	) {
 		const { user_id } = draft;
 		if (!user_id || hour == null || half == null) return;
@@ -3766,24 +3928,31 @@
 			const trimmedTitle = text.trim();
 			const trimmedDate = dueDate.trim();
 			if (!trimmedTitle || !trimmedDate) return;
+			const doneValue = todoMode ? (todoDone ?? false) : null;
 			const prevUpcomingEvents = upcomingEvents;
 			try {
 				if (logEventId) {
-					upcomingEvents = upcomingEvents
-						.map((event) =>
+					upcomingEvents = sortUpcomingEvents(
+						upcomingEvents.map((event) =>
 							event.id === logEventId
 								? {
 										...event,
 										title: trimmedTitle,
 										due_date: trimmedDate,
-										category: category ?? null
+										category: category ?? null,
+										done: doneValue
 									}
 								: event
 						)
-						.sort((a, b) => a.due_date.localeCompare(b.due_date));
+					);
 					const { error } = await supabase
 						.from('events')
-						.update({ title: trimmedTitle, due_date: trimmedDate, category: category ?? null })
+						.update({
+							title: trimmedTitle,
+							due_date: trimmedDate,
+							category: category ?? null,
+							done: doneValue
+						})
 						.eq('id', logEventId)
 						.eq('user_id', user_id);
 					if (error) throw error;
@@ -3793,35 +3962,36 @@
 						id: tempId,
 						title: trimmedTitle,
 						due_date: trimmedDate,
-						category: category ?? null
+						category: category ?? null,
+						done: doneValue
 					};
-					upcomingEvents = [...upcomingEvents, optimisticEvent].sort((a, b) =>
-						a.due_date.localeCompare(b.due_date)
-					);
+					upcomingEvents = sortUpcomingEvents([...upcomingEvents, optimisticEvent]);
 					const { data, error } = await supabase
 						.from('events')
 						.insert({
 							user_id,
 							title: trimmedTitle,
 							due_date: trimmedDate,
-							category: category ?? null
+							category: category ?? null,
+							done: doneValue
 						})
-						.select('id, title, due_date, category')
+						.select('id, title, due_date, category, done')
 						.single();
 					if (error) throw error;
 					if (data) {
-						upcomingEvents = upcomingEvents
-							.map((event) =>
+						upcomingEvents = sortUpcomingEvents(
+							upcomingEvents.map((event) =>
 								event.id === tempId
 									? {
 											id: data.id as string,
 											title: (data.title as string | null) ?? trimmedTitle,
 											due_date: (data.due_date as string | null) ?? trimmedDate,
-											category: normalizeBlockCategory(data.category)
+											category: normalizeBlockCategory(data.category),
+											done: (data.done as boolean | null) ?? doneValue
 										}
 									: event
 							)
-							.sort((a, b) => a.due_date.localeCompare(b.due_date));
+						);
 					}
 				}
 				logEventId = null;
@@ -4168,7 +4338,17 @@
 		}
 		const title = (block.title ?? '').trim();
 		if (!title) return;
-		const nextStatus = block.status === null ? false : block.status === false ? true : null;
+		const todoEvent = todoEventForBlock(user_id, hour, half);
+		const isTodoBlock = Boolean(todoEvent);
+		const nextStatus = isTodoBlock
+			? block.status === true
+				? false
+				: true
+			: block.status === null
+				? false
+				: block.status === false
+					? true
+					: null;
 		const hourIndex = getHourIndex(hour);
 		if (hourIndex === -1) return;
 		const { startIndex, endIndex } = blockRunRange(user_id, hour, half);
@@ -4209,6 +4389,9 @@
 		}
 		for (const update of updates) {
 			setStatus(user_id, update.hour, update.half ? 1 : 0, nextStatus);
+		}
+		if (isTodoBlock && todoEvent) {
+			void setTodoDone(todoEvent.id, nextStatus === true);
 		}
 		scheduleCompletionRefresh(user_id);
 	}
@@ -4461,6 +4644,16 @@
 		if (pendingOTimer !== null) {
 			window.clearTimeout(pendingOTimer);
 			pendingOTimer = null;
+		}
+	}
+	function resetPendingN(reason = 'unknown') {
+		if (debugShortcuts) {
+			console.log('shortcut:resetN', { reason, pendingN });
+		}
+		pendingN = false;
+		if (pendingNTimer !== null) {
+			window.clearTimeout(pendingNTimer);
+			pendingNTimer = null;
 		}
 	}
 	async function confirmPendingDelete() {
@@ -5266,6 +5459,7 @@
 					shift: event.shiftKey,
 					typingTarget,
 					pendingO,
+					pendingN,
 					modalOverlayActive,
 					goalModalOpen: $goalModalStore?.isOpen ?? false,
 					heatmapOpen
@@ -5275,6 +5469,9 @@
 			const normalized = event.key.toLowerCase();
 			const keyCode = event.code;
 			const isKeyO = normalized === 'o' || keyCode === 'KeyO';
+			const isKeyN = normalized === 'n' || keyCode === 'KeyN';
+			const isKeyE = normalized === 'e' || keyCode === 'KeyE';
+			const isKeyT = normalized === 't' || keyCode === 'KeyT';
 			const isKeyG = normalized === 'g' || keyCode === 'KeyG';
 			const isKeyC = normalized === 'c' || keyCode === 'KeyC';
 			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
@@ -5299,12 +5496,43 @@
 					}
 					resetPendingO('mismatch');
 				}
+				if (pendingN) {
+					if (isKeyE) {
+						if (debugShortcuts) console.log('shortcut:newEvent');
+						if (!modalOverlayActive) {
+							openEventModal();
+						}
+						resetPendingN('event');
+						event.preventDefault();
+						return;
+					}
+					if (isKeyT) {
+						if (debugShortcuts) console.log('shortcut:newTodo');
+						if (!modalOverlayActive) {
+							openTodoModal();
+						}
+						resetPendingN('todo');
+						event.preventDefault();
+						return;
+					}
+					resetPendingN('mismatch');
+				}
 				if (isKeyO) {
 					pendingO = true;
 					if (debugShortcuts) console.log('shortcut:pendingO', { pendingO });
 					if (pendingOTimer !== null) window.clearTimeout(pendingOTimer);
 					pendingOTimer = window.setTimeout(() => {
 						resetPendingO('timeout');
+					}, 900);
+					event.preventDefault();
+					return;
+				}
+				if (isKeyN) {
+					pendingN = true;
+					if (debugShortcuts) console.log('shortcut:pendingN', { pendingN });
+					if (pendingNTimer !== null) window.clearTimeout(pendingNTimer);
+					pendingNTimer = window.setTimeout(() => {
+						resetPendingN('timeout');
 					}, 900);
 					event.preventDefault();
 					return;
@@ -5684,10 +5912,12 @@
 					class="pointer-events-none absolute top-full left-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 				>
 					<span>Previous day</span>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>ctrl</span
 					>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>p</span
 					>
 				</div>
@@ -5709,7 +5939,8 @@
 					class="pointer-events-none absolute top-full left-1/2 mt-2 flex -translate-x-1/2 items-center gap-2 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 				>
 					<span>Today</span>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>T</span
 					>
 				</div>
@@ -5740,10 +5971,12 @@
 					class="pointer-events-none absolute top-full right-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 				>
 					<span>Next day</span>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>ctrl</span
 					>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>n</span
 					>
 				</div>
@@ -5794,11 +6027,11 @@
 							>
 								<span>Goals</span>
 								<span
-									class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+									class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 									>o</span
 								>
 								<span
-									class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+									class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 									>g</span
 								>
 							</div>
@@ -5853,10 +6086,12 @@
 					class="pointer-events-none absolute top-full right-0 mt-2 flex items-center gap-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 				>
 					<span>Calendar</span>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>o</span
 					>
-					<span class="rounded bg-stone-500/70 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+					<span
+						class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
 						>c</span
 					>
 				</div>
@@ -5970,11 +6205,19 @@
 																viewBox="0 0 16 16"
 															>
 																<path
-																	d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
+																	d="M9.293 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0M9.5 3.5v-2l3 3h-2a1 1 0 0 1-1-1M4.5 9a.5.5 0 0 1 0-1h7a.5.5 0 0 1 0 1zM4 10.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5m.5 2.5a.5.5 0 0 1 0-1h4a.5.5 0 0 1 0 1z"
 																/>
+															</svg>
+														{:else if isGoal}
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																width="12"
+																height="12"
+																fill="currentColor"
+																viewBox="0 0 16 16"
+															>
 																<path
-																	fill-rule="evenodd"
-																	d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+																	d="M3.612 15.443c-.386.198-.824-.149-.746-.592l.83-4.73L.173 6.765c-.329-.314-.158-.888.283-.95l4.898-.696L7.538.792c.197-.39.73-.39.927 0l2.184 4.327 4.898.696c.441.062.612.636.282.95l-3.522 3.356.83 4.73c.078.443-.36.79-.746.592L8 13.187l-4.389 2.256z"
 																/>
 															</svg>
 														{:else if eventCategory === 'rest'}
@@ -6334,26 +6577,59 @@
 							<div class="relative flex min-w-0 flex-1 flex-col gap-2 pl-0" aria-label="Upcoming">
 								<div class="flex h-10 items-center justify-between">
 									<div class="text-xl font-medium text-stone-800">Upcoming</div>
-									<button
-										type="button"
-										class="flex h-8 w-8 items-center justify-center rounded-md text-lg font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
-										aria-label="New event"
-										onclick={() => openEventModal()}
-									>
-										<svg
-											xmlns="http://www.w3.org/2000/svg"
-											width="20"
-											height="20"
-											fill="currentColor"
-											class="bi bi-plus"
-											viewBox="0 0 16 16"
-											aria-hidden="true"
+									<div class="group relative">
+										<button
+											type="button"
+											class="flex h-8 w-8 items-center justify-center rounded-md text-lg font-semibold text-stone-400 transition hover:bg-stone-100 hover:text-stone-800"
+											aria-label="New event"
+											onclick={() => openEventModal()}
 										>
-											<path
-												d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4"
-											/>
-										</svg>
-									</button>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="20"
+												height="20"
+												fill="currentColor"
+												class="bi bi-plus"
+												viewBox="0 0 16 16"
+												aria-hidden="true"
+											>
+												<path
+													d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4"
+												/>
+											</svg>
+										</button>
+										<div
+											role="tooltip"
+											class="pointer-events-none absolute top-full right-0 mt-2 flex flex-col gap-2 rounded-md bg-stone-700 px-2 py-2 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+										>
+											<div class="flex items-center gap-2">
+												<span>New event</span>
+												<span class="ml-auto flex items-center gap-1">
+													<span
+														class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
+														>n</span
+													>
+													<span
+														class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
+														>e</span
+													>
+												</span>
+											</div>
+											<div class="flex items-center gap-2">
+												<span>New todo</span>
+												<span class="ml-auto flex items-center gap-1">
+													<span
+														class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
+														>n</span
+													>
+													<span
+														class="rounded bg-stone-500/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white tabular-nums"
+														>t</span
+													>
+												</span>
+											</div>
+										</div>
+									</div>
 								</div>
 								<div class="space-y-4">
 									{#if upcomingEventsLoading}
@@ -6364,6 +6640,7 @@
 										{#each upcomingEvents as event, index}
 											{@const isMilestone = isMilestoneEvent(event)}
 											{@const eventCategory = event.category ?? null}
+											{@const isTodo = isTodoEvent(event)}
 											<button
 												type="button"
 												aria-disabled={isMilestone}
@@ -6387,9 +6664,50 @@
 											>
 												<div class="flex items-center gap-2 text-sm font-medium text-stone-800">
 													<span
-														class={`flex h-4 w-4 items-center justify-center ${eventCategoryClass(eventCategory)}`}
+														class={`flex items-center justify-center ${eventCategoryClass(eventCategory)}`}
 													>
-														{#if isMilestone}
+														{#if isTodo}
+															<span
+																class="grid h-[18px] w-[18px] place-items-center rounded-full"
+																class:todo-pop-checked={todoAnimByEvent[event.id] === 'check'}
+																class:todo-pop-unchecked={todoAnimByEvent[event.id] === 'uncheck'}
+																class:bg-stone-700={event.done === true}
+															>
+																{#if event.done === true}
+																	<svg
+																		viewBox="0 0 24 24"
+																		class="h-[18px] w-[18px] text-stone-50"
+																		fill="none"
+																	>
+																		<path
+																			d="M7 12.5 L10.25 15.75 L16.75 9.25"
+																			stroke="currentColor"
+																			stroke-width="2"
+																			stroke-linecap="round"
+																			stroke-linejoin="round"
+																			pathLength="100"
+																			class="todo-check"
+																			class:todo-check-animated={todoAnimByEvent[event.id] ===
+																				'check'}
+																		/>
+																	</svg>
+																{:else}
+																	<svg
+																		viewBox="0 0 24 24"
+																		class="h-[18px] w-[18px] text-stone-700"
+																		fill="none"
+																	>
+																		<circle
+																			cx="12"
+																			cy="12"
+																			r="9"
+																			stroke="currentColor"
+																			stroke-width="2"
+																		/>
+																	</svg>
+																{/if}
+															</span>
+														{:else if isMilestone}
 															<svg
 																xmlns="http://www.w3.org/2000/svg"
 																width="16"
@@ -6398,11 +6716,7 @@
 																viewBox="0 0 16 16"
 															>
 																<path
-																	d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
-																/>
-																<path
-																	fill-rule="evenodd"
-																	d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+																	d="M9.293 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0M9.5 3.5v-2l3 3h-2a1 1 0 0 1-1-1M4.5 9a.5.5 0 0 1 0-1h7a.5.5 0 0 1 0 1zM4 10.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5m.5 2.5a.5.5 0 0 1 0-1h4a.5.5 0 0 1 0 1z"
 																/>
 															</svg>
 														{:else if eventCategory === 'rest'}
@@ -6466,9 +6780,11 @@
 													<span>{event.title}</span>
 												</div>
 												<div class="flex items-center justify-end gap-2 text-sm text-stone-500">
-													<span>{daysUntilLabel(event.due_date)}</span>
-													<span class="text-stone-300">·</span>
-													<span>{formatDisplayDate(event.due_date)}</span>
+													{#if !isTodo}
+														<span>{daysUntilLabel(event.due_date)}</span>
+														<span class="text-stone-300">·</span>
+														<span>{formatDisplayDate(event.due_date)}</span>
+													{/if}
 												</div>
 											</button>
 										{/each}
@@ -6538,6 +6854,8 @@
 	initialCategory={draft.category}
 	initialHabit={draft.habit ? { id: draft.habit.id, repeatDays: draft.habit.repeatDays } : null}
 	initialEventMode={logEventMode}
+	initialTodoMode={logTodoMode}
+	initialTodoDone={logTodoDone}
 	initialDueDate={logDueDate}
 	maxBlockCountFor={(hour, half) => maxBlockCountFor(viewerUserId, hour, half)}
 	runLengthFor={(hour, half) => blockRunLength(viewerUserId, hour, half)}
@@ -6725,6 +7043,58 @@
 	@keyframes block-sheen {
 		100% {
 			transform: translateX(100%);
+		}
+	}
+
+	.todo-pop-checked {
+		animation: todo-pop-checked 0.22s ease-out;
+	}
+
+	.todo-pop-unchecked {
+		animation: todo-pop-unchecked 0.18s ease-in;
+	}
+
+	.todo-check {
+		stroke-dasharray: none;
+		stroke-dashoffset: 0;
+	}
+
+	.todo-check-animated {
+		stroke-dasharray: 100;
+		stroke-dashoffset: 100;
+		animation: todo-draw-check 200ms 100ms ease-out forwards;
+	}
+
+	@keyframes todo-pop-checked {
+		0% {
+			transform: scale(0.9);
+		}
+		40% {
+			transform: scale(1.25);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	@keyframes todo-pop-unchecked {
+		0% {
+			transform: scale(1);
+		}
+		40% {
+			transform: scale(0.85);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	@keyframes todo-draw-check {
+		from {
+			stroke-dashoffset: 100;
+		}
+		to {
+			stroke-dashoffset: 0;
 		}
 	}
 
