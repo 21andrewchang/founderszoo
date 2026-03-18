@@ -765,7 +765,9 @@
 				const bDone = b.done === true ? 1 : 0;
 				if (aDone !== bDone) return aDone - bDone;
 			}
-			return a.due_date.localeCompare(b.due_date);
+			const aDate = a.due_date ? a.due_date : '9999-12-31';
+			const bDate = b.due_date ? b.due_date : '9999-12-31';
+			return aDate.localeCompare(bDate);
 		});
 	const eventCategoryClass = (category: BlockCategory | null | undefined) =>
 		(category ? SUMMARY_CATEGORY_CLASSES[category] : null) ?? 'text-stone-400';
@@ -3139,8 +3141,6 @@
 		if ((normalized === 'n' || normalized === 'p') && !modalOverlayActive) {
 			if (!(event.metaKey || event.ctrlKey)) {
 				// allow normal n/p behavior
-			} else if (normalized === 'p' && (cutBlock || copyBlock)) {
-				// allow paste handling
 			} else {
 				const currentDate = displayDateForUser(viewerUserId);
 				const nextDate = addDaysToDateString(currentDate, normalized === 'n' ? 1 : -1);
@@ -3741,8 +3741,12 @@
 					category: normalizeBlockCategory(row.category),
 					done: (row.done as boolean | null) ?? null
 				}))
-				.filter((event) => Boolean(event.title && event.due_date))
-				.filter((event) => event.due_date >= today && event.due_date <= yearEnd);
+				.filter((event) => Boolean(event.title) && (isTodoEvent(event) || Boolean(event.due_date)))
+				.filter((event) =>
+					isTodoEvent(event) && !event.due_date
+						? true
+						: event.due_date >= today && event.due_date <= yearEnd
+				);
 			const milestoneEvents: UpcomingEvent[] = [
 				{
 					id: 'milestone-week',
@@ -3858,10 +3862,9 @@
 
 	function openTodoModal(event?: UpcomingEvent) {
 		if (!viewerUserId) return;
-		const fallback = localToday();
 		logEventMode = true;
 		logEventId = event?.id ?? null;
-		logDueDate = event?.due_date ?? fallback;
+		logDueDate = event?.due_date ?? '';
 		logTodoMode = true;
 		logTodoDone = event?.done ?? false;
 		draft = {
@@ -3927,7 +3930,8 @@
 		if (eventMode) {
 			const trimmedTitle = text.trim();
 			const trimmedDate = dueDate.trim();
-			if (!trimmedTitle || !trimmedDate) return;
+			const resolvedDate = todoMode ? trimmedDate : trimmedDate;
+			if (!trimmedTitle || (!todoMode && !resolvedDate)) return;
 			const doneValue = todoMode ? (todoDone ?? false) : null;
 			const prevUpcomingEvents = upcomingEvents;
 			try {
@@ -3938,7 +3942,7 @@
 								? {
 										...event,
 										title: trimmedTitle,
-										due_date: trimmedDate,
+										due_date: resolvedDate,
 										category: category ?? null,
 										done: doneValue
 									}
@@ -3949,7 +3953,7 @@
 						.from('events')
 						.update({
 							title: trimmedTitle,
-							due_date: trimmedDate,
+							due_date: todoMode && !resolvedDate ? null : resolvedDate,
 							category: category ?? null,
 							done: doneValue
 						})
@@ -3961,7 +3965,7 @@
 					const optimisticEvent: UpcomingEvent = {
 						id: tempId,
 						title: trimmedTitle,
-						due_date: trimmedDate,
+						due_date: resolvedDate,
 						category: category ?? null,
 						done: doneValue
 					};
@@ -3971,7 +3975,7 @@
 						.insert({
 							user_id,
 							title: trimmedTitle,
-							due_date: trimmedDate,
+							due_date: todoMode && !resolvedDate ? null : resolvedDate,
 							category: category ?? null,
 							done: doneValue
 						})
@@ -6780,10 +6784,12 @@
 													<span>{event.title}</span>
 												</div>
 												<div class="flex items-center justify-end gap-2 text-sm text-stone-500">
-													{#if !isTodo}
-														<span>{daysUntilLabel(event.due_date)}</span>
-														<span class="text-stone-300">·</span>
-														<span>{formatDisplayDate(event.due_date)}</span>
+													{#if !isTodo || event.due_date}
+														{#if event.due_date}
+															<span>{daysUntilLabel(event.due_date)}</span>
+															<span class="text-stone-300">·</span>
+															<span>{formatDisplayDate(event.due_date)}</span>
+														{/if}
 													{/if}
 												</div>
 											</button>

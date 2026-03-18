@@ -212,6 +212,11 @@
 	function initDueDate(next: string | null) {
 		const fallback = new Date();
 		const raw = (next ?? '').trim();
+		if (!raw) {
+			dueMonth = '';
+			dueDay = '';
+			return;
+		}
 		const parts = raw.split('-');
 		if (parts.length === 3) {
 			dueMonth = parts[1] ?? '';
@@ -379,7 +384,7 @@
 	async function handleSubmit() {
 		const value = text.trim();
 		if (!value || saving) return;
-		if (eventMode && !dueDate.trim()) return;
+		if (eventMode && !todoMode && !dueDate.trim()) return;
 
 		saving = true;
 		try {
