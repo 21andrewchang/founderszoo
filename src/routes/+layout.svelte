@@ -1,5 +1,4 @@
 <script lang="ts">
-	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { onMount, setContext } from 'svelte';
 	import { fly, blur, scale, fade } from 'svelte/transition';
 	import '../app.css';
@@ -11,7 +10,6 @@
 	import type { User } from '@supabase/supabase-js';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
-	import { useGlobalPresence } from '$lib/presence';
 	import { fetchCompletionByDate } from '$lib/heatmap';
 	import { heatmapStore } from '$lib/heatmapStore';
 	import GrogathLogin from './grogath/+page.svelte';
@@ -22,16 +20,6 @@
 	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
 	const TRACKED_ROOMS = ['/', '/manifesto', '/collection', '/fundamentals'];
-	const links = [
-		{ href: '/manifesto', label: 'Manifesto' },
-		{ href: '/fundamentals', label: 'Fundamentals' },
-		{ href: '/collection', label: 'Collection' }
-	];
-
-	const isActive = (href: string, pathname: string) => {
-		if (href === '/') return pathname === '/';
-		return pathname === href || pathname.startsWith(href + '/');
-	};
 
 	const START_HOUR = 8;
 	const END_HOUR = 24;
@@ -60,7 +48,6 @@
 
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
-	let store = $derived(useGlobalPresence(viewerId));
 
 	const applyUser = (u: User | null) => {
 		session.set({
@@ -143,7 +130,6 @@
 	};
 	type GoalSection = { title: string; items: GoalEntry[] };
 
-	const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
 	const MONTHS = [
 		'January',
 		'February',
@@ -173,12 +159,6 @@
 		'Dec'
 	];
 	const WEEKS = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-	const QUARTER_MONTHS = [
-		MONTHS.slice(0, 3),
-		MONTHS.slice(3, 6),
-		MONTHS.slice(6, 9),
-		MONTHS.slice(9, 12)
-	];
 	const NOW = new Date();
 	const CURRENT_YEAR = NOW.getFullYear();
 	const CURRENT_MONTH_INDEX = NOW.getMonth();
@@ -190,8 +170,6 @@
 		MONTHS.map((label) => [label.toLowerCase().slice(0, 3), label.toLowerCase()])
 	);
 	const CURRENT_MONTH_KEY = MONTHS[CURRENT_MONTH_INDEX]?.toLowerCase() ?? 'january';
-	const CURRENT_QUARTER_INDEX = Math.floor(CURRENT_MONTH_INDEX / 3);
-	const CURRENT_QUARTER_KEY = QUARTERS[CURRENT_QUARTER_INDEX]?.toLowerCase() ?? 'q1';
 	const CURRENT_WEEK_KEY = `${CURRENT_MONTH_KEY}-week${CURRENT_WEEK_INDEX}`;
 	const YEAR_ENTRY: GoalEntry = {
 		id: null,
@@ -199,22 +177,15 @@
 		goal_key: 'year',
 		due_date: `${CURRENT_YEAR}-12-31`
 	};
-	const QUARTER_STRUCTURE = QUARTERS.map((quarter, quarterIndex) => {
-		const months = QUARTER_MONTHS[quarterIndex].map((month, monthIndex) => {
-			const monthKey = month.toLowerCase();
-			return {
-				label: MONTH_LABELS[quarterIndex * 3 + monthIndex] ?? month,
-				key: monthKey,
-				weeks: WEEKS.map((week, weekIndex) => ({
-					label: week,
-					key: `${monthKey}-week${weekIndex + 1}`
-				}))
-			};
-		});
+	const MONTH_STRUCTURE = MONTHS.map((month, monthIndex) => {
+		const monthKey = month.toLowerCase();
 		return {
-			label: quarter,
-			key: quarter.toLowerCase(),
-			months
+			label: MONTH_LABELS[monthIndex] ?? month,
+			key: monthKey,
+			weeks: WEEKS.map((week, weekIndex) => ({
+				label: week,
+				key: `${monthKey}-week${weekIndex + 1}`
+			}))
 		};
 	});
 
@@ -225,8 +196,8 @@
 	let savingGoals = $state<Record<string, boolean>>({});
 	let goalRotationIndex = $state(0);
 	let pinnedGoalKey = $state<GoalRotationKey | null>(null);
-	let selectedQuarterKey = $state(CURRENT_QUARTER_KEY);
-	type GoalRotationKey = 'year' | 'quarter' | 'month' | 'week' | 'yc-app';
+	let selectedMonthKey = $state(CURRENT_MONTH_KEY);
+	type GoalRotationKey = 'year' | 'month' | 'week';
 	const msPerDay = 24 * 60 * 60 * 1000;
 
 	function parseLocalDate(dateStr: string): Date | null {
@@ -260,16 +231,10 @@
 		const today = startOfDay(new Date());
 		return Math.round((due.getTime() - today.getTime()) / msPerDay);
 	}
-	const GOAL_ROTATION = $derived.by<GoalRotationKey[]>(() => {
-		const base: GoalRotationKey[] = ['year', 'quarter', 'month', 'week'];
-		const days = daysUntilDue(YC_APP_DUE_DATE);
-		if (days !== null && days >= 0) base.push('yc-app');
-		return base;
-	});
+	const GOAL_ROTATION = $derived.by<GoalRotationKey[]>(() => ['year', 'month', 'week']);
 	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Milestone');
 	const yearGoalEntry = $derived(mergedYearEntry());
 	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
-	const currentQuarterEntry = $derived(mergeGoal(CURRENT_QUARTER_KEY));
 	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
 	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
 	const displayGoalKey = $derived(pinnedGoalKey ?? currentGoalKey);
@@ -277,15 +242,6 @@
 	function entryForGoalKey(goalKey: GoalRotationKey) {
 		if (goalKey === 'week') return currentWeekEntry;
 		if (goalKey === 'month') return currentMonthEntry;
-		if (goalKey === 'quarter') return currentQuarterEntry;
-		if (goalKey === 'yc-app') {
-			return {
-				id: null,
-				title: 'YC App',
-				goal_key: 'yc-app',
-				due_date: YC_APP_DUE_DATE
-			};
-		}
 		return yearGoalEntry;
 	}
 
@@ -296,18 +252,7 @@
 		if (goalKey === 'month') {
 			return `${MONTH_LABELS[CURRENT_MONTH_INDEX]}`;
 		}
-		if (goalKey === 'quarter') {
-			return `${QUARTERS[CURRENT_QUARTER_INDEX]}`;
-		}
-		if (goalKey === 'yc-app') {
-			const days = daysUntilDue(YC_APP_DUE_DATE);
-			if (days === null) return 'Days';
-			if (days > 1) return `${days} Days`;
-			if (days === 1) return '1 Day';
-			if (days === 0) return 'Due Today';
-			return 'Days';
-		}
-		return '2026';
+		return String(CURRENT_YEAR);
 	}
 
 	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
@@ -459,7 +404,6 @@
 		const trimmed = goalKey.trim().toLowerCase();
 		if (!trimmed) return trimmed;
 		if (trimmed === 'year') return 'year';
-		if (QUARTERS.some((q) => q.toLowerCase() === trimmed)) return trimmed;
 		if (MONTH_INDEX_BY_KEY[trimmed] !== undefined) return trimmed;
 		const abbrMatch = MONTH_ABBR_BY_KEY[trimmed];
 		if (abbrMatch) return abbrMatch;
@@ -476,13 +420,29 @@
 		return trimmed;
 	}
 
+	function monthKeyFromNumber(month: number | null) {
+		if (!month || month < 1 || month > 12) return null;
+		return MONTHS[month - 1]?.toLowerCase() ?? null;
+	}
+
+	function goalKeyParts(goalKey: string): { month: number | null; week: number | null } {
+		if (goalKey === 'year') return { month: null, week: null };
+		const weekMatch = goalKey.match(/^([a-z]{3,9})-week(\d)$/);
+		if (weekMatch) {
+			const monthKey = normalizeGoalKey(weekMatch[1]);
+			const week = Number(weekMatch[2]);
+			const monthIndex = MONTH_INDEX_BY_KEY[monthKey];
+			return {
+				month: typeof monthIndex === 'number' ? monthIndex + 1 : null,
+				week: Number.isFinite(week) ? week : null
+			};
+		}
+		const monthIndex = MONTH_INDEX_BY_KEY[goalKey];
+		return { month: typeof monthIndex === 'number' ? monthIndex + 1 : null, week: null };
+	}
+
 	function goalDueDateForKey(goalKey: string): string {
 		if (goalKey === 'year') return formatDateString(new Date(CURRENT_YEAR, 11, 31));
-		const quarterIndex = QUARTERS.findIndex((q) => q.toLowerCase() === goalKey);
-		if (quarterIndex !== -1) {
-			const monthIndex = (quarterIndex + 1) * 3 - 1;
-			return formatDateString(endOfMonthDate(CURRENT_YEAR, monthIndex));
-		}
 		const monthIndex = MONTH_INDEX_BY_KEY[goalKey];
 		if (typeof monthIndex === 'number') {
 			return formatDateString(endOfMonthDate(CURRENT_YEAR, monthIndex));
@@ -492,7 +452,8 @@
 		const weekMonthIndex = MONTH_INDEX_BY_KEY[monthKey];
 		if (typeof weekMonthIndex === 'number' && Number.isFinite(weekIndex)) {
 			const lastDay = endOfMonthDate(CURRENT_YEAR, weekMonthIndex).getDate();
-			const day = weekIndex >= 4 ? lastDay : Math.min(lastDay, weekIndex * 7);
+			const cappedWeek = Math.min(4, Math.max(1, weekIndex));
+			const day = Math.min(lastDay, cappedWeek * 7);
 			return formatDateString(new Date(CURRENT_YEAR, weekMonthIndex, day));
 		}
 		return formatDateString(new Date(CURRENT_YEAR, 11, 31));
@@ -1131,22 +1092,25 @@
 		})
 	);
 
-	function mergedQuarterStructure() {
-		return QUARTER_STRUCTURE.map((quarter) => ({
-			...quarter,
-			goal: mergeGoal(quarter.key),
-			months: quarter.months.map((month) => ({
-				...month,
-				goal: mergeGoal(month.key),
-				weeks: month.weeks.map((week) => ({
-					...week,
-					goal: mergeGoal(week.key)
-				}))
+	function mergedMonthStructure() {
+		return MONTH_STRUCTURE.map((month) => ({
+			...month,
+			goal: mergeGoal(month.key),
+			weeks: month.weeks.map((week) => ({
+				...week,
+				goal: mergeGoal(week.key)
 			}))
 		}));
 	}
 
-	function openGoalModal() {
+	function openGoalModal(forceOpen = false) {
+		if (forceOpen) {
+			if (!isGoalModalOpen) {
+				isGoalModalOpen = true;
+			}
+			heatmapOpen = false;
+			return;
+		}
 		const nextOpen = !isGoalModalOpen;
 		isGoalModalOpen = nextOpen;
 		if (nextOpen) {
@@ -1188,24 +1152,56 @@
 	}
 
 	async function saveGoal(goalKey: string) {
+		if (!viewerId) return;
 		const entry = goalsByKey[goalKey] ?? mergeGoal(goalKey);
 		if (!entry.title.trim()) return;
 		const dueDate = goalDueDateForKey(goalKey);
+		const parts = goalKeyParts(goalKey);
 		savingGoals = { ...savingGoals, [goalKey]: true };
 		try {
-			const { data, error } = await supabase
+			let existingId: string | null = null;
+			let lookup = supabase
 				.from('goals')
-				.upsert(
-					{
-						goal_key: goalKey,
-						title: entry.title.trim(),
-						due_date: dueDate,
-						created_at: formatLocalTimestamp(new Date())
-					},
-					{ onConflict: 'goal_key' }
-				)
-				.select('id, title, goal_key, due_date')
-				.single();
+				.select('id')
+				.eq('user_id', viewerId)
+				.eq('year', CURRENT_YEAR);
+			if (parts.month) {
+				lookup = lookup.eq('month', parts.month);
+			} else {
+				lookup = lookup.is('month', null);
+			}
+			if (parts.week) {
+				lookup = lookup.eq('week', parts.week);
+			} else {
+				lookup = lookup.is('week', null);
+			}
+			const { data: existing, error: lookupError } = await lookup.maybeSingle();
+			if (lookupError) throw lookupError;
+			existingId = (existing?.id as string | null) ?? null;
+
+			const payload = {
+				user_id: viewerId,
+				year: CURRENT_YEAR,
+				month: parts.month,
+				week: parts.week,
+				goal_key: goalKey,
+				title: entry.title.trim(),
+				due_date: dueDate,
+				created_at: formatLocalTimestamp(new Date())
+			};
+
+			const { data, error } = existingId
+				? await supabase
+						.from('goals')
+						.update(payload)
+						.eq('id', existingId)
+						.select('id, title, goal_key, due_date')
+						.single()
+				: await supabase
+						.from('goals')
+						.insert(payload)
+						.select('id, title, goal_key, due_date')
+						.single();
 			if (error) throw error;
 			if (data) {
 				goalsByKey = {
@@ -1453,14 +1449,30 @@
 	}
 
 	async function loadGoals() {
+		if (!viewerId) {
+			goalsByKey = {};
+			return;
+		}
 		try {
-			const { data, error } = await supabase.from('goals').select('id, title, goal_key, due_date');
+			const { data, error } = await supabase
+				.from('goals')
+				.select('id, title, goal_key, due_date, year, month, week')
+				.eq('user_id', viewerId)
+				.eq('year', CURRENT_YEAR);
 			if (error) throw error;
 			const next: Record<string, GoalEntry> = {};
 			for (const row of data ?? []) {
 				const rawKey = (row.goal_key as string | null) ?? '';
-				if (!rawKey) continue;
-				const goalKey = normalizeGoalKey(rawKey);
+				const month = (row.month as number | null) ?? null;
+				const week = (row.week as number | null) ?? null;
+				const computedKey = (() => {
+					if (!month && !week) return 'year';
+					const monthKey = monthKeyFromNumber(month);
+					if (!monthKey) return rawKey || 'year';
+					if (!week) return monthKey;
+					return `${monthKey}-week${week}`;
+				})();
+				const goalKey = normalizeGoalKey(rawKey || computedKey);
 				next[goalKey] = {
 					id: row.id as string,
 					title: (row.title ?? '').trim(),
@@ -1503,19 +1515,6 @@
 			heatmapLoading = false;
 		}
 	}
-
-	let presenceCounts = $state({ tabs: 0, unique: 0, connected: false });
-
-	$effect(() => {
-		if (!browser) {
-			presenceCounts = { tabs: 0, unique: 0, connected: false };
-			return;
-		}
-		const unsubscribe = store.subscribe((v) => {
-			presenceCounts = v;
-		});
-		return () => unsubscribe();
-	});
 
 	onMount(() => {
 		let mounted = true;
@@ -1617,7 +1616,7 @@
 			}
 			const normalized = event.key.toLowerCase();
 			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
-				if (normalized === 'g') {
+				if (normalized === 'o') {
 					pendingNavG = true;
 					if (navGTimeout !== null) window.clearTimeout(navGTimeout);
 					navGTimeout = window.setTimeout(() => {
@@ -1626,7 +1625,7 @@
 					}, 900);
 					return;
 				}
-				if (pendingNavG && normalized === 'm') {
+				if (pendingNavG && normalized === 'g') {
 					openGoalModal();
 					resetNavG();
 					event.preventDefault();
@@ -1695,7 +1694,77 @@
 	$inspect(authSet);
 	$inspect($session.user);
 	$inspect(currentCombinedPct);
-	$inspect(presenceCounts.connected);
+
+	type GoalBarEntry = {
+		displayGoalKey: GoalRotationKey;
+		displayRangeLabel: string;
+		displayGoalEntry: GoalEntry;
+		pinnedGoalKey: GoalRotationKey | null;
+		yearGoalTitle: string;
+		currentRangeLabel: string;
+		viewerId: string | null;
+	};
+
+	type GoalModalState = {
+		isOpen: boolean;
+		selectedMonthKey: string;
+		yearGoalEntry: GoalEntry;
+		monthStructure: ReturnType<typeof mergedMonthStructure>;
+	};
+
+	const goalBarStore = writable<GoalBarEntry>({
+		displayGoalKey,
+		displayRangeLabel,
+		displayGoalEntry,
+		pinnedGoalKey,
+		yearGoalTitle,
+		currentRangeLabel,
+		viewerId
+	});
+
+	setContext('goalBar', goalBarStore);
+	setContext('goalBarActions', {
+		togglePinnedGoal,
+		openGoalModal
+	});
+
+	const goalModalStore = writable<GoalModalState>({
+		isOpen: isGoalModalOpen,
+		selectedMonthKey,
+		yearGoalEntry,
+		monthStructure: mergedMonthStructure()
+	});
+
+	setContext('goalModal', goalModalStore);
+	setContext('goalModalActions', {
+		setSelectedMonthKey: (key: string) => {
+			selectedMonthKey = key;
+		},
+		updateGoalDraft,
+		handleGoalKeydown,
+		saveGoal
+	});
+
+	$effect(() => {
+		goalBarStore.set({
+			displayGoalKey,
+			displayRangeLabel,
+			displayGoalEntry,
+			pinnedGoalKey,
+			yearGoalTitle,
+			currentRangeLabel,
+			viewerId
+		});
+	});
+
+	$effect(() => {
+		goalModalStore.set({
+			isOpen: isGoalModalOpen,
+			selectedMonthKey,
+			yearGoalEntry,
+			monthStructure: mergedMonthStructure()
+		});
+	});
 
 	let { children, suppressSpectator = false, desktopMode = false } = $props();
 </script>
@@ -1709,264 +1778,15 @@
 {#if authSet == null}
 	<div></div>
 {:else if !authSet && !suppressSpectator}
-	<div in:fly={{ y: 2, duration: 400 }}>
-		<OnlineCount dedupe={false} counts={presenceCounts} />
-		<nav
-			class="fixed left-0 z-67 flex h-15 w-full items-center justify-center bg-white pt-5 pb-5 select-none selection:bg-stone-600 selection:text-stone-100"
-			style="font-family: 'Cormorant Garamond', serif"
-		>
-			<a href="/" class="absolute left-5 text-xl tracking-wide text-stone-700"> founders zoo. </a>
-
-			<div class="flex gap-6 text-sm text-stone-400">
-				{#each links as link}
-					<a
-						href={link.href}
-						class={`transition-colors duration-200 ease-out ${
-							isActive(link.href, $page.url.pathname)
-								? 'text-stone-800'
-								: 'text-stone-400 hover:text-stone-800'
-						}`}
-					>
-						{link.label}
-					</a>
-				{/each}
-			</div>
-		</nav>
-	</div>
-{:else if authSet && $session.user}
-	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
-		<div class="pointer-events-none fixed top-4 left-4 z-50 flex flex-col items-start">
-			<div class="pointer-events-auto relative flex items-center">
-				<button
-					type="button"
-					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-					aria-label="Previous day"
-					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, -1))}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="18"
-						height="18"
-						fill="currentColor"
-						class="bi bi-chevron-left"
-						viewBox="0 0 16 16"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0"
-						/>
-					</svg>
-				</button>
-				<button
-					type="button"
-					class="flex h-9 w-32 items-center justify-center gap-2 rounded-sm px-3 py-2 text-base font-medium text-stone-700 transition hover:bg-stone-200/50"
-					disabled={isActiveDayToday}
-					onclick={() => {
-						activeDayDateStore.set(localToday());
-					}}
-					aria-label="Jump to today"
-				>
-					<span>{activeDayLabel}</span>
-				</button>
-				<button
-					type="button"
-					class="flex h-9 w-9 items-center justify-center rounded-md text-base text-stone-600 hover:bg-stone-100"
-					aria-label="Next day"
-					onclick={() => activeDayDateStore.set(addDaysToDateString(activeDayDate, 1))}
-				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="18"
-						height="18"
-						fill="currentColor"
-						class="bi bi-chevron-right"
-						viewBox="0 0 16 16"
-					>
-						<path
-							fill-rule="evenodd"
-							d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708"
-						/>
-					</svg>
-				</button>
-			</div>
-		</div>
-
-		<div class="pointer-events-none fixed top-4 left-1/2 z-40 -translate-x-1/2 translate-y-0.5">
-			{#if viewerId}
-				<div
-					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase transition"
-				>
-					{#key displayGoalKey}
-						<span
-							in:fly={{ y: 4, delay: 400, duration: 200 }}
-							out:fade={{ duration: 160 }}
-							class="flex h-11 items-center gap-2 rounded-sm px-4"
-						>
-							<button
-								type="button"
-								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-								class:bg-stone-100={pinnedGoalKey === displayGoalKey}
-								onclick={() => togglePinnedGoal(displayGoalKey)}
-							>
-								<span class="font-semibold tracking-wide text-stone-400">
-									{displayRangeLabel}
-								</span>
-							</button>
-							<button
-								type="button"
-								class="rounded-sm px-2 py-1.5 hover:bg-stone-100"
-								onclick={openGoalModal}
-							>
-								{displayGoalEntry.title || 'Milestone'}
-							</button>
-						</span>
-					{/key}
-				</div>
-			{:else}
-				<div
-					class="pointer-events-auto flex flex-col items-center gap-1.5 text-[17px] font-semibold tracking-wide text-stone-800 uppercase"
-				>
-					<span>{yearGoalTitle}</span>
-					<span class="text-[15px] font-semibold tracking-wide text-stone-400">
-						{currentRangeLabel}
-					</span>
-				</div>
-			{/if}
-		</div>
-	</div>
-{/if}
-
-{#if isGoalModalOpen}
-	<div class="min-h-screen bg-white text-stone-800">
-		<div class="mx-auto flex h-full w-full max-w-[1200px] flex-col pt-16">
-			<div class="flex-1 overflow-y-auto px-6 py-6">
-				<div class="space-y-10">
-					<div class="flex w-full items-center justify-between gap-12">
-						<div class="flex items-center justify-end gap-2">
-							{#each QUARTERS as quarterLabel}
-								{@const quarterKey = quarterLabel.toLowerCase()}
-								<button
-									type="button"
-									class="rounded-md border border-stone-200 px-3 py-1 text-xs font-semibold text-stone-600 transition"
-									class:bg-stone-900={selectedQuarterKey === quarterKey}
-									class:text-white={selectedQuarterKey === quarterKey}
-									onclick={() => (selectedQuarterKey = quarterKey)}
-								>
-									{quarterLabel}
-								</button>
-							{/each}
-						</div>
-						<div class="flex w-full items-center gap-1">
-							<div
-								class="shrink-0 py-2 text-2xl font-semibold tracking-wide text-stone-400 uppercase"
-							>
-								2026
-							</div>
-							<input
-								class="w-full p-2 text-2xl text-stone-800 outline-none"
-								placeholder="Year milestone"
-								value={yearGoalEntry.title}
-								oninput={(event) =>
-									updateGoalDraft(
-										yearGoalEntry.goal_key,
-										(event.currentTarget as HTMLInputElement).value
-									)}
-								onchange={() => void saveGoal(yearGoalEntry.goal_key)}
-								onkeydown={(event) => handleGoalKeydown(yearGoalEntry.goal_key, event)}
-								onblur={() => void saveGoal(yearGoalEntry.goal_key)}
-							/>
-						</div>
-					</div>
-
-					<div class="space-y-6">
-						{#each mergedQuarterStructure() as quarter}
-							{#if quarter.key === selectedQuarterKey}
-								<div class="space-y-4">
-									<div class="flex items-center gap-1">
-										<div class="pl-2 text-2xl font-semibold tracking-wide text-stone-400 uppercase">
-											{quarter.label}
-										</div>
-										<input
-											class="w-full rounded-md p-2 text-2xl text-stone-800 outline-none"
-											placeholder={`${quarter.label} milestone`}
-											value={quarter.goal.title}
-											oninput={(event) =>
-												updateGoalDraft(
-													quarter.goal.goal_key,
-													(event.currentTarget as HTMLInputElement).value
-												)}
-											onchange={() => void saveGoal(quarter.goal.goal_key)}
-											onkeydown={(event) => handleGoalKeydown(quarter.goal.goal_key, event)}
-											onblur={() => void saveGoal(quarter.goal.goal_key)}
-										/>
-									</div>
-
-									<div class="grid gap-6 lg:grid-cols-3">
-										{#each quarter.months as month}
-											<div class="space-y-3 rounded-md p-3">
-												<div class="flex items-center gap-2">
-													<div class="text-md font-semibold tracking-wide text-stone-500 uppercase">
-														{month.label.slice(0, 3)}
-													</div>
-													<input
-														class="text-md w-full rounded-md p-1 text-stone-800 outline-none"
-														placeholder={`${month.label} milestone`}
-														value={month.goal.title}
-														oninput={(event) =>
-															updateGoalDraft(
-																month.goal.goal_key,
-																(event.currentTarget as HTMLInputElement).value
-															)}
-														onchange={() => void saveGoal(month.goal.goal_key)}
-														onkeydown={(event) => handleGoalKeydown(month.goal.goal_key, event)}
-														onblur={() => void saveGoal(month.goal.goal_key)}
-													/>
-												</div>
-												<div class="space-y-2">
-													{#each month.weeks as week}
-														<div class="space-y-2">
-															<div
-																class="text-[10px] font-semibold tracking-wide text-stone-400 uppercase"
-															>
-																{week.label}
-															</div>
-															<input
-																class="w-full rounded-md border border-stone-200 p-2 text-base text-stone-700 outline-none"
-																placeholder={`${week.label} milestone`}
-																value={week.goal.title}
-																oninput={(event) =>
-																	updateGoalDraft(
-																		week.goal.goal_key,
-																		(event.currentTarget as HTMLInputElement).value
-																	)}
-																onchange={() => void saveGoal(week.goal.goal_key)}
-																onkeydown={(event) => handleGoalKeydown(week.goal.goal_key, event)}
-																onblur={() => void saveGoal(week.goal.goal_key)}
-															/>
-														</div>
-													{/each}
-												</div>
-											</div>
-										{/each}
-									</div>
-								</div>
-							{/if}
-						{/each}
-					</div>
-				</div>
-			</div>
-		</div>
-	</div>
+	<div></div>
 {/if}
 
 {#if desktopMode}
 	{#if authSet && $session.user}
-		{#if !isGoalModalOpen}
-			{@render children()}
-		{/if}
+		{@render children()}
 	{:else}
 		<GrogathLogin />
 	{/if}
-{:else if !isGoalModalOpen}
+{:else}
 	{@render children()}
 {/if}

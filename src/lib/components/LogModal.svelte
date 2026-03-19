@@ -13,6 +13,8 @@
 		initialCategory = null,
 		initialHabit = null,
 		initialEventMode = false,
+		initialTodoMode = false,
+		initialTodoDone = null,
 		initialDueDate = null,
 		maxBlockCountFor = null,
 		runLengthFor = null,
@@ -31,7 +33,9 @@
 			category: BlockCategory | null,
 			habitConfig: HabitSaveConfig | null,
 			eventMode: boolean,
-			dueDate: string
+			dueDate: string,
+			todoMode: boolean,
+			todoDone: boolean | null
 		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
@@ -40,6 +44,8 @@
 		initialCategory?: BlockCategory | null;
 		initialHabit?: HabitConfig | null;
 		initialEventMode?: boolean;
+		initialTodoMode?: boolean;
+		initialTodoDone?: boolean | null;
 		initialDueDate?: string | null;
 		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
 		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
@@ -90,6 +96,8 @@
 	let runLength = $state(1);
 	let habitMode = $state(false);
 	let eventMode = $state(false);
+	let todoMode = $state(false);
+	let todoDone = $state<boolean | null>(null);
 	let dueDate = $state('');
 	let dueMonth = $state('');
 	let dueDay = $state('');
@@ -179,20 +187,36 @@
 			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
 		}
 	}
-	function toggleEventMode() {
-		eventMode = !eventMode;
-		if (eventMode) {
-			habitDays = [];
-			habitMode = false;
-			status = null;
-			blockCount = 1;
-			queueMicrotask(() => dueMonthEl?.focus());
+	function setEventMode(next: 'none' | 'event' | 'todo') {
+		if (next === 'none') {
+			eventMode = false;
+			todoMode = false;
+			todoDone = null;
+			return;
 		}
+		eventMode = true;
+		if (next === 'todo') {
+			todoMode = true;
+			if (todoDone === null) todoDone = false;
+		} else {
+			todoMode = false;
+			todoDone = null;
+		}
+		habitDays = [];
+		habitMode = false;
+		status = null;
+		blockCount = 1;
+		queueMicrotask(() => dueMonthEl?.focus());
 	}
 
 	function initDueDate(next: string | null) {
 		const fallback = new Date();
 		const raw = (next ?? '').trim();
+		if (!raw) {
+			dueMonth = '';
+			dueDay = '';
+			return;
+		}
 		const parts = raw.split('-');
 		if (parts.length === 3) {
 			dueMonth = parts[1] ?? '';
@@ -360,7 +384,7 @@
 	async function handleSubmit() {
 		const value = text.trim();
 		if (!value || saving) return;
-		if (eventMode && !dueDate.trim()) return;
+		if (eventMode && !todoMode && !dueDate.trim()) return;
 
 		saving = true;
 		try {
@@ -372,7 +396,19 @@
 					}
 				: null;
 			await Promise.resolve(
-				onSave(value, status, hour, half, saveCount, category, habitConfig, eventMode, dueDate)
+				onSave(
+					value,
+					status,
+					hour,
+					half,
+					saveCount,
+					category,
+					habitConfig,
+					eventMode,
+					dueDate,
+					todoMode,
+					todoDone
+				)
 			);
 			text = '';
 			status = null;
@@ -417,7 +453,9 @@
 		habitId = initialHabit?.id ?? null;
 		habitDays = initialHabit?.repeatDays ?? [];
 		habitMode = habitDays.length > 0;
-		eventMode = initialEventMode ?? false;
+		todoMode = initialTodoMode ?? false;
+		eventMode = (initialEventMode ?? false) || todoMode;
+		todoDone = todoMode ? (initialTodoDone ?? false) : null;
 		initDueDate(initialDueDate ?? null);
 		syncDueDate();
 		habitMenuOpen = false;
@@ -735,11 +773,7 @@
 									fill="currentColor"
 								>
 									<path
-										d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"
-									/>
-									<path
-										fill-rule="evenodd"
-										d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"
+										d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm4 9h8a.5.5 0 0 0 .374-.832l-4-4.5a.5.5 0 0 0-.748 0l-4 4.5A.5.5 0 0 0 4 11"
 									/>
 								</svg>
 								{#if mode === 'normal'}
@@ -779,8 +813,8 @@
 					<button
 						type="button"
 						class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
-						class:bg-stone-100={eventMode}
-						onclick={toggleEventMode}
+						class:bg-stone-100={eventMode && !todoMode}
+						onclick={() => setEventMode(eventMode && !todoMode ? 'none' : 'event')}
 					>
 						<span class="flex h-4 w-4 items-center justify-center">
 							<svg
@@ -796,6 +830,19 @@
 							</svg>
 						</span>
 						Event
+					</button>
+					<button
+						type="button"
+						class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+						class:bg-stone-100={todoMode}
+						onclick={() => setEventMode(todoMode ? 'none' : 'todo')}
+					>
+						<span class="flex h-4 w-4 items-center justify-center">
+							<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
+								<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
+							</svg>
+						</span>
+						Todo
 					</button>
 				</div>
 				<button
