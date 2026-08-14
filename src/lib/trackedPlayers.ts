@@ -1,6 +1,5 @@
 export const TRACKED_PLAYERS = [
-	{ key: 'andrew', fallbackLabel: 'Andrew', tokens: ['andrew', 'graves'] },
-	{ key: 'nico', fallbackLabel: 'Nico', tokens: ['nico', 'cho'] }
+	{ key: 'andrew', fallbackLabel: 'Andrew', tokens: ['andrew', 'graves'] }
 ] as const;
 
 export type TrackedPlayerKey = (typeof TRACKED_PLAYERS)[number]['key'];

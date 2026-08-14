@@ -1,34 +1,21 @@
 <script lang="ts">
-	import OnlineCount from '$lib/components/OnlineCount.svelte';
 	import { onMount, setContext } from 'svelte';
-	import { fly, blur } from 'svelte/transition';
 	import '../app.css';
 	import { writable, type Writable } from 'svelte/store';
 	import { browser } from '$app/environment';
-	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Session } from '$lib/session';
 	import type { User } from '@supabase/supabase-js';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
-	import { useGlobalPresence } from '$lib/presence';
+	import { useGlobalPresence, type PresenceSnapshot } from '$lib/presence';
 
 	type Person = { label: string; user_id: string };
 	type Goal = { title: string; due_date: string };
 	type PlayerDisplay = { label: string; user_id: string | null };
-	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
+	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number | null> };
 
 	const TRACKED_ROOMS = ['/', '/manifesto', '/collection', '/fundamentals'];
-	const links = [
-		{ href: '/manifesto', label: 'Manifesto' },
-		{ href: '/fundamentals', label: 'Fundamentals' },
-		{ href: '/collection', label: 'Collection' }
-	];
-
-	const isActive = (href: string, pathname: string) => {
-		if (href === '/') return pathname === '/';
-		return pathname === href || pathname.startsWith(href + '/');
-	};
 
 	const START_HOUR = 8;
 	const END_HOUR = 24;
@@ -42,6 +29,13 @@
 
 	const authSetStore: Writable<boolean | null> = writable(null);
 	setContext('authSet', authSetStore);
+
+	const presenceCountsStore: Writable<PresenceSnapshot> = writable({
+		tabs: 0,
+		unique: 0,
+		connected: false
+	});
+	setContext('presenceCounts', presenceCountsStore);
 
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
@@ -63,8 +57,7 @@
 
 	// tracked players, history, goals, etc.
 	let trackedDisplays = $state<Record<TrackedPlayerKey, PlayerDisplay>>({
-		andrew: { label: 'Andrew', user_id: null },
-		nico: { label: 'Nico', user_id: null }
+		andrew: { label: 'Andrew', user_id: null }
 	});
 	let dayHistoryRows = $state<HistoryRow[]>([]);
 	let dayHistoryOpen = $state(false);
@@ -183,14 +176,14 @@
 		trackedDisplays = next;
 	}
 
-	function emptyHistoryRecord(): Record<TrackedPlayerKey, number> {
+	function emptyHistoryRecord(): Record<TrackedPlayerKey, number | null> {
 		return TRACKED_PLAYERS.reduce(
 			(acc, player) => ({ ...acc, [player.key]: null }),
-			{} as Record<TrackedPlayerKey, number>
+			{} as Record<TrackedPlayerKey, number | null>
 		);
 	}
 
-	function combinedPercent(values: Record<TrackedPlayerKey, number>): number {
+	function combinedPercent(values: Record<TrackedPlayerKey, number | null>): number {
 		const percents = TRACKED_PLAYERS.map((player) => values[player.key]).filter(
 			(pct): pct is number => typeof pct === 'number'
 		);
@@ -304,7 +297,7 @@
 					const pct = blocksDue > 0 ? Math.round((filled / blocksDue) * 100) : null;
 					return { ...acc, [player.key]: pct };
 				},
-				{} as Record<TrackedPlayerKey, number>
+				{} as Record<TrackedPlayerKey, number | null>
 			);
 
 			currentCombinedPct = combinedPercent(percentageValues);
@@ -339,7 +332,7 @@
 				.order('date', { ascending: false });
 			if (error) throw error;
 
-			const rows = new Map<string, Record<TrackedPlayerKey, number>>();
+			const rows = new Map<string, Record<TrackedPlayerKey, number | null>>();
 			for (const row of data ?? []) {
 				const date = (row.date as string | null) ?? null;
 				const userId = (row.user_id as string | null) ?? null;
@@ -422,6 +415,7 @@
 		}
 		const unsubscribe = store.subscribe((v) => {
 			presenceCounts = v;
+			presenceCountsStore.set(v);
 		});
 		return () => unsubscribe();
 	});
@@ -453,6 +447,16 @@
 
 		void init();
 
+		const { data: authListener } = supabase.auth.onAuthStateChange((_event, authSession) => {
+			if (!mounted) return;
+			const u = authSession?.user ?? null;
+			applyUser(u);
+			authSet = u ? true : false;
+			authSetStore.set(authSet);
+			void loadActiveGoal(u?.id ?? null);
+			void refreshCurrentCombined();
+		});
+
 		currentProgressInterval = window.setInterval(() => {
 			void refreshCurrentCombined();
 		}, CURRENT_PROGRESS_POLL_MS);
@@ -473,6 +477,7 @@
 
 		return () => {
 			mounted = false;
+			authListener.subscription.unsubscribe();
 			document.removeEventListener('click', handleDocumentClick);
 			document.removeEventListener('keydown', handleKeyDown);
 			if (currentProgressInterval !== null) {
@@ -486,43 +491,37 @@
 </script>
 
 <svelte:head>
-  <link rel="icon" href="/fz.svg" type="image/svg+xml" />
-  <title>founders zoo.</title>
-  <meta name="application-name" content="founders zoo." />
+	<link rel="icon" href="/fz.svg" type="image/svg+xml" />
+	<title>founders zoo.</title>
+	<meta name="application-name" content="founders zoo." />
 </svelte:head>
 
-{#if authSet == null}
-	<div></div>
-{:else if !authSet && presenceCounts.connected}
-	<div in:fly={{ y: 2, duration: 400 }}>
-		<OnlineCount dedupe={false} counts={presenceCounts} />
-		<nav class="z-67 fixed pt-5 pb-5 h-15 left-0 flex w-full items-center justify-center bg-white selection:bg-stone-600 selection:text-stone-100 select-none" style="font-family: 'Cormorant Garamond', serif">
-			<a
-				href="/"
-				class="absolute left-5 text-xl tracking-wide text-stone-700"
-			>
-				founders zoo.
-			</a>
+{#if authSet !== true}
+	<div>
+		<nav
+			class="fixed left-0 z-67 flex h-15 w-full items-center justify-center bg-white pt-5 pb-5 select-none selection:bg-stone-600 selection:text-stone-100"
+			style="font-family: 'Cormorant Garamond', serif"
+		>
+			<a href="/" class="absolute left-5 text-xl tracking-wide text-stone-700"> founders zoo. </a>
 
-			<div class="flex gap-6 text-sm text-stone-400">
-				{#each links as link}
-					<a
-						href={link.href}
-						class={`transition-colors duration-200 ease-out ${
-							isActive(link.href, $page.url.pathname)
-								? 'text-stone-800'
-								: 'text-stone-400 hover:text-stone-800'
-						}`}
-					>
-						{link.label}
-					</a>
-				{/each}
+			<div class="absolute right-6 flex items-center gap-5 text-sm">
+				<a
+					href="/login"
+					class="text-stone-400 transition-colors duration-200 ease-out hover:text-stone-800"
+				>
+					create account
+				</a>
+				<a
+					href="/login"
+					class="text-stone-700 transition-colors duration-200 ease-out hover:text-stone-900"
+				>
+					log in
+				</a>
 			</div>
 		</nav>
 	</div>
-{:else if authSet && $session.user && currentCombinedPct && presenceCounts.connected}
-	<div in:fly={{ y: 2, duration: 200, delay: 100 }}>
-		<OnlineCount dedupe={false} counts={presenceCounts} />
+{:else if $session.user && currentCombinedPct && presenceCounts.connected}
+	<div>
 		<div
 			class="pointer-events-none fixed top-5 left-4 z-50 flex flex-col items-start"
 			bind:this={dateMenuEl}

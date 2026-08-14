@@ -51,15 +51,23 @@
 </script>
 
 <div
-	class="group relative inline-flex items-center gap-2 rounded-md font-medium text-stone-700"
+	class="relative inline-flex items-center gap-2 rounded-md font-medium text-stone-700"
 	aria-label={aria}
 >
-	<span class={`h-2 w-2 rounded-full ${dotClass}`}></span>
+	<span class="group/dot relative inline-flex items-center">
+		<span class={`h-2 w-2 rounded-full ${dotClass}`}></span>
+		<span
+			role="tooltip"
+			class="pointer-events-none absolute top-full left-0 z-30 mt-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover/dot:opacity-100"
+		>
+			{TEXT_LABELS[effectiveStatus]}
+		</span>
+	</span>
 	{#if label}{label}{/if}
 	<span
-		class="pointer-events-none top-1/2 left-full inline-flex
-           items-center gap-1 rounded-sm bg-stone-700 px-1 text-[10px]
-           font-medium whitespace-nowrap text-stone-50 capitalize transition-opacity duration-150 group-hover:opacity-100"
+		class="group/streak relative inline-flex items-center gap-1 rounded-sm
+           bg-stone-700 px-1 text-[10px]
+           font-medium whitespace-nowrap text-stone-50 capitalize"
 	>
 		<svg viewBox="0 0 10 10" class={streakArrowClass} aria-hidden="true">
 			<polygon
@@ -71,5 +79,11 @@
 			/>
 		</svg>
 		{streakDisplay}
+		<span
+			role="tooltip"
+			class="pointer-events-none absolute top-full left-0 z-30 mt-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover/streak:opacity-100"
+		>
+			streak
+		</span>
 	</span>
 </div>

@@ -5,6 +5,7 @@
 	import Slot from '$lib/components/Slot.svelte';
 	import { scale, fly } from 'svelte/transition';
 	import { watchPlayerStatus, trackPlayerPresence, type PlayerStatus } from '$lib/playerPresence';
+	import type { PresenceSnapshot } from '$lib/presence';
 	import { calculateStreak, type DayCompletionSummary, type PlayerStreak } from '$lib/streaks';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { getContext, onDestroy, onMount } from 'svelte';
@@ -16,7 +17,11 @@
 	type Person = { label: string; user_id: string };
 
 	let people = $state<Person[]>([]);
+	const visiblePeople = $derived(
+		people.filter((person) => getTrackedPlayerKeyForUser(person.user_id) !== null)
+	);
 	const session = getContext<Writable<Session>>('session');
+	const presenceCounts = getContext<Writable<PresenceSnapshot>>('presenceCounts');
 	let isDragging = $state(false);
 	let suppressNextClick = $state(false);
 
@@ -24,14 +29,16 @@
 	type PlayerDisplay = { label: string; user_id: string | null };
 
 	let playerDisplays = $state<Record<PlayerKey, PlayerDisplay>>({
-		andrew: { label: 'Andrew', user_id: null },
-		nico: { label: 'Nico', user_id: null }
+		andrew: { label: 'Andrew', user_id: null }
 	});
 	let playerStatuses = $state<Record<PlayerKey, PlayerStatus>>({
-		andrew: 'offline',
-		nico: 'offline'
+		andrew: 'offline'
 	});
 	let streakByUser = $state<Record<string, PlayerStreak | null>>({});
+	const andrewStreak = $derived(
+		playerDisplays.andrew?.user_id ? (streakByUser[playerDisplays.andrew.user_id] ?? null) : null
+	);
+	const profileLineDelay = 0.09;
 
 	let playerStatusUnsubscribers: (() => void)[] = [];
 	let stopLocalPlayerPresence: (() => void) | null = null;
@@ -104,7 +111,7 @@
 	const DAY_MS = 86_400_000;
 	const HABIT_STREAK_KEYS = ['read', 'gym', 'bored', 'wake'] as const;
 	type HabitKey = (typeof HABIT_STREAK_KEYS)[number];
-	const loadingPlaceholderColumns = Array.from({ length: 2 });
+	const loadingPlaceholderColumns = Array.from({ length: 1 });
 	const hh = (n: number) => n.toString().padStart(2, '0');
 	const blockLabelText = (half: 0 | 1) => (half === 0 ? 'Block A' : 'Block B');
 	const slotTimeLabel = (hour: number, half: 0 | 1) => `${hh(hour)}:${half === 0 ? '00' : '30'}`;
@@ -126,20 +133,6 @@
 	let currentHalf = $state<0 | 1>(0);
 	let currentMinute = $state(0);
 	const isCurrent = (h: number) => h === currentHour;
-	const isNightWindow = () => currentHour >= 0 && currentHour < START_HOUR;
-	const minutesUntilDayStart = () => {
-		if (currentHour < 0 || currentMinute < 0) return 0;
-		const totalMinutes = currentHour * 60 + currentMinute;
-		const dayStartMinutes = START_HOUR * 60;
-		if (totalMinutes >= dayStartMinutes) return 0;
-		return dayStartMinutes - totalMinutes;
-	};
-	const countdownText = () => {
-		const minutes = minutesUntilDayStart();
-		const hours = Math.floor(minutes / 60);
-		const mins = minutes % 60;
-		return `${hours}h ${mins}m until day starts`;
-	};
 
 	// auth + data
 	let viewerUserId = $state<string | null>(null);
@@ -1797,171 +1790,207 @@
 	});
 </script>
 
-<div
-	class="flex h-dvh w-full flex-col justify-center overflow-clip bg-white p-10 pt-20 select-none"
->
-	<div class="flex flex-row space-x-4">
-		{#if isLoading}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
-				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center"></div>
-				{/each}
-			</div>
-		{:else}
-			<div class="flex flex-col space-y-1">
-				<div class="text-stone-50">T</div>
-				{#each hours as h, i}
-					<div class="relative flex h-7 w-7 items-center justify-center">
-						{#if showTimes}
+<div class="flex h-dvh w-full flex-row gap-16 overflow-clip bg-white p-10 pt-20 select-none">
+	<div class="flex w-full flex-col pt-10">
+		<div class="flex items-center gap-6">
+			<div
+				class="profile-line h-24 w-24 shrink-0 rounded-full bg-stone-200"
+				style={`animation-delay: ${0 * profileLineDelay}s;`}
+			></div>
+			<div class="flex flex-col">
+				<div
+					class="profile-line flex items-center gap-3 text-xl"
+					style={`animation-delay: ${1 * profileLineDelay}s;`}
+				>
+					<PlayerStatusTag
+						label="Andrew"
+						status={playerStatuses.andrew}
+						me={Boolean(viewerUserId && playerDisplays.andrew?.user_id === viewerUserId)}
+						streak={andrewStreak}
+					/>
+					{#if $presenceCounts?.connected}
+						<div class="group relative flex items-center" aria-label="Live spectator count">
+							<span class="flex items-center gap-1 text-[12px] text-red-400">
+								<svg
+									viewBox="0 0 24 24"
+									fill="currentColor"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									shape-rendering="geometricPrecision"
+									class="h-2.5 w-2.5"
+								>
+									<path d="M20 21.5v-2.5a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2.5h16" />
+									<circle cx="12" cy="7" r="4" />
+								</svg>
+								{$presenceCounts.tabs}
+							</span>
 							<div
-								class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
-								in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 200 }}
+								role="tooltip"
+								class="pointer-events-none absolute top-full left-0 mt-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
 							>
-								{hh(h)}
+								Live spectator count
 							</div>
-						{/if}
-						{#if isCurrent(h)}
-							<div
-								class="absolute h-7 w-7 rounded-md bg-stone-700"
-								in:scale|global={{ start: 0.6, duration: 100, delay: 1000 }}
-							></div>
-						{/if}
-					</div>
-				{/each}
+						</div>
+					{/if}
+				</div>
+				<div
+					class="profile-line text-xl text-stone-500"
+					style={`animation-delay: ${2 * profileLineDelay}s;`}
+				>
+					building founderszoo
+				</div>
+				<div
+					class="profile-line mt-2 flex items-center gap-4 text-stone-500"
+					style={`animation-delay: ${3 * profileLineDelay}s;`}
+				>
+					<span>friends <span class="font-semibold text-stone-800">13</span></span>
+					<span>followers <span class="font-semibold text-stone-800">100k</span></span>
+				</div>
 			</div>
-		{/if}
+		</div>
+		<p
+			class="profile-line mt-14 max-w-sm leading-relaxed text-stone-700"
+			style={`animation-delay: ${4 * profileLineDelay}s;`}
+		>
+			hi, this is a short summary of who i am and stuff i did in the past that is important to who i
+			am today
+		</p>
+	</div>
 
-		<div class="flex w-full flex-col">
-			<div class="flex w-full flex-row gap-4">
-				{#if isLoading}
-					{#each loadingPlaceholderColumns as _}
-						<div class="flex w-full flex-col space-y-1" aria-hidden="true">
-							<div class="flex h-6 items-center gap-2">
-								<div class="loading-sheen h-4 w-24 rounded bg-stone-200"></div>
-							</div>
-							{#each hours as _}
-								<div class="flex h-7 w-full flex-row space-x-1">
-									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
-									<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+	<div class="flex w-full max-w-2xl flex-col justify-center">
+		<div class="flex flex-row space-x-4">
+			{#if isLoading}
+				<div class="flex flex-col space-y-1">
+					{#each hours as h, i}
+						<div class="relative flex h-7 w-7 items-center justify-center"></div>
+					{/each}
+				</div>
+			{:else}
+				<div class="flex flex-col space-y-1">
+					{#each hours as h, i}
+						<div class="relative flex h-7 w-7 items-center justify-center">
+							{#if showTimes}
+								<div
+									class="z-20 flex h-7 items-center justify-center rounded px-1 text-stone-300"
+									in:fly|global={{ x: 8, duration: 400, delay: 40 * i + 600 }}
+								>
+									{hh(h)}
 								</div>
-							{/each}
+							{/if}
+							{#if isCurrent(h)}
+								<div
+									class="absolute h-7 w-7 rounded-md bg-stone-700"
+									in:scale|global={{ start: 0.6, duration: 100, delay: 1400 }}
+								></div>
+							{/if}
 						</div>
 					{/each}
-				{:else}
-					{#each people as person}
-						{@const trackedKey = getTrackedPlayerKeyForUser(person.user_id)}
-						<div class="flex w-full flex-col space-y-1 transition-opacity">
-							<div class="flex h-6 items-center gap-2">
-								{#if trackedKey}
-									<PlayerStatusTag
-										label={playerDisplays[trackedKey]?.label ?? null}
-										status={playerStatuses[trackedKey]}
-										me={person.user_id === viewerUserId}
-										streak={streakByUser[person.user_id] ?? null}
-									/>
-								{/if}
-							</div>
+				</div>
+			{/if}
 
-							{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+			<div class="flex w-full flex-col">
+				<div class="flex w-full flex-row gap-4">
+					{#if isLoading}
+						{#each loadingPlaceholderColumns as _}
+							<div class="flex w-full flex-col space-y-1" aria-hidden="true">
 								{#each hours as _}
 									<div class="flex h-7 w-full flex-row space-x-1">
 										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
 										<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
 									</div>
 								{/each}
-							{:else}
-								{#each hours as h, hourIndex}
-									{@const slotIsCutA = slotIsCut(person.user_id, h, 0)}
-									{@const slotIsCutB = slotIsCut(person.user_id, h, 1)}
-									<div
-										class="hover:none flex h-7 w-full flex-row space-x-1"
-										class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
-									>
-										<div
-											class="flex w-full min-w-0 bg-transparent"
-											role="presentation"
-											draggable={canDragSlot(person.user_id, h, 0)}
-											onpointerdown={(e) =>
-												handleSlotPointerDown(e, person.user_id, h, 0, hourIndex)}
-											onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 0)}
-											onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 0)}
-											ondragstart={(event) => {
-												handleSlotDragStart(event, person.user_id, h, 0, hourIndex);
-											}}
-											ondragover={(event) =>
-												handleSlotDragOver(event, person.user_id, 0, hourIndex)}
-											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 0)}
-											ondragend={handleSlotDragEnd}
-										>
-											<Slot
-												title={getTitle(person.user_id, h, 0)}
-												todo={getTodo(person.user_id, h, 0)}
-												editable={viewerUserId === person.user_id}
-												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
-												onSelect={() => handleSlotSelect(person.user_id, h, 0, false)}
-												onToggleTodo={() => handleSlotToggle(person.user_id, h, 0)}
-												habit={getHabitTitle(person.user_id, h, 0)}
-												habitStreak={habitStreakForSlot(person.user_id, h, 0)}
-												selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
-												isCurrent={slotIsCurrent(h, 0)}
-												isCut={slotIsCutA}
-											/>
+							</div>
+						{/each}
+					{:else}
+						{#each visiblePeople as person}
+							<div class="flex w-full flex-col space-y-1 transition-opacity">
+								{#if dayIdByUser[person.user_id] === undefined || dayIdByUser[person.user_id] === undefined}
+									{#each hours as _}
+										<div class="flex h-7 w-full flex-row space-x-1">
+											<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
+											<div class="loading-slot flex w-full rounded-md bg-stone-100"></div>
 										</div>
+									{/each}
+								{:else}
+									{#each hours as h, hourIndex}
+										{@const slotIsCutA = slotIsCut(person.user_id, h, 0)}
+										{@const slotIsCutB = slotIsCut(person.user_id, h, 1)}
 										<div
-											class="flex w-full min-w-0 bg-transparent"
-											role="presentation"
-											draggable={canDragSlot(person.user_id, h, 1)}
-											onpointerdown={(e) =>
-												handleSlotPointerDown(e, person.user_id, h, 1, hourIndex)}
-											onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 1)}
-											onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 1)}
-											ondragstart={(event) => {
-												handleSlotDragStart(event, person.user_id, h, 1, hourIndex);
-											}}
-											ondragover={(event) =>
-												handleSlotDragOver(event, person.user_id, 1, hourIndex)}
-											ondrop={(event) => handleSlotDrop(event, person.user_id, h, 1)}
-											ondragend={handleSlotDragEnd}
+											class="hover:none flex h-7 w-full flex-row space-x-1"
+											class:opacity-60={viewerUserId && viewerUserId !== person.user_id}
 										>
-											<Slot
-												title={getTitle(person.user_id, h, 1)}
-												todo={getTodo(person.user_id, h, 1)}
-												editable={viewerUserId === person.user_id}
-												onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
-												onSelect={() => handleSlotSelect(person.user_id, h, 1, false)}
-												onToggleTodo={() => handleSlotToggle(person.user_id, h, 1)}
-												habit={getHabitTitle(person.user_id, h, 1)}
-												habitStreak={habitStreakForSlot(person.user_id, h, 1)}
-												selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
-												isCurrent={slotIsCurrent(h, 1)}
-												isCut={slotIsCutB}
-											/>
+											<div
+												class="flex w-full min-w-0 bg-transparent"
+												role="presentation"
+												draggable={canDragSlot(person.user_id, h, 0)}
+												onpointerdown={(e) =>
+													handleSlotPointerDown(e, person.user_id, h, 0, hourIndex)}
+												onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 0)}
+												onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 0)}
+												ondragstart={(event) => {
+													handleSlotDragStart(event, person.user_id, h, 0, hourIndex);
+												}}
+												ondragover={(event) =>
+													handleSlotDragOver(event, person.user_id, 0, hourIndex)}
+												ondrop={(event) => handleSlotDrop(event, person.user_id, h, 0)}
+												ondragend={handleSlotDragEnd}
+											>
+												<Slot
+													title={getTitle(person.user_id, h, 0)}
+													todo={getTodo(person.user_id, h, 0)}
+													editable={viewerUserId === person.user_id}
+													onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 0)}
+													onSelect={() => handleSlotSelect(person.user_id, h, 0, false)}
+													onToggleTodo={() => handleSlotToggle(person.user_id, h, 0)}
+													habit={getHabitTitle(person.user_id, h, 0)}
+													habitStreak={habitStreakForSlot(person.user_id, h, 0)}
+													selected={slotIsHighlighted(person.user_id, hourIndex, 0)}
+													isCurrent={slotIsCurrent(h, 0)}
+													isCut={slotIsCutA}
+												/>
+											</div>
+											<div
+												class="flex w-full min-w-0 bg-transparent"
+												role="presentation"
+												draggable={canDragSlot(person.user_id, h, 1)}
+												onpointerdown={(e) =>
+													handleSlotPointerDown(e, person.user_id, h, 1, hourIndex)}
+												onpointerenter={() => handleSlotPointerEnter(person.user_id, hourIndex, 1)}
+												onpointerleave={() => handleSlotPointerLeave(person.user_id, hourIndex, 1)}
+												ondragstart={(event) => {
+													handleSlotDragStart(event, person.user_id, h, 1, hourIndex);
+												}}
+												ondragover={(event) =>
+													handleSlotDragOver(event, person.user_id, 1, hourIndex)}
+												ondrop={(event) => handleSlotDrop(event, person.user_id, h, 1)}
+												ondragend={handleSlotDragEnd}
+											>
+												<Slot
+													title={getTitle(person.user_id, h, 1)}
+													todo={getTodo(person.user_id, h, 1)}
+													editable={viewerUserId === person.user_id}
+													onPrimaryAction={() => maybeHandlePaste(person.user_id, h, 1)}
+													onSelect={() => handleSlotSelect(person.user_id, h, 1, false)}
+													onToggleTodo={() => handleSlotToggle(person.user_id, h, 1)}
+													habit={getHabitTitle(person.user_id, h, 1)}
+													habitStreak={habitStreakForSlot(person.user_id, h, 1)}
+													selected={slotIsHighlighted(person.user_id, hourIndex, 1)}
+													isCurrent={slotIsCurrent(h, 1)}
+													isCut={slotIsCutB}
+												/>
+											</div>
 										</div>
-									</div>
-								{/each}
-							{/if}
-						</div>
-					{/each}
-				{/if}
+									{/each}
+								{/if}
+							</div>
+						{/each}
+					{/if}
+				</div>
 			</div>
 		</div>
 	</div>
-	{#if isNightWindow()}
-		<div
-			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
-			class:bg-amber-200={isNightWindow}
-			class:bg-stone-100={!isNightWindow}
-			class:text-stone-900={isNightWindow}
-		>
-			{countdownText()}
-		</div>
-	{:else}
-		<div
-			class="mt-1 flex h-7 w-full items-center justify-center rounded px-3 text-xs font-semibold tracking-wide text-stone-400 uppercase"
-			class:bg-stone-100={!isNightWindow}
-		></div>
-	{/if}
 </div>
 
 {#if modalOverlayActive}
@@ -2079,14 +2108,32 @@
 />
 
 <style>
-	.loading-slot,
-	.loading-sheen {
+	.profile-line {
+		opacity: 0;
+		transform: translateY(0.5rem);
+		animation-name: profile-fade-up;
+		animation-duration: 0.6s;
+		animation-timing-function: cubic-bezier(0.235, 0.51, 0.355, 1);
+		animation-fill-mode: forwards;
+	}
+
+	@keyframes profile-fade-up {
+		from {
+			opacity: 0;
+			transform: translateY(0.5rem);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.loading-slot {
 		position: relative;
 		overflow: hidden;
 	}
 
-	.loading-slot::after,
-	.loading-sheen::after {
+	.loading-slot::after {
 		content: '';
 		position: absolute;
 		inset: 0;
