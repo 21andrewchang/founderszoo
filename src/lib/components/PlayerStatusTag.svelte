@@ -7,12 +7,13 @@
 		status?: PlayerStatus;
 		me?: boolean;
 		streak?: PlayerStreak | null;
+		dotClass?: string | null;
 	}>();
 
 	const DOT_CLASSES: Record<PlayerStatus, string> = {
 		online: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.65)]',
-		away: 'bg-amber-400  shadow-[0_0_8px_rgba(251,191,36,0.65)]',
-		offline: 'bg-rose-400   shadow-[0_0_8px_rgba(248,113,113,0.4)]'
+		away: 'bg-amber-300  shadow-[0_0_8px_rgba(252,211,77,0.6)]',
+		offline: 'bg-red-500   shadow-[0_0_8px_rgba(239,68,68,0.45)]'
 	};
 	const DOT_CLASS_ME = 'bg-violet-400 shadow-[0_0_8px_rgba(139,92,246,0.55)]';
 
@@ -31,7 +32,7 @@
 	// what to show as the status string (tooltip/aria)
 	const statusText = $derived(me ? 'you' : TEXT_LABELS[effectiveStatus]);
 
-	const dotClass = $derived(me ? DOT_CLASS_ME : DOT_CLASSES[effectiveStatus]);
+	const dotClass = $derived(props.dotClass ?? (me ? DOT_CLASS_ME : DOT_CLASSES[effectiveStatus]));
 	const streak = $derived(props.streak ?? null);
 	const streakDisplay = $derived(streak ? `${streak.length}` : '–');
 	const streakArrowClass = $derived.by(() => {
@@ -41,21 +42,17 @@
 		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
 		return `${base} ${color} ${rotation}`;
 	});
-	const streakDescription = $derived(
-		streak
-			? `${streak.length}-day ${streak.kind === 'positive' ? 'positive' : 'negative'} streak`
-			: null
-	);
+	const streakDescription = $derived(streak ? `${streak.length}-day 75%+ completion streak` : null);
 	const baseAria = $derived(label ? `${label} is ${statusText}` : statusText);
 	const aria = $derived(streakDescription ? `${baseAria}, ${streakDescription}` : baseAria);
 </script>
 
 <div
-	class="relative inline-flex items-center gap-2 rounded-md font-medium text-stone-700"
+	class="relative inline-flex items-center gap-2 rounded-md text-xl font-medium text-stone-700"
 	aria-label={aria}
 >
 	<span class="group/dot relative inline-flex items-center">
-		<span class={`h-2 w-2 rounded-full ${dotClass}`}></span>
+		<span class={`h-2.5 w-2.5 rounded-full ${dotClass}`}></span>
 		<span
 			role="tooltip"
 			class="pointer-events-none absolute top-full left-0 z-30 mt-1 rounded-md bg-stone-700 px-2 py-1 text-xs font-medium whitespace-nowrap text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover/dot:opacity-100"

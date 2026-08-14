@@ -1,11 +1,5 @@
 <script lang="ts">
 	import { fade, fly, scale } from 'svelte/transition';
-	import type { PlayerStreak } from '$lib/streaks';
-
-	const START = 8;
-	const END = 23;
-	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
-	const hh = (n: number) => n.toString().padStart(2, '0');
 
 	let {
 		normal,
@@ -15,56 +9,124 @@
 		initialHour = null,
 		initialHalf = null,
 		initialTitle = '',
-		initialTodo = null,
-		habitStreaks = null
+		initialStatus = null,
+		initialCategory = null,
+		initialHabit = null,
+		initialEventMode = false,
+		initialTodoMode = false,
+		initialTodoDone = null,
+		initialDueDate = null,
+		maxBlockCountFor = null,
+		runLengthFor = null,
+		startHour = 8,
+		endHour = 24
 	} = $props<{
 		normal?: boolean;
 		open?: boolean;
 		onClose?: () => void;
-		onSave?: (text: string, todo: boolean | null, hour: number, half: 0 | 1) => void;
+		onSave?: (
+			text: string,
+			status: boolean | null,
+			hour: number,
+			half: 0 | 1,
+			blockCount: number,
+			category: BlockCategory | null,
+			habitConfig: HabitSaveConfig | null,
+			eventMode: boolean,
+			dueDate: string,
+			todoMode: boolean,
+			todoDone: boolean | null
+		) => void;
 		initialHour?: number | null;
 		initialHalf?: 0 | 1 | null;
 		initialTitle?: string | null;
-		initialTodo?: boolean | null;
-		habitStreaks?: Record<string, PlayerStreak | null> | null;
+		initialStatus?: boolean | null;
+		initialCategory?: BlockCategory | null;
+		initialHabit?: HabitConfig | null;
+		initialEventMode?: boolean;
+		initialTodoMode?: boolean;
+		initialTodoDone?: boolean | null;
+		initialDueDate?: string | null;
+		maxBlockCountFor?: ((hour: number, half: 0 | 1) => number) | null;
+		runLengthFor?: ((hour: number, half: 0 | 1) => number) | null;
+		startHour?: number;
+		endHour?: number;
 	}>();
+
+	const START = startHour;
+	const END = Math.max(startHour, endHour - 1);
+	const HOURS = Array.from({ length: END - START + 1 }, (_, i) => START + i);
+	const hh = (n: number) => n.toString().padStart(2, '0');
+	const CURRENT_YEAR = new Date().getFullYear();
 
 	type ModalMode = 'insert' | 'normal';
 
-	const HABIT_KEYS = ['read', 'bored', 'gym'] as const;
-	type HabitKey = (typeof HABIT_KEYS)[number];
-	type HabitPreset = {
+	type BlockCategory = 'body' | 'rest' | 'work' | 'admin' | 'bad';
+	type StatusKind = 'none' | 'bad';
+	type HabitConfig = { id: string; repeatDays: number[] };
+	type HabitSaveConfig = { id: string | null; repeatDays: number[] };
+	type CategoryPreset = {
 		label: string;
-		value: string;
-		colorClass: string;
+		value: BlockCategory;
 		key: string;
-		habitKey: HabitKey;
-		emoji: string;
 	};
 
-	const PRESETS: HabitPreset[] = [
-		{ label: 'Read', value: 'Read', colorClass: 'bg-blue-500', key: '1', habitKey: 'read', emoji: '📖' },
-		{ label: 'Bored', value: 'Bored', colorClass: 'bg-emerald-500', key: '2', habitKey: 'bored', emoji: '😵‍💫' },
-		{ label: 'Gym', value: 'Gym', colorClass: 'bg-red-500', key: '3', habitKey: 'gym', emoji: '🏋️' }
+	const CATEGORY_PRESETS: CategoryPreset[] = [
+		{ label: 'Body', value: 'body', key: '1' },
+		{ label: 'Rest', value: 'rest', key: '2' },
+		{ label: 'Work', value: 'work', key: '3' },
+		{ label: 'Admin', value: 'admin', key: '4' }
 	];
-
-	const streakArrowClassFor = (key: HabitKey) => {
-		const streak = habitStreaks?.[key] ?? null;
-		const base = 'h-2 w-2 transition-transform';
-		if (!streak) return `${base} text-stone-400`;
-		const color = streak.kind === 'positive' ? 'text-emerald-500' : 'text-rose-500';
-		const rotation = streak.kind === 'positive' ? '' : 'rotate-180';
-		return `${base} ${color} ${rotation}`;
-	};
+	const HABIT_DAYS = [
+		{ label: 'Monday', value: 0 },
+		{ label: 'Tuesday', value: 1 },
+		{ label: 'Wednesday', value: 2 },
+		{ label: 'Thursday', value: 3 },
+		{ label: 'Friday', value: 4 },
+		{ label: 'Saturday', value: 5 },
+		{ label: 'Sunday', value: 6 }
+	];
+	const HABIT_MENU_DAYS = [{ label: 'All days', value: -1 }, ...HABIT_DAYS];
 
 	let text = $state('');
-	let todo = $state<boolean | null>(null);
+	let status = $state<boolean | null>(null);
+	let category = $state<BlockCategory | null>(null);
+	let blockCount = $state(1);
+	let isNewBlock = $state(true);
+	let runLength = $state(1);
+	let habitMode = $state(false);
+	let eventMode = $state(false);
+	let todoMode = $state(false);
+	let todoDone = $state<boolean | null>(null);
+	let dueDate = $state('');
+	let dueMonth = $state('');
+	let dueDay = $state('');
+	let dueMonthEl: HTMLInputElement | null = $state(null);
+	let dueDayEl: HTMLInputElement | null = $state(null);
+	let habitMenuOpen = $state(false);
+	let habitMenuIndex = $state(0);
+	let habitDays = $state<number[]>([]);
+	let habitId = $state<string | null>(null);
+	let hourMenuOpen = $state(false);
+	let hourMenuIndex = $state(0);
+	const statusKind = $derived<StatusKind>(category === 'bad' ? 'bad' : 'none');
+	const statusLabel = $derived('Bad');
+	const statusDisabled = $derived(habitMode);
 	let saving = $state(false);
 	let inputEl: HTMLInputElement | null = $state(null);
 	let modalEl: HTMLDivElement | null = $state(null);
-	let hour = $state<number>((initialHour ?? currentSlot().hour) as number);
-	let half = $state<0 | 1>((initialHalf ?? currentSlot().half) as 0 | 1);
+	let commandHintVisible = $state(false);
+	let commandHoldTimer: number | null = $state(null);
+	let hour = $state<number>((initialHour ?? currentBlock().hour) as number);
+	let half = $state<0 | 1>((initialHalf ?? currentBlock().half) as 0 | 1);
 	let mode = $state<ModalMode>(normal ? 'normal' : 'insert');
+	let didInit = $state(false);
+
+	function clampHour(value: number) {
+		if (value < START) return START;
+		if (value > END) return END;
+		return value;
+	}
 
 	function focusInputSoon() {
 		queueMicrotask(() => inputEl?.focus());
@@ -89,16 +151,177 @@
 		if (e.target === e.currentTarget) onClose();
 	}
 
+	function setStatusKind(next: StatusKind) {
+		if (next === 'bad') {
+			status = null;
+			category = 'bad';
+			return;
+		}
+		status = null;
+		if (category === 'bad') category = null;
+	}
+
+	function cycleStatus() {
+		const next: StatusKind = statusKind === 'none' ? 'bad' : 'none';
+		setStatusKind(next);
+	}
+
+	function toggleHabitDay(value: number) {
+		if (value === -1) {
+			if (habitDays.length === HABIT_DAYS.length) {
+				habitDays = [];
+				return;
+			}
+			habitDays = HABIT_DAYS.map((day) => day.value);
+			return;
+		}
+		if (habitDays.includes(value)) {
+			habitDays = habitDays.filter((day) => day !== value);
+		} else {
+			habitDays = [...habitDays, value].sort((a, b) => a - b);
+		}
+	}
+	function toggleHabitMenu() {
+		habitMenuOpen = !habitMenuOpen;
+		if (habitMenuOpen) {
+			habitMenuIndex = Math.min(habitMenuIndex, HABIT_MENU_DAYS.length - 1);
+		}
+	}
+	function setEventMode(next: 'none' | 'event' | 'todo') {
+		if (next === 'none') {
+			eventMode = false;
+			todoMode = false;
+			todoDone = null;
+			return;
+		}
+		eventMode = true;
+		if (next === 'todo') {
+			todoMode = true;
+			if (todoDone === null) todoDone = false;
+		} else {
+			todoMode = false;
+			todoDone = null;
+		}
+		habitDays = [];
+		habitMode = false;
+		status = null;
+		blockCount = 1;
+		queueMicrotask(() => dueMonthEl?.focus());
+	}
+
+	function initDueDate(next: string | null) {
+		const fallback = new Date();
+		const raw = (next ?? '').trim();
+		if (!raw) {
+			dueMonth = '';
+			dueDay = '';
+			return;
+		}
+		const parts = raw.split('-');
+		if (parts.length === 3) {
+			dueMonth = parts[1] ?? '';
+			dueDay = parts[2] ?? '';
+			return;
+		}
+		dueMonth = String(fallback.getMonth() + 1).padStart(2, '0');
+		dueDay = String(fallback.getDate()).padStart(2, '0');
+	}
+
+	function syncDueDate() {
+		if (dueMonth.length !== 2 || dueDay.length !== 2) {
+			dueDate = '';
+			return;
+		}
+		dueDate = `${CURRENT_YEAR}-${dueMonth}-${dueDay}`;
+	}
+
+	function digitsOnly(value: string, max: number) {
+		const digits = value.replace(/\D/g, '').slice(0, max);
+		return digits;
+	}
+	function toggleHourMenu() {
+		hourMenuOpen = !hourMenuOpen;
+		habitMenuOpen = false;
+		if (hourMenuOpen) {
+			const idx = HOURS.findIndex((value) => value === hour);
+			hourMenuIndex = idx === -1 ? 0 : idx;
+		}
+	}
+	function maxBlockCount() {
+		if (!isNewBlock) return 1;
+		return maxBlockCountFor ? maxBlockCountFor(hour, half) : 1;
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+		if (e.metaKey && commandHoldTimer === null && !commandHintVisible) {
+			commandHoldTimer = window.setTimeout(() => {
+				commandHintVisible = true;
+				commandHoldTimer = null;
+			}, 1000);
+		}
+
+		if (hourMenuOpen) {
+			if (key === 'Escape') {
+				hourMenuOpen = false;
+				e.preventDefault();
+				e.stopPropagation();
+				return;
+			}
+			if (key === 'j' || key === 'ArrowDown') {
+				hourMenuIndex = (hourMenuIndex + 1) % HOURS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'k' || key === 'ArrowUp') {
+				hourMenuIndex = (hourMenuIndex - 1 + HOURS.length) % HOURS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'Enter') {
+				const next = HOURS[hourMenuIndex];
+				if (next !== undefined) hour = next;
+				hourMenuOpen = false;
+				e.preventDefault();
+				return;
+			}
+		}
+
+		if (habitMenuOpen) {
+			if (key === 'Escape') {
+				habitMenuOpen = false;
+				e.preventDefault();
+				e.stopPropagation();
+				return;
+			}
+			if (key === 'j' || key === 'ArrowDown') {
+				habitMenuIndex = (habitMenuIndex + 1) % HABIT_MENU_DAYS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'k' || key === 'ArrowUp') {
+				habitMenuIndex = (habitMenuIndex - 1 + HABIT_MENU_DAYS.length) % HABIT_MENU_DAYS.length;
+				e.preventDefault();
+				return;
+			}
+			if (key === 'Enter') {
+				const day = HABIT_MENU_DAYS[habitMenuIndex];
+				if (day) toggleHabitDay(day.value);
+				e.preventDefault();
+				return;
+			}
+		}
 
 		if (key === 'Escape') {
-			if (mode === 'insert') {
+			if (!text.trim()) {
+				onClose();
+			} else if (mode === 'insert') {
 				enterNormalMode();
 			} else {
 				onClose();
 			}
 			e.preventDefault();
+			e.stopPropagation();
 			return;
 		}
 
@@ -108,19 +331,26 @@
 			return;
 		}
 
-		if (mode === 'normal' && key === 't') {
+		if (mode === 'normal' && key === 'h') {
 			e.preventDefault();
-			todo = todo === null ? false : null;
+			toggleHabitMenu();
 			return;
 		}
 
-		// normal-mode numeric habit shortcuts
-		if (mode === 'normal') {
-			const preset = PRESETS.find((p) => p.key === key);
+		// command numeric category shortcuts
+		if (e.metaKey) {
+			const preset = CATEGORY_PRESETS.find((p) => p.key === key);
 			if (preset) {
 				e.preventDefault();
-				fillPreset(preset.value);
-				enterInsertMode();
+				category = preset.value;
+				void handleSubmit();
+				return;
+			}
+			if (key === '5') {
+				if (statusDisabled) return;
+				e.preventDefault();
+				setStatusKind('bad');
+				void handleSubmit();
 				return;
 			}
 		}
@@ -134,7 +364,17 @@
 		}
 	}
 
-	function currentSlot(): { hour: number; half: 0 | 1 } {
+	function handleKeyup(e: KeyboardEvent) {
+		if (e.key === 'Meta' || !e.metaKey) {
+			if (commandHoldTimer !== null) {
+				window.clearTimeout(commandHoldTimer);
+				commandHoldTimer = null;
+			}
+			commandHintVisible = false;
+		}
+	}
+
+	function currentBlock(): { hour: number; half: 0 | 1 } {
 		const now = new Date();
 		const hour = now.getHours();
 		const half = (now.getMinutes() < 30 ? 0 : 1) as 0 | 1;
@@ -144,12 +384,34 @@
 	async function handleSubmit() {
 		const value = text.trim();
 		if (!value || saving) return;
+		if (eventMode && !todoMode && !dueDate.trim()) return;
 
 		saving = true;
 		try {
-			await Promise.resolve(onSave(value, todo, hour, half));
+			const saveCount = isNewBlock ? blockCount : 1;
+			const habitConfig = habitMode
+				? {
+						id: habitId,
+						repeatDays: habitDays
+					}
+				: null;
+			await Promise.resolve(
+				onSave(
+					value,
+					status,
+					hour,
+					half,
+					saveCount,
+					category,
+					habitConfig,
+					eventMode,
+					dueDate,
+					todoMode,
+					todoDone
+				)
+			);
 			text = '';
-			todo = null;
+			status = null;
 			onClose();
 		} finally {
 			saving = false;
@@ -164,19 +426,78 @@
 		} else {
 			mode = 'insert';
 		}
+		if (!open) {
+			hourMenuOpen = false;
+			habitMenuOpen = false;
+			if (commandHoldTimer !== null) {
+				window.clearTimeout(commandHoldTimer);
+				commandHoldTimer = null;
+			}
+			commandHintVisible = false;
+		}
+	});
+
+	$effect(() => {
+		if (!open) {
+			didInit = false;
+			return;
+		}
+		if (didInit) return;
+		didInit = true;
+		const fallback = currentBlock();
+		hour = clampHour((initialHour ?? fallback.hour) as number);
+		half = (initialHalf ?? fallback.half) as 0 | 1;
+		text = initialTitle ?? '';
+		status = initialStatus === false ? null : (initialStatus ?? null);
+		category = initialCategory ?? null;
+		habitId = initialHabit?.id ?? null;
+		habitDays = initialHabit?.repeatDays ?? [];
+		habitMode = habitDays.length > 0;
+		todoMode = initialTodoMode ?? false;
+		eventMode = (initialEventMode ?? false) || todoMode;
+		todoDone = todoMode ? (initialTodoDone ?? false) : null;
+		initDueDate(initialDueDate ?? null);
+		syncDueDate();
+		habitMenuOpen = false;
+		habitMenuIndex = 0;
+		isNewBlock = (initialTitle ?? '').trim().length === 0 && !initialHabit;
+		runLength = !isNewBlock && runLengthFor ? runLengthFor(hour, half) : 1;
+		blockCount = habitMode ? 1 : isNewBlock ? 1 : runLength;
+	});
+
+	$effect(() => {
+		if (!open || isNewBlock || habitMode) return;
+		runLength = runLengthFor ? runLengthFor(hour, half) : 1;
+		blockCount = runLength;
+	});
+
+	$effect(() => {
+		if (!open || !isNewBlock) return;
+		const maxCount = maxBlockCount();
+		if (blockCount > maxCount) {
+			blockCount = maxCount;
+		}
+	});
+	$effect(() => {
+		if (!open) return;
+		habitMode = habitDays.length > 0;
+		if (habitMode) {
+			status = null;
+			blockCount = 1;
+		} else {
+			habitId = null;
+		}
 	});
 
 	$effect(() => {
 		if (!open) return;
-		const fallback = currentSlot();
-		hour = (initialHour ?? fallback.hour) as number;
-		half = (initialHalf ?? fallback.half) as 0 | 1;
-		text = initialTitle ?? '';
-		todo = initialTodo ?? null;
+		void dueMonth;
+		void dueDay;
+		syncDueDate();
 	});
 
-	function fillPreset(s: string) {
-		text = s;
+	function selectCategory(next: BlockCategory) {
+		category = category === next ? null : next;
 		queueMicrotask(() => inputEl?.focus());
 	}
 </script>
@@ -184,83 +505,208 @@
 {#if open}
 	<div
 		bind:this={modalEl}
-		in:fade={{ duration: 150 }}
-		class="fixed inset-0 z-[130] flex items-center justify-center focus:ring-0 focus:outline-0"
+		in:fade={{ duration: 100 }}
+		class="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 focus:ring-0 focus:outline-0"
 		role="dialog"
 		aria-modal="true"
 		aria-label="New log"
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
+		onkeyup={handleKeyup}
 	>
 		<div
 			in:scale={{ start: 0.95, duration: 160 }}
-			class="w-full max-w-md rounded-xl border border-stone-200 bg-white text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
+			class="w-full max-w-3xl rounded-2xl border border-stone-200 bg-white text-xl text-stone-800 shadow-[0_12px_32px_rgba(15,15,15,0.12)]"
 		>
-			<div class="flex flex-row gap-1 p-3 pb-0 text-xs text-stone-600">
-				<select
-					class="no-chevron inline-flex items-center rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-					value={hour}
-					onchange={(event) => (hour = Number((event.currentTarget as HTMLSelectElement).value))}
-				>
-					{#each HOURS as h}
-						<option value={h}>Hour {hh(h)}</option>
-					{/each}
-				</select>
-				<button
-					class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-[11px] tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
-					onclick={() => (half = half ? 0 : 1)}
-				>
-					Block
-					<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
-						{#key half}
-							<span
-								class="absolute inset-0 flex items-center justify-center leading-none"
-								in:fly={{ y: half ? -10 : 10, duration: 180 }}
-								out:fly={{ y: half ? 10 : -10, duration: 180 }}
+			{#if !eventMode}
+				<div class="flex flex-row gap-1 p-4 pb-0 text-base text-stone-600">
+					<div class="relative">
+						<button
+							type="button"
+							class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+							onclick={toggleHourMenu}
+						>
+							Hour {hh(hour)}
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-4 w-4 text-stone-400"
+								fill="currentColor"
+								aria-hidden="true"
 							>
-								{half ? 'B' : 'A'}
-							</span>
-						{/key}
-					</span>
-				</button>
-			</div>
+								<path
+									d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708"
+								/>
+							</svg>
+						</button>
+						{#if hourMenuOpen}
+							<div
+								class="absolute top-full left-0 z-20 mt-2 w-28 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+							>
+								<div class="max-h-48 space-y-1 overflow-auto">
+									{#each HOURS as h, index}
+										<button
+											type="button"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-base text-stone-700"
+											class:bg-stone-100={hourMenuIndex === index}
+											onclick={() => {
+												hour = h;
+												hourMenuOpen = false;
+											}}
+											onmouseenter={() => (hourMenuIndex = index)}
+										>
+											<span>Hour {hh(h)}</span>
+											{#if h === hour}
+												<span class="text-base font-semibold text-stone-900">✓</span>
+											{/if}
+										</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</div>
+					<button
+						class="inline-flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500 uppercase hover:bg-stone-200 focus:bg-stone-200 focus:outline-0"
+						onclick={() => (half = half ? 0 : 1)}
+					>
+						Block
+						<span class="relative inline-block h-[1.25em] w-[1em] overflow-hidden align-middle">
+							{#key half}
+								<span
+									class="absolute inset-0 flex items-center justify-center leading-none"
+									in:fly={{ y: half ? -10 : 10, duration: 180 }}
+									out:fly={{ y: half ? 10 : -10, duration: 180 }}
+								>
+									{half ? 'B' : 'A'}
+								</span>
+							{/key}
+						</span>
+					</button>
+				</div>
+			{:else}
+				<div class="flex flex-row items-center gap-1 p-4 pb-0 text-base text-stone-600">
+					<div
+						class="flex items-center gap-1 rounded-md p-1 pl-2 text-base tracking-wide text-stone-500"
+					>
+						<input
+							bind:this={dueMonthEl}
+							type="text"
+							inputmode="numeric"
+							placeholder="MM"
+							class="w-8 border-none bg-transparent p-0 text-center text-base tracking-wide text-stone-500 outline-none focus:outline-none"
+							value={dueMonth}
+							oninput={(event) => {
+								dueMonth = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
+								if (dueMonth.length === 2) dueDayEl?.focus();
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Backspace' && !dueMonth) {
+									dueMonthEl?.blur();
+								}
+							}}
+						/>
+						<span class="text-stone-300">/</span>
+						<input
+							bind:this={dueDayEl}
+							type="text"
+							inputmode="numeric"
+							placeholder="DD"
+							class="w-8 border-none bg-transparent p-0 text-center text-base tracking-wide text-stone-500 outline-none focus:outline-none"
+							value={dueDay}
+							oninput={(event) => {
+								dueDay = digitsOnly((event.currentTarget as HTMLInputElement).value, 2);
+								if (dueDay.length === 2) inputEl?.focus();
+							}}
+							onkeydown={(event) => {
+								if (event.key === 'Backspace' && !dueDay) {
+									dueMonthEl?.focus();
+								}
+							}}
+						/>
+					</div>
+				</div>
+			{/if}
 
 			<div class="flex w-full flex-row items-center">
 				<input
 					bind:this={inputEl}
 					type="text"
 					placeholder="Title"
-					class="w-full p-5 text-2xl text-stone-800 transition outline-none"
+					class="w-full p-6 py-8 text-4xl text-stone-800 transition outline-none"
 					onfocus={enterInsertMode}
 					bind:value={text}
 					autocomplete="off"
 				/>
-				{#if todo === false}
-					<div
-						class="relative mr-5 grid h-3 w-3 rounded-full p-3"
-						transition:fly={{ y: 2, duration: 200 }}
-					>
-						<span
-							class="pointer-events-none absolute inset-0 rounded-full border border-[1px] border-stone-400 transition duration-200 ease-out"
-						/>
-					</div>
-				{/if}
 			</div>
 
-			<div class="flex flex-row gap-1 px-4 pb-2">
-				{#each PRESETS as p}
+			<div class="flex flex-row gap-2 px-6 pb-4">
+				{#each CATEGORY_PRESETS as p}
 					<button
 						type="button"
-						class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-						onclick={() => fillPreset(p.value)}
+						class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+						class:bg-stone-100={category === p.value}
+						onclick={() => selectCategory(p.value)}
 					>
-						<span class="relative flex h-2 w-2 items-center justify-center">
-							<div class="text-[8px]">{p.emoji}</div>
-							<!-- flying key label in normal mode -->
-							{#if mode === 'normal'}
+						<span
+							class={`relative flex h-4 w-4 items-center justify-center ${
+								p.value === 'admin'
+									? 'text-amber-900/30'
+									: p.value === 'body'
+										? 'text-rose-300'
+										: p.value === 'work'
+											? 'text-slate-300'
+											: 'text-violet-300'
+							}`}
+						>
+							{#if p.value === 'rest'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-4 w-4"
+									fill="currentColor"
+								>
+									<path
+										d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6"
+									/>
+								</svg>
+							{:else if p.value === 'body'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-4 w-4"
+									fill="currentColor"
+								>
+									<path
+										d="M1.828 8.9 8.9 1.827a4 4 0 1 1 5.657 5.657l-7.07 7.071A4 4 0 1 1 1.827 8.9Zm9.128.771 2.893-2.893a3 3 0 1 0-4.243-4.242L6.713 5.429z"
+									/>
+								</svg>
+							{:else if p.value === 'work'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-4 w-4"
+									fill="currentColor"
+								>
+									<path
+										d="M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1m-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5z"
+									/>
+								</svg>
+							{:else if p.value === 'admin'}
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-4 w-4"
+									fill="currentColor"
+								>
+									<path
+										d="M12.643 15C13.979 15 15 13.845 15 12.5V5H1v7.5C1 13.845 2.021 15 3.357 15zM5.5 7h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1 0-1M.8 1a.8.8 0 0 0-.8.8V3a.8.8 0 0 0 .8.8h14.4A.8.8 0 0 0 16 3V1.8a.8.8 0 0 0-.8-.8z"
+									/>
+								</svg>
+							{/if}
+							{#if commandHintVisible}
 								<span
-									class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+									class="absolute h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
 									in:fly={{ y: 6, duration: 200 }}
 								>
 									{p.key}
@@ -272,30 +718,135 @@
 					</button>
 				{/each}
 				<button
-					class="inline-flex items-center justify-center gap-1 rounded-lg border border-stone-200 px-2 py-1 text-[10px] font-medium text-stone-900 transition"
-					onclick={() => {
-						if (todo === null) todo = false;
-						else todo = null;
-					}}
+					type="button"
+					class="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+					class:bg-stone-100={statusKind !== 'none'}
+					class:opacity-50={statusDisabled}
+					class:cursor-not-allowed={statusDisabled}
+					onclick={cycleStatus}
+					disabled={statusDisabled}
 				>
-					<span class="relative flex h-3 w-3 items-center justify-center">
-						<span class={`h-2 w-2 rounded-full border border-stone-400`} />
-						{#if mode === 'normal'}
+					<span class="relative flex h-4 w-4 items-center justify-center">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							viewBox="0 0 16 16"
+							class="h-4 w-4 text-rose-500"
+							fill="currentColor"
+						>
+							<path
+								d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0M5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293z"
+							/>
+						</svg>
+						{#if commandHintVisible}
 							<span
-								class="absolute h-3 w-3 rounded-xs bg-stone-200 text-[8px] text-stone-500"
+								class="absolute z-20 h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
 								in:fly={{ y: 6, duration: 200 }}
 							>
-								t
+								5
 							</span>
 						{/if}
 					</span>
-					Todo
+					{statusLabel}
 				</button>
 			</div>
 
-			<div class="flex items-center justify-end gap-2 border-t border-stone-100 p-4 py-3">
+			<div class="flex items-center justify-between gap-2 border-t border-stone-100 p-6 py-4">
+				<div class="flex items-center gap-2">
+					<div class="relative">
+						<button
+							type="button"
+							class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+							class:bg-stone-100={habitMode}
+							class:opacity-50={eventMode}
+							class:cursor-not-allowed={eventMode}
+							onclick={() => {
+								if (eventMode) return;
+								toggleHabitMenu();
+							}}
+							disabled={eventMode}
+						>
+							<span class="relative flex h-4 w-4 items-center justify-center">
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 16 16"
+									class="h-4 w-4 text-stone-700"
+									fill="currentColor"
+								>
+									<path
+										d="M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm4 9h8a.5.5 0 0 0 .374-.832l-4-4.5a.5.5 0 0 0-.748 0l-4 4.5A.5.5 0 0 0 4 11"
+									/>
+								</svg>
+								{#if mode === 'normal'}
+									<span
+										class="absolute z-20 h-4 w-4 rounded-xs bg-stone-200 text-[10px] text-stone-500"
+										in:fly={{ y: 6, duration: 200 }}
+									>
+										h
+									</span>
+								{/if}
+							</span>
+							Habit
+						</button>
+						{#if habitMenuOpen}
+							<div
+								class="absolute top-full left-0 z-20 mt-2 w-40 rounded-lg border border-stone-200 bg-white p-2 shadow-lg"
+							>
+								<div class="space-y-1">
+									{#each HABIT_MENU_DAYS as day, index}
+										<button
+											type="button"
+											class="flex w-full items-center justify-between rounded-md px-2 py-1 text-base text-stone-700"
+											class:bg-stone-100={habitMenuIndex === index}
+											onclick={() => toggleHabitDay(day.value)}
+											onmouseenter={() => (habitMenuIndex = index)}
+										>
+											<span>{day.label}</span>
+											{#if day.value === -1 ? habitDays.length === HABIT_DAYS.length : habitDays.includes(day.value)}
+												<span class="text-base font-semibold text-stone-900">✓</span>
+											{/if}
+										</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</div>
+					<button
+						type="button"
+						class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+						class:bg-stone-100={eventMode && !todoMode}
+						onclick={() => setEventMode(eventMode && !todoMode ? 'none' : 'event')}
+					>
+						<span class="flex h-4 w-4 items-center justify-center">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								class="h-4 w-4 text-stone-700"
+								fill="currentColor"
+								aria-hidden="true"
+							>
+								<path
+									d="M2 2v13.5a.5.5 0 0 0 .74.439L8 13.069l5.26 2.87A.5.5 0 0 0 14 15.5V2a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2"
+								/>
+							</svg>
+						</span>
+						Event
+					</button>
+					<button
+						type="button"
+						class="inline-flex items-center gap-2 rounded-xl border border-stone-200 px-3 py-1.5 text-base font-medium text-stone-900 transition"
+						class:bg-stone-100={todoMode}
+						onclick={() => setEventMode(todoMode ? 'none' : 'todo')}
+					>
+						<span class="flex h-4 w-4 items-center justify-center">
+							<svg viewBox="0 0 24 24" class="h-4 w-4 text-stone-700" fill="none">
+								<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
+							</svg>
+						</span>
+						Todo
+					</button>
+				</div>
 				<button
-					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-2 py-1 text-xs font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+					class="inline-flex items-center justify-center gap-2 rounded-lg border border-stone-200 bg-stone-900 px-3 py-1.5 text-base font-medium text-white transition hover:bg-stone-800 focus-visible:ring-2 focus-visible:ring-stone-500 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
 					onclick={handleSubmit}
 				>
 					{saving ? 'Saving…' : `Save `}
@@ -305,15 +856,3 @@
 		</div>
 	</div>
 {/if}
-
-<style>
-	select.no-chevron {
-		-webkit-appearance: none;
-		-moz-appearance: none;
-		appearance: none;
-		background-image: none;
-	}
-	select.no-chevron::-ms-expand {
-		display: none;
-	}
-</style>

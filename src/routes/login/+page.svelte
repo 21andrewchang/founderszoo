@@ -1,52 +1,57 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
-	import { getContext } from 'svelte';
-	import type { Session } from '$lib/session';
-	import type { Writable } from 'svelte/store';
-
-	const session = getContext<Writable<Session>>('session');
 
 	let email = $state('');
 	let password = $state('');
 	let loading = $state(false);
-	let errorMessage = $state('');
+	let message = $state('');
+	let messageType = $state<'error' | 'success' | ''>('');
 
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if (loading) return;
 		loading = true;
-		errorMessage = '';
+		message = '';
+		messageType = '';
 		try {
 			const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 			if (error) throw error;
 			const user = data.user ?? null;
-			if (session && user) {
-				session.set({
-					user,
-					name: user.user_metadata?.name ?? '',
-					loading: false
-				});
+			if (!user) {
+				messageType = 'error';
+				message = 'Unable to sign in.';
+				return;
 			}
-			goto('/');
+			const { data: userRow } = await supabase
+				.from('users')
+				.select('username')
+				.eq('id', user.id)
+				.maybeSingle();
+			if (userRow?.username) {
+				await goto(`/${userRow.username}`);
+				return;
+			}
+			await goto('/');
 		} catch (err) {
-			console.error('sign in error', err);
-			errorMessage = err instanceof Error ? err.message : 'Unable to sign in.';
+			messageType = 'error';
+			message = err instanceof Error ? err.message : 'Unable to sign in.';
 		} finally {
 			loading = false;
 		}
 	}
 </script>
 
-<div class="flex min-h-dvh flex-col items-center justify-center bg-white px-4">
-	<div class="w-full max-w-lg">
+<div class="flex min-h-dvh items-center justify-center bg-white px-6 py-10">
+	<div class="w-full max-w-md">
 		<form class="flex flex-col gap-5" onsubmit={handleSubmit}>
 			<input
 				type="email"
 				required
 				bind:value={email}
 				placeholder="jane@company.com"
-				class="w-full rounded-xl border border-stone-200 px-4 py-3 text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+				autocomplete="email"
+				class="w-full rounded-xl border border-stone-200 px-4 py-3 text-stone-900 placeholder-stone-400 transition outline-none focus:border-stone-400"
 			/>
 
 			<input
@@ -54,11 +59,14 @@
 				required
 				bind:value={password}
 				placeholder="••••••••"
-				class="w-full rounded-xl border border-stone-200 px-4 py-3 text-stone-900 placeholder-stone-400 focus:border-stone-400 focus:outline-none"
+				autocomplete="current-password"
+				class="w-full rounded-xl border border-stone-200 px-4 py-3 text-stone-900 placeholder-stone-400 transition outline-none focus:border-stone-400"
 			/>
 
-			{#if errorMessage}
-				<p class="text-sm text-rose-600">{errorMessage}</p>
+			{#if message}
+				<p class={`text-sm ${messageType === 'error' ? 'text-rose-500' : 'text-emerald-600'}`}>
+					{message}
+				</p>
 			{/if}
 
 			<button

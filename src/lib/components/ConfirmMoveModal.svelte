@@ -5,33 +5,41 @@
 		open = false,
 		onCancel = () => {},
 		onConfirm = () => {},
-		slotLabel = '',
+		blockLabel = '',
 		fromLabel = '',
 		toLabel = '',
 		destinationLabel = null,
 		hasDestinationContent = false,
 		isHabit = false,
 		mode = 'move',
+		itemType = null,
+		warningText = null,
 		loading = false
 	} = $props<{
 		open?: boolean;
 		onCancel?: () => void;
 		onConfirm?: () => void | Promise<void>;
-		slotLabel?: string;
+		blockLabel?: string;
 		fromLabel?: string;
 		toLabel?: string;
 		destinationLabel?: string | null;
 		hasDestinationContent?: boolean;
 		isHabit?: boolean;
-		mode?: 'move' | 'swap' | 'delete';
+		mode?: 'move' | 'swap' | 'delete' | 'copy';
+		itemType?: string | null;
+		warningText?: string | null;
 		loading?: boolean;
 	}>();
 
 	const isSwap = $derived(mode === 'swap');
 	const isDelete = $derived(mode === 'delete');
-	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : 'Move');
-	const actionVerbIng = $derived(isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : 'Moving…');
-	const warningShouldRender = $derived(isDelete || hasDestinationContent);
+	const isCopy = $derived(mode === 'copy');
+	const itemLabel = $derived(itemType ?? (isHabit ? 'habit' : 'block'));
+	const actionVerb = $derived(isDelete ? 'Delete' : isSwap ? 'Swap' : isCopy ? 'Copy' : 'Move');
+	const actionVerbIng = $derived(
+		isDelete ? 'Deleting…' : isSwap ? 'Swapping…' : isCopy ? 'Copying…' : 'Moving…'
+	);
+	const warningShouldRender = $derived(isDelete || hasDestinationContent || isHabit);
 	const warningClasses = $derived(
 		isDelete
 			? 'border-rose-200 bg-rose-50 text-rose-900'
@@ -74,10 +82,12 @@
 		role="dialog"
 		aria-modal="true"
 		aria-label={isDelete
-			? 'Delete slot confirmation'
+			? `Delete ${itemLabel} confirmation`
 			: isSwap
-				? 'Swap slots confirmation'
-				: 'Move slot confirmation'}
+				? `Swap ${itemLabel}s confirmation`
+				: isCopy
+					? `Copy ${itemLabel} confirmation`
+					: `Move ${itemLabel} confirmation`}
 		tabindex="-1"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
@@ -89,34 +99,37 @@
 			<div class="space-y-3 px-5 py-5 text-sm text-stone-600">
 				<div class="text-base font-semibold text-stone-900">
 					{#if isDelete}
-						Delete {isHabit ? 'habit' : 'slot'}?
+						Delete {itemLabel}?
 					{:else if isSwap}
-						Swap slots?
+						Swap {itemLabel}s?
+					{:else if isCopy}
+						Copy {itemLabel}?
 					{:else}
-						Move {isHabit ? 'habit' : 'slot'}?
+						Move {itemLabel}?
 					{/if}
 				</div>
 				{#if isDelete}
 					<p>
-						<span class="font-medium text-stone-900"
-							>{slotLabel || (isHabit ? 'this habit' : 'this slot')}</span
-						>
+						<span class="font-medium text-stone-900">{blockLabel || `this ${itemLabel}`}</span>
 						at <span class="font-medium text-stone-900">{fromLabel}</span>
 					</p>
 				{:else}
 					<p>
-						<span class="font-medium text-stone-900"
-							>{slotLabel || (isHabit ? 'this habit' : 'this slot')}</span
-						>
-						from <span class="font-medium text-stone-900">{fromLabel}</span> to
-						<span class="font-medium text-stone-900">{toLabel}</span>?
+						<span class="font-medium text-stone-900">{blockLabel || `this ${itemLabel}`}</span>
+						{#if isCopy}
+							copy to <span class="font-medium text-stone-900">{toLabel}</span>?
+						{:else}
+							from <span class="font-medium text-stone-900">{fromLabel}</span> to
+							<span class="font-medium text-stone-900">{toLabel}</span>?
+						{/if}
 					</p>
 				{/if}
 				{#if warningShouldRender}
 					<div class={`rounded-lg border px-3 py-2 text-xs ${warningClasses}`}>
 						{#if isDelete}
-							This will permanently clear this slot including TODOs and Habits.
-						{:else}
+							{warningText ??
+								'This will permanently clear this block including progress and habits.'}
+						{:else if hasDestinationContent}
 							{#if isSwap}
 								This will swap with
 							{:else}
@@ -128,6 +141,8 @@
 								the existing entry
 							{/if}
 							at <span class="font-medium">{toLabel}</span>.
+						{:else if isHabit}
+							This will clear the habit from <span class="font-medium">{fromLabel}</span>.
 						{/if}
 					</div>
 				{/if}

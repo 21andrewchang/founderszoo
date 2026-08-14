@@ -1,19 +1,23 @@
 <script lang="ts">
 	import { onMount, setContext } from 'svelte';
+	import { fly, blur, scale, fade } from 'svelte/transition';
 	import '../app.css';
 	import { writable, type Writable } from 'svelte/store';
 	import { browser } from '$app/environment';
+	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
 	import type { Session } from '$lib/session';
 	import type { User } from '@supabase/supabase-js';
 	import { TRACKED_PLAYERS, type TrackedPlayerKey } from '$lib/trackedPlayers';
 	import { formatLocalTimestamp } from '$lib/time';
-	import { useGlobalPresence, type PresenceSnapshot } from '$lib/presence';
+	import { fetchCompletionByDate } from '$lib/heatmap';
+	import { heatmapStore } from '$lib/heatmapStore';
+	import GrogathLogin from './grogath/+page.svelte';
 
 	type Person = { label: string; user_id: string };
-	type Goal = { title: string; due_date: string };
+	type Goal = { id: string; title: string; goal_key: string | null };
 	type PlayerDisplay = { label: string; user_id: string | null };
-	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number | null> };
+	type HistoryRow = { date: string; values: Record<TrackedPlayerKey, number> };
 
 	const TRACKED_ROOMS = ['/', '/manifesto', '/collection', '/fundamentals'];
 
@@ -22,6 +26,15 @@
 	const TOTAL_BLOCKS_PER_DAY = (END_HOUR - START_HOUR) * 2;
 	const HISTORY_LOOKBACK_DAYS = 30;
 	const CURRENT_PROGRESS_POLL_MS = 60_000;
+	const HEATMAP_LOOKBACK_DAYS = 365;
+	const YC_APP_DUE_DATE = '2026-02-09';
+	const HEATMAP_HOURS_BATCH_SIZE = 25;
+	const HEATMAP_REFRESH_EVENT = 'heatmap-refresh';
+
+	const formatDateString = (date: Date) =>
+		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+			date.getDate()
+		).padStart(2, '0')}`;
 
 	// session + auth context
 	const session: Writable<Session> = writable({ user: null, name: '', loading: true });
@@ -30,16 +43,11 @@
 	const authSetStore: Writable<boolean | null> = writable(null);
 	setContext('authSet', authSetStore);
 
-	const presenceCountsStore: Writable<PresenceSnapshot> = writable({
-		tabs: 0,
-		unique: 0,
-		connected: false
-	});
-	setContext('presenceCounts', presenceCountsStore);
+	const activeDayDateStore: Writable<string | null> = writable(null);
+	setContext('activeDayDate', activeDayDateStore);
 
 	let authSet = $state<boolean | null>(null);
 	let viewerId = $state<string | null>(null);
-	let store = $derived(useGlobalPresence(viewerId));
 
 	const applyUser = (u: User | null) => {
 		session.set({
@@ -49,37 +57,150 @@
 		});
 		viewerId = u?.id ?? null;
 		if (!viewerId) {
-			activeGoal = null;
-			newGoalTitle = '';
-			newGoalDueDate = '';
+			goalsByKey = {};
+			isGoalModalOpen = false;
 		}
+	};
+
+	const applyAuthState = (u: User | null) => {
+		applyUser(u);
+		authSet = u ? true : false;
+		authSetStore.set(authSet);
 	};
 
 	// tracked players, history, goals, etc.
 	let trackedDisplays = $state<Record<TrackedPlayerKey, PlayerDisplay>>({
-		andrew: { label: 'Andrew', user_id: null }
+		andrew: { label: 'Andrew', user_id: null },
+		nico: { label: 'Nico', user_id: null }
 	});
 	let dayHistoryRows = $state<HistoryRow[]>([]);
 	let dayHistoryOpen = $state(false);
 	let dayHistoryLoading = $state(false);
 	let currentCombinedPct = $state<number>(0);
 	let dateMenuEl = $state<HTMLDivElement | null>(null);
-	let activeGoal = $state<Goal | null>(null);
-	let newGoalTitle = $state('');
-	let newGoalDueDate = $state('');
-	let isCreatingGoal = $state(false);
-
-	const formatDateString = (date: Date) =>
-		`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-			date.getDate()
-		).padStart(2, '0')}`;
-	const localToday = () => formatDateString(new Date());
-	const dateStringNDaysAgo = (days: number) => {
-		const d = new Date();
-		d.setDate(d.getDate() - days);
-		return formatDateString(d);
+	type SummaryCategoryKey = 'body' | 'rest' | 'work' | 'admin' | 'bad';
+	type SummaryCategory = {
+		key: SummaryCategoryKey;
+		label: string;
+		percent: number;
+		hours: number;
 	};
-	const parseLocalDate = (dateStr: string): Date | null => {
+	type SummaryStats = {
+		planned: number;
+		completed: number;
+		productiveHours: number;
+		score: number;
+		categoryBreakdown: SummaryCategory[];
+	};
+
+	const initialHeatmap = ($page.data?.heatmapByDate as Record<string, number> | null) ?? {};
+	let heatmapOpen = $state(false);
+	let heatmapLoading = $state(Object.keys(initialHeatmap).length === 0);
+	let heatmapAnimated = $state(false);
+	let heatmapByDate = $state<Record<string, number>>(initialHeatmap);
+	let heatmapScrollEl = $state<HTMLDivElement | null>(null);
+	let heatmapTooltip = $state({ text: '', x: 0, y: 0, visible: false });
+	let calendarLockedDate = $state<string | null>(null);
+	let calendarHoverDate = $state<string | null>(null);
+	let calendarMonthIndex = $state<number>(new Date().getMonth());
+	let calendarYear = $state<number>(new Date().getFullYear());
+	let calendarSummary = $state<SummaryStats | null>(null);
+	let calendarSummaryDate = $state<string | null>(null);
+	let calendarSummaryLabel = $state<string | null>(null);
+	let calendarSummaryLoading = $state(false);
+	let calendarSummaryRequestId = 0;
+	let calendarHoverPosition = $state<{ x: number; y: number } | null>(null);
+	let calendarActiveGroupIndex = $state(0);
+	let calendarScrollEl = $state<HTMLDivElement | null>(null);
+	let calendarGroupEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarWeekEls = $state<(HTMLDivElement | null)[]>([]);
+	let calendarScrollDirection = $state<1 | -1 | 0>(0);
+	let calendarSnapDisabled = $state(false);
+	let calendarDidInitialScroll = $state(false);
+	let calendarAutoScroll = $state(false);
+	let calendarGroupObserver: IntersectionObserver | null = null;
+	let calendarVisibleMonth = $state<{ monthIndex: number; year: number } | null>(null);
+	let calendarScrollSnapTimer: number | null = null;
+
+	type GoalEntry = {
+		id: string | null;
+		title: string;
+		goal_key: string;
+		due_date: string;
+	};
+	type GoalSection = { title: string; items: GoalEntry[] };
+
+	const MONTHS = [
+		'January',
+		'February',
+		'March',
+		'April',
+		'May',
+		'June',
+		'July',
+		'August',
+		'September',
+		'October',
+		'November',
+		'December'
+	];
+	const MONTH_LABELS = [
+		'Jan',
+		'Feb',
+		'Mar',
+		'Apr',
+		'May',
+		'Jun',
+		'Jul',
+		'Aug',
+		'Sep',
+		'Oct',
+		'Nov',
+		'Dec'
+	];
+	const WEEKS = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
+	const NOW = new Date();
+	const CURRENT_YEAR = NOW.getFullYear();
+	const CURRENT_MONTH_INDEX = NOW.getMonth();
+	const CURRENT_WEEK_INDEX = Math.min(4, Math.max(1, Math.ceil(NOW.getDate() / 7)));
+	const MONTH_INDEX_BY_KEY = Object.fromEntries(
+		MONTHS.map((label, index) => [label.toLowerCase(), index])
+	);
+	const MONTH_ABBR_BY_KEY = Object.fromEntries(
+		MONTHS.map((label) => [label.toLowerCase().slice(0, 3), label.toLowerCase()])
+	);
+	const CURRENT_MONTH_KEY = MONTHS[CURRENT_MONTH_INDEX]?.toLowerCase() ?? 'january';
+	const CURRENT_WEEK_KEY = `${CURRENT_MONTH_KEY}-week${CURRENT_WEEK_INDEX}`;
+	const YEAR_ENTRY: GoalEntry = {
+		id: null,
+		title: '',
+		goal_key: 'year',
+		due_date: `${CURRENT_YEAR}-12-31`
+	};
+	const MONTH_STRUCTURE = MONTHS.map((month, monthIndex) => {
+		const monthKey = month.toLowerCase();
+		return {
+			label: MONTH_LABELS[monthIndex] ?? month,
+			key: monthKey,
+			weeks: WEEKS.map((week, weekIndex) => ({
+				label: week,
+				key: `${monthKey}-week${weekIndex + 1}`
+			}))
+		};
+	});
+
+	let goalsByKey = $state<Record<string, GoalEntry>>({});
+	let isGoalModalOpen = $state(false);
+	let pendingNavG = false;
+	let navGTimeout: number | null = null;
+	let savingGoals = $state<Record<string, boolean>>({});
+	let goalRotationIndex = $state(0);
+	let pinnedGoalKey = $state<GoalRotationKey | null>(null);
+	let selectedMonthKey = $state(CURRENT_MONTH_KEY);
+	type GoalRotationKey = 'year' | 'month' | 'week';
+	const msPerDay = 24 * 60 * 60 * 1000;
+
+	function parseLocalDate(dateStr: string): Date | null {
 		const [yearStr, monthStr, dayStr] = dateStr.split('-');
 		const year = Number(yearStr);
 		const month = Number(monthStr);
@@ -96,17 +217,7 @@
 			return null;
 		}
 		return new Date(year, month - 1, day);
-	};
-	const formatDisplayDate = (
-		dateStr: string,
-		options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
-	) => {
-		const parsed = parseLocalDate(dateStr);
-		if (!parsed) return dateStr;
-		return parsed.toLocaleDateString(undefined, options);
-	};
-	const todayLabel = formatDisplayDate(localToday());
-	const msPerDay = 24 * 60 * 60 * 1000;
+	}
 
 	function startOfDay(date: Date) {
 		return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -120,6 +231,149 @@
 		const today = startOfDay(new Date());
 		return Math.round((due.getTime() - today.getTime()) / msPerDay);
 	}
+	const GOAL_ROTATION = $derived.by<GoalRotationKey[]>(() => ['year', 'month', 'week']);
+	const yearGoalTitle = $derived((goalsByKey.year?.title ?? '').trim() || 'Milestone');
+	const yearGoalEntry = $derived(mergedYearEntry());
+	const currentMonthEntry = $derived(mergeGoal(CURRENT_MONTH_KEY));
+	const currentWeekEntry = $derived(mergeGoal(CURRENT_WEEK_KEY));
+	const currentGoalKey = $derived(GOAL_ROTATION[goalRotationIndex] ?? 'year');
+	const displayGoalKey = $derived(pinnedGoalKey ?? currentGoalKey);
+
+	function entryForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') return currentWeekEntry;
+		if (goalKey === 'month') return currentMonthEntry;
+		return yearGoalEntry;
+	}
+
+	function rangeLabelForGoalKey(goalKey: GoalRotationKey) {
+		if (goalKey === 'week') {
+			return `W${CURRENT_WEEK_INDEX}`;
+		}
+		if (goalKey === 'month') {
+			return `${MONTH_LABELS[CURRENT_MONTH_INDEX]}`;
+		}
+		return String(CURRENT_YEAR);
+	}
+
+	const currentGoalEntry = $derived(entryForGoalKey(currentGoalKey));
+	const displayGoalEntry = $derived(entryForGoalKey(displayGoalKey));
+	const currentRangeLabel = $derived(rangeLabelForGoalKey(currentGoalKey));
+	const displayRangeLabel = $derived(rangeLabelForGoalKey(displayGoalKey));
+
+	const localToday = () => formatDateString(new Date());
+	const dateStringNDaysAgo = (days: number) => {
+		const d = new Date();
+		d.setDate(d.getDate() - days);
+		return formatDateString(d);
+	};
+	const formatDisplayDate = (
+		dateStr: string,
+		options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+	) => {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return dateStr;
+		return parsed.toLocaleDateString(undefined, options);
+	};
+	const activeDayDate = $derived($activeDayDateStore ?? localToday());
+	const activeDayLabel = $derived(
+		formatDisplayDate(activeDayDate, { weekday: 'short', month: 'short', day: 'numeric' })
+	);
+	const isActiveDayToday = $derived(activeDayDate === localToday());
+	const heatmapDateLabel = (dateStr: string) =>
+		formatDisplayDate(dateStr, { weekday: 'short', month: 'short', day: 'numeric' });
+	const calendarSelectedDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarPreviewDate = $derived(calendarLockedDate ?? activeDayDate);
+	const calendarSummaryTarget = $derived(calendarHoverDate ?? calendarLockedDate ?? activeDayDate);
+	const calendarRangeAnchorDate = $derived(formatDateString(new Date(calendarYear, 0, 1)));
+	const calendarMonthLabel = $derived(`${MONTHS[calendarMonthIndex] ?? MONTHS[0]} ${calendarYear}`);
+	const calendarWeeks = $derived(buildCalendarWeeks(calendarYear, calendarMonthIndex));
+	const calendarWeekRange = $derived(buildCalendarWeekRange(calendarRangeAnchorDate, 12));
+	const calendarWeekGroups = $derived(chunkWeeks(calendarWeekRange, 6));
+	$effect(() => {
+		calendarWeekEls = Array.from({ length: calendarWeekRange.length }, () => null);
+	});
+	const calendarHeaderLabel = $derived.by(() => {
+		if (calendarVisibleMonth) {
+			return `${MONTHS[calendarVisibleMonth.monthIndex] ?? MONTHS[0]} ${calendarVisibleMonth.year}`;
+		}
+		const group = calendarWeekGroups[calendarActiveGroupIndex];
+		return group ? calendarGroupLabel(group) : calendarMonthLabel;
+	});
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (heatmapLoading) {
+			heatmapAnimated = false;
+			return;
+		}
+		heatmapAnimated = false;
+		requestAnimationFrame(() => {
+			heatmapAnimated = true;
+		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarHoverDate = null;
+			calendarLockedDate = null;
+			return;
+		}
+		calendarHoverDate = null;
+		if (!calendarLockedDate) {
+			const today = localToday();
+			calendarLockedDate = today;
+			setCalendarMonthFromDate(today);
+		}
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) {
+			calendarDidInitialScroll = false;
+			return;
+		}
+		if (calendarDidInitialScroll) return;
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const targetDate = localToday();
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === targetDate)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex = Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop);
+			calendarDidInitialScroll = true;
+		});
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!viewerId) return;
+		if (!calendarSummaryTarget) return;
+		if (calendarSummaryTarget === calendarSummaryDate && calendarSummary) return;
+		void loadCalendarSummary(calendarSummaryTarget);
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		if (!calendarPreviewDate) return;
+		if (calendarScrollDirection === 0) return;
+		const direction = calendarScrollDirection;
+		calendarScrollDirection = 0;
+		requestAnimationFrame(() => {
+			scrollCalendarRowIfNeeded(calendarPreviewDate, direction);
+		});
+	});
 
 	function formatDaysUntilText(days: number | null) {
 		if (days === null) return null;
@@ -130,35 +384,847 @@
 		return `${Math.abs(days)} days overdue`;
 	}
 
-	async function handleCreateGoal(event?: Event) {
-		event?.preventDefault();
-		if (!viewerId) return;
-		const title = newGoalTitle.trim();
-		if (!title || !newGoalDueDate) return;
-		isCreatingGoal = true;
-		try {
-			const { data, error } = await supabase
-				.from('goals')
-				.insert({
-					user_id: viewerId,
-					title,
-					due_date: newGoalDueDate,
-					created_at: formatLocalTimestamp(new Date())
-				})
-				.select('title, due_date')
-				.single();
-			if (error) throw error;
-			activeGoal = {
-				title: (data.title ?? title).trim(),
-				due_date: data.due_date as string
-			};
-			newGoalTitle = '';
-			newGoalDueDate = '';
-		} catch (error) {
-			console.error('goal create error', error);
-		} finally {
-			isCreatingGoal = false;
+	function togglePinnedGoal(goalKey: GoalRotationKey) {
+		if (pinnedGoalKey === goalKey) {
+			pinnedGoalKey = null;
+			return;
 		}
+		pinnedGoalKey = goalKey;
+		const nextIndex = GOAL_ROTATION.findIndex((key) => key === goalKey);
+		if (nextIndex !== -1) {
+			goalRotationIndex = nextIndex;
+		}
+	}
+
+	function endOfMonthDate(year: number, monthIndex: number) {
+		return new Date(year, monthIndex + 1, 0);
+	}
+
+	function normalizeGoalKey(goalKey: string): string {
+		const trimmed = goalKey.trim().toLowerCase();
+		if (!trimmed) return trimmed;
+		if (trimmed === 'year') return 'year';
+		if (MONTH_INDEX_BY_KEY[trimmed] !== undefined) return trimmed;
+		const abbrMatch = MONTH_ABBR_BY_KEY[trimmed];
+		if (abbrMatch) return abbrMatch;
+		const weekMatch = trimmed.match(/^([a-z]{3,9})-?week(\d)$/);
+		if (weekMatch) {
+			const monthKey = weekMatch[1];
+			const weekIndex = weekMatch[2];
+			const fullMonth =
+				MONTH_INDEX_BY_KEY[monthKey] !== undefined ? monthKey : MONTH_ABBR_BY_KEY[monthKey];
+			if (fullMonth) {
+				return `${fullMonth}-week${weekIndex}`;
+			}
+		}
+		return trimmed;
+	}
+
+	function monthKeyFromNumber(month: number | null) {
+		if (!month || month < 1 || month > 12) return null;
+		return MONTHS[month - 1]?.toLowerCase() ?? null;
+	}
+
+	function goalKeyParts(goalKey: string): { month: number | null; week: number | null } {
+		if (goalKey === 'year') return { month: null, week: null };
+		const weekMatch = goalKey.match(/^([a-z]{3,9})-week(\d)$/);
+		if (weekMatch) {
+			const monthKey = normalizeGoalKey(weekMatch[1]);
+			const week = Number(weekMatch[2]);
+			const monthIndex = MONTH_INDEX_BY_KEY[monthKey];
+			return {
+				month: typeof monthIndex === 'number' ? monthIndex + 1 : null,
+				week: Number.isFinite(week) ? week : null
+			};
+		}
+		const monthIndex = MONTH_INDEX_BY_KEY[goalKey];
+		return { month: typeof monthIndex === 'number' ? monthIndex + 1 : null, week: null };
+	}
+
+	function goalDueDateForKey(goalKey: string): string {
+		if (goalKey === 'year') return formatDateString(new Date(CURRENT_YEAR, 11, 31));
+		const monthIndex = MONTH_INDEX_BY_KEY[goalKey];
+		if (typeof monthIndex === 'number') {
+			return formatDateString(endOfMonthDate(CURRENT_YEAR, monthIndex));
+		}
+		const [monthKey, weekKey] = goalKey.split('-week');
+		const weekIndex = weekKey ? Number(weekKey) : Number.NaN;
+		const weekMonthIndex = MONTH_INDEX_BY_KEY[monthKey];
+		if (typeof weekMonthIndex === 'number' && Number.isFinite(weekIndex)) {
+			const lastDay = endOfMonthDate(CURRENT_YEAR, weekMonthIndex).getDate();
+			const cappedWeek = Math.min(4, Math.max(1, weekIndex));
+			const day = Math.min(lastDay, cappedWeek * 7);
+			return formatDateString(new Date(CURRENT_YEAR, weekMonthIndex, day));
+		}
+		return formatDateString(new Date(CURRENT_YEAR, 11, 31));
+	}
+
+	function mergedYearEntry() {
+		return { ...YEAR_ENTRY, ...(goalsByKey.year ?? {}) };
+	}
+
+	function mergeGoal(goalKey: string): GoalEntry {
+		const existing = goalsByKey[goalKey];
+		const due_date = goalDueDateForKey(goalKey);
+		if (!existing) {
+			return { id: null, title: '', goal_key: goalKey, due_date };
+		}
+		return {
+			id: existing.id,
+			title: existing.title,
+			goal_key: goalKey,
+			due_date: existing.due_date ?? due_date
+		};
+	}
+
+	function heatmapColorClass(pct: number | null) {
+		if (pct === null || Number.isNaN(pct)) return 'bg-white';
+		if (pct >= 75) return 'bg-green-800';
+		if (pct >= 50) return 'bg-green-500';
+		if (pct >= 25) return 'bg-green-200';
+		return 'bg-white';
+	}
+
+	const CALENDAR_WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+	const SUMMARY_CATEGORY_COLORS: Record<SummaryCategoryKey, string> = {
+		admin: 'var(--summary-admin)',
+		body: 'var(--summary-body)',
+		rest: 'var(--summary-rest)',
+		work: 'var(--summary-work)',
+		bad: 'var(--summary-bad)'
+	};
+	const SUMMARY_CATEGORY_CLASSES: Record<SummaryCategoryKey, string> = {
+		admin: 'text-amber-900/30',
+		body: 'text-rose-300',
+		rest: 'text-violet-300',
+		work: 'text-slate-300',
+		bad: 'text-rose-500'
+	};
+
+	function formatProductiveHours(value: number) {
+		const rounded = Math.round(value * 10) / 10;
+		return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+	}
+
+	function summaryScoreColor(score: number) {
+		if (score >= 75) return 'bg-emerald-700';
+		if (score >= 50) return 'bg-emerald-500';
+		if (score >= 25) return 'bg-emerald-300';
+		return 'bg-stone-500';
+	}
+
+	function summaryPieStyle(summary: SummaryStats | null) {
+		if (!summary) return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		let offset = 0;
+		const segments = summary.categoryBreakdown
+			.filter((entry) => entry.percent > 0)
+			.map((entry) => {
+				const start = offset;
+				offset += entry.percent;
+				const color = SUMMARY_CATEGORY_COLORS[entry.key] ?? 'var(--summary-empty)';
+				return `${color} ${start}% ${offset}%`;
+			});
+		if (segments.length === 0) {
+			return 'background: conic-gradient(var(--summary-empty) 0% 100%);';
+		}
+		return `background: conic-gradient(${segments.join(', ')});`;
+	}
+
+	function computeSummaryStats(
+		hours: { title: string | null; status: boolean | null; category: string | null }[],
+		habitCompleted = 0
+	): SummaryStats {
+		let planned = 0;
+		let completed = 0;
+		const categoryCounts: Record<SummaryCategoryKey, number> = {
+			body: 0,
+			rest: 0,
+			work: 0,
+			admin: 0,
+			bad: 0
+		};
+		for (const row of hours) {
+			const title = (row.title ?? '').trim();
+			const category = row.category as SummaryCategoryKey | null;
+			if (title.length > 0) planned += 1;
+			if (title.length > 0 && row.status !== false) completed += 1;
+			if (title.length > 0 && category) {
+				categoryCounts[category] += 1;
+			}
+		}
+		const totalCategories = Object.values(categoryCounts).reduce((sum, value) => sum + value, 0);
+		const totalCompleted = completed + habitCompleted;
+		const categoryBreakdown: SummaryCategory[] = (
+			[
+				{ key: 'body', label: 'Body' },
+				{ key: 'rest', label: 'Rest' },
+				{ key: 'work', label: 'Work' },
+				{ key: 'admin', label: 'Admin' },
+				{ key: 'bad', label: 'Bad' }
+			] as const
+		).map((entry) => ({
+			...entry,
+			percent:
+				totalCategories === 0 ? 0 : Math.round((categoryCounts[entry.key] / totalCategories) * 100),
+			hours: Math.round((categoryCounts[entry.key] / 2) * 10) / 10
+		}));
+		const score = Math.max(
+			0,
+			Math.min(100, Math.round((totalCompleted / TOTAL_BLOCKS_PER_DAY) * 100))
+		);
+		return {
+			planned,
+			completed: totalCompleted,
+			productiveHours: totalCompleted / 2,
+			score,
+			categoryBreakdown
+		};
+	}
+
+	function buildCalendarWeeks(year: number, monthIndex: number) {
+		const firstDay = new Date(year, monthIndex, 1);
+		const firstWeekday = (firstDay.getDay() + 6) % 7;
+		const start = new Date(firstDay);
+		start.setDate(firstDay.getDate() - firstWeekday);
+		const end = new Date(start);
+		end.setDate(start.getDate() + 6 * 7 - 1);
+		const weeks: Date[][] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push(days);
+		}
+		return weeks;
+	}
+
+	function buildCalendarWeekRange(baseDateStr: string, monthsCount: number) {
+		const parsed = parseLocalDate(baseDateStr) ?? new Date();
+		const startMonth = new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+		const startWeekday = (startMonth.getDay() + 6) % 7;
+		const start = new Date(startMonth);
+		start.setDate(startMonth.getDate() - startWeekday);
+		const lastMonth = new Date(startMonth);
+		lastMonth.setMonth(startMonth.getMonth() + monthsCount - 1);
+		const lastDay = new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0);
+		const lastWeekday = (lastDay.getDay() + 6) % 7;
+		const end = new Date(lastDay);
+		end.setDate(lastDay.getDate() + (6 - lastWeekday));
+		const weeks: Date[][] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push(days);
+		}
+		return weeks;
+	}
+
+	function monthsUntilEndOfYear(baseDateStr: string) {
+		const parsed = parseLocalDate(baseDateStr) ?? new Date();
+		const monthIndex = parsed.getMonth();
+		return Math.max(1, 12 - monthIndex);
+	}
+
+	function chunkWeeks(weeks: Date[][], chunkSize: number) {
+		const groups: Date[][][] = [];
+		for (let i = 0; i < weeks.length; i += chunkSize) {
+			groups.push(weeks.slice(i, i + chunkSize));
+		}
+		return groups;
+	}
+
+	function calendarGroupMonthInfo(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number };
+		const totals = new Map<string, MonthTally>();
+
+		for (const week of group) {
+			for (const day of week) {
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
+			}
+		}
+
+		let best: MonthTally | null = null;
+		for (const entry of totals.values()) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+
+		if (best) {
+			return { monthIndex: best.monthIndex, year: best.year };
+		}
+
+		const fallbackDay = group[Math.floor(group.length / 2)]?.[3] ?? group[0]?.[0];
+		if (!fallbackDay) {
+			return { monthIndex: calendarMonthIndex, year: calendarYear };
+		}
+		return { monthIndex: fallbackDay.getMonth(), year: fallbackDay.getFullYear() };
+	}
+
+	function calendarGroupMonthTotals(group: Date[][]) {
+		type MonthTally = { monthIndex: number; year: number; dayCount: number; rowCount: number };
+		const totals = new Map<string, MonthTally>();
+		for (const week of group) {
+			const weekMonths = new Set<string>();
+			for (const day of week) {
+				const key = `${day.getFullYear()}-${day.getMonth()}`;
+				const entry = totals.get(key) ?? {
+					monthIndex: day.getMonth(),
+					year: day.getFullYear(),
+					dayCount: 0,
+					rowCount: 0
+				};
+				entry.dayCount += 1;
+				totals.set(key, entry);
+				weekMonths.add(key);
+			}
+			for (const key of weekMonths) {
+				const entry = totals.get(key);
+				if (entry) entry.rowCount += 1;
+			}
+		}
+		return Array.from(totals.values()).sort((a, b) => {
+			if (a.year !== b.year) return a.year - b.year;
+			return a.monthIndex - b.monthIndex;
+		});
+	}
+
+	function calendarGroupLabel(group: Date[][]) {
+		const info = calendarGroupMonthInfo(group);
+		return `${MONTHS[info.monthIndex] ?? MONTHS[0]} ${info.year}`;
+	}
+
+	function addDaysToDateString(dateStr: string, days: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		parsed.setDate(parsed.getDate() + days);
+		return formatDateString(parsed);
+	}
+
+	function addMonthsToDateString(dateStr: string, months: number) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return localToday();
+		const day = parsed.getDate();
+		parsed.setMonth(parsed.getMonth() + months);
+		if (parsed.getDate() !== day) {
+			parsed.setDate(0);
+		}
+		return formatDateString(parsed);
+	}
+
+	function handleHeatmapWheel(event: WheelEvent) {
+		if (!heatmapScrollEl) return;
+		const rect = heatmapScrollEl.getBoundingClientRect();
+		if (
+			event.clientX < rect.left ||
+			event.clientX > rect.right ||
+			event.clientY < rect.top ||
+			event.clientY > rect.bottom
+		) {
+			return;
+		}
+		if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+		if (heatmapScrollEl.scrollWidth <= heatmapScrollEl.clientWidth) return;
+		heatmapScrollEl.scrollLeft += event.deltaY;
+		event.preventDefault();
+	}
+
+	function showHeatmapTooltip(event: MouseEvent, label: string) {
+		heatmapTooltip = {
+			text: label,
+			x: event.clientX,
+			y: event.clientY - 10,
+			visible: true
+		};
+	}
+
+	function moveHeatmapTooltip(event: MouseEvent) {
+		if (!heatmapTooltip.visible) return;
+		heatmapTooltip = {
+			...heatmapTooltip,
+			x: event.clientX,
+			y: event.clientY - 10
+		};
+	}
+
+	function hideHeatmapTooltip() {
+		heatmapTooltip = { ...heatmapTooltip, visible: false };
+	}
+
+	function setCalendarMonthFromDate(dateStr: string) {
+		const parsed = parseLocalDate(dateStr);
+		if (!parsed) return;
+		calendarMonthIndex = parsed.getMonth();
+		calendarYear = parsed.getFullYear();
+	}
+
+	async function loadCalendarSummary(dateStr: string) {
+		if (!viewerId) return;
+		const requestId = (calendarSummaryRequestId += 1);
+		calendarSummaryLoading = true;
+		calendarSummaryDate = dateStr;
+		calendarSummaryLabel = heatmapDateLabel(dateStr);
+		try {
+			let habitCompleted = 0;
+			const { data: habitRows, error: habitError } = await supabase
+				.from('habit_day_status')
+				.select('completed')
+				.eq('user_id', viewerId)
+				.eq('day', dateStr)
+				.eq('completed', true);
+			if (habitError) throw habitError;
+			habitCompleted = (habitRows ?? []).length;
+
+			const { data: dayRow, error: dayError } = await supabase
+				.from('days')
+				.select('id')
+				.eq('user_id', viewerId)
+				.eq('date', dateStr)
+				.maybeSingle();
+			if (dayError) throw dayError;
+			let rows: { title: string | null; status: boolean | null; category: string | null }[] = [];
+			if (dayRow?.id) {
+				const { data: hoursRows, error: hoursError } = await supabase
+					.from('hours')
+					.select('title, status, category')
+					.eq('day_id', dayRow.id as string);
+				if (hoursError) throw hoursError;
+				rows = (hoursRows ?? []) as typeof rows;
+			}
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats(rows, habitCompleted);
+		} catch (error) {
+			console.error('calendar summary load error', error);
+			if (requestId !== calendarSummaryRequestId) return;
+			calendarSummary = computeSummaryStats([], 0);
+		} finally {
+			if (requestId === calendarSummaryRequestId) {
+				calendarSummaryLoading = false;
+			}
+		}
+	}
+
+	function handleCalendarHover(dateStr: string, event?: MouseEvent) {
+		calendarHoverDate = dateStr;
+		if (event) {
+			calendarHoverPosition = { x: event.clientX + 16, y: event.clientY + 16 };
+		}
+	}
+
+	function updateCalendarHoverPosition(event: MouseEvent) {
+		if (!calendarHoverDate) return;
+		calendarHoverPosition = { x: event.clientX + 16, y: event.clientY + 16 };
+	}
+
+	function clearCalendarHover() {
+		calendarHoverDate = null;
+		calendarHoverPosition = null;
+	}
+
+	function handleCalendarSelect(dateStr: string, options?: { syncMonth?: boolean }) {
+		const syncMonth = options?.syncMonth ?? true;
+		calendarLockedDate = dateStr;
+		calendarHoverDate = null;
+		calendarHoverPosition = null;
+		if (syncMonth) {
+			setCalendarMonthFromDate(dateStr);
+		}
+		activeDayDateStore.set(dateStr);
+	}
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		calendarGroupObserver?.disconnect();
+		const groups = calendarGroupEls.filter(Boolean) as HTMLDivElement[];
+		if (!groups.length) return;
+		calendarGroupObserver = new IntersectionObserver(
+			(entries) => {
+				let best: IntersectionObserverEntry | null = null;
+				for (const entry of entries) {
+					if (!best || entry.intersectionRatio > best.intersectionRatio) {
+						best = entry;
+					}
+				}
+				if (!best) return;
+				const indexAttr = best.target.getAttribute('data-group');
+				if (indexAttr === null) return;
+				const index = Number(indexAttr);
+				if (Number.isNaN(index)) return;
+				calendarActiveGroupIndex = index;
+			},
+			{
+				root: calendarScrollEl,
+				threshold: [0.3, 0.6, 0.9]
+			}
+		);
+		for (const group of groups) {
+			calendarGroupObserver.observe(group);
+		}
+		return () => {
+			calendarGroupObserver?.disconnect();
+		};
+	});
+
+	$effect(() => {
+		if (!heatmapOpen) return;
+		if (!calendarScrollEl) return;
+		const readyWeeks = calendarWeekEls.filter(Boolean).length;
+		if (!readyWeeks) return;
+		updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop);
+		const handleScroll = () => {
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+			}
+			calendarScrollSnapTimer = window.setTimeout(() => {
+				calendarScrollSnapTimer = null;
+				if (!calendarScrollEl) return;
+				updateCalendarVisibleMonthFromScroll(calendarScrollEl.scrollTop, 'Calendar snap', {
+					source: 'scroll-end'
+				});
+			}, 120);
+		};
+		calendarScrollEl.addEventListener('scroll', handleScroll, { passive: true });
+		return () => {
+			calendarScrollEl?.removeEventListener('scroll', handleScroll);
+			if (calendarScrollSnapTimer !== null) {
+				window.clearTimeout(calendarScrollSnapTimer);
+				calendarScrollSnapTimer = null;
+			}
+		};
+	});
+
+	function calendarRowStep() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		const weekEl = weekEls[0];
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const step = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		return step > 0 ? step : null;
+	}
+
+	function calendarBaseOffset() {
+		const weekEls = calendarWeekEls.filter(Boolean) as HTMLDivElement[];
+		if (!weekEls.length) return null;
+		return weekEls[0].offsetTop;
+	}
+
+	function updateCalendarVisibleMonthFromScroll(
+		scrollTop: number,
+		logLabel?: string,
+		meta?: Record<string, number | string>
+	) {
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const maxStart = Math.max(0, calendarWeekRange.length - 1);
+		const startIndex = Math.max(0, Math.min(maxStart, Math.round((scrollTop - baseOffset) / step)));
+		const countStartIndex = Math.min(maxStart, startIndex + 1);
+		const groupWeeks = calendarWeekRange.slice(countStartIndex, countStartIndex + 6);
+		if (!groupWeeks.length) return;
+		const totals = calendarGroupMonthTotals(groupWeeks);
+		let best: { monthIndex: number; year: number; dayCount: number } | null = null;
+		for (const entry of totals) {
+			if (!best || entry.dayCount > best.dayCount) {
+				best = entry;
+			}
+		}
+		calendarVisibleMonth = best ? { monthIndex: best.monthIndex, year: best.year } : null;
+		if (logLabel) {
+			console.log(
+				logLabel,
+				{ ...meta, startIndex, scrollTop, step },
+				totals.map(
+					(entry) =>
+						`${MONTHS[entry.monthIndex] ?? entry.monthIndex} ${entry.year}: rows ${entry.rowCount}, days ${entry.dayCount}`
+				)
+			);
+		}
+	}
+
+	function moveSelectedByDays(days: number) {
+		const baseDate = calendarPreviewDate ?? activeDayDate;
+		calendarScrollDirection = days > 0 ? 1 : -1;
+		handleCalendarSelect(addDaysToDateString(baseDate, days), { syncMonth: false });
+	}
+
+	function moveSelectedByWeeks(weeks: number) {
+		moveSelectedByDays(weeks * 7);
+	}
+
+	function moveSelectedByMonths(months: number) {
+		const baseDate = calendarPreviewDate ?? activeDayDate;
+		handleCalendarSelect(addMonthsToDateString(baseDate, months));
+	}
+
+	function disableCalendarSnap() {
+		if (!calendarScrollEl) return;
+		const previous = calendarScrollEl.style.scrollSnapType;
+		calendarScrollEl.style.scrollSnapType = 'none';
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.style.scrollSnapType = previous;
+		});
+	}
+
+	function scrollCalendarToDate(dateStr: string, options?: { align?: 'top' | 'nearby' }) {
+		if (!calendarScrollEl) return;
+		const step = calendarRowStep();
+		const baseOffset = calendarBaseOffset();
+		if (!step || baseOffset === null) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const alignedIndex =
+			options?.align === 'top' ? Math.max(0, weekIndex - 1) : Math.max(0, weekIndex - 1);
+		const nextTop = Math.min(Math.max(baseOffset + alignedIndex * step, 0), maxTop);
+		disableCalendarSnap();
+		calendarAutoScroll = true;
+		calendarScrollEl.scrollTop = nextTop;
+		requestAnimationFrame(() => {
+			if (!calendarScrollEl) return;
+			calendarScrollEl.scrollTop = nextTop;
+			updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar jump', {
+				source: 'today-key'
+			});
+			window.setTimeout(() => {
+				calendarAutoScroll = false;
+			}, 120);
+		});
+	}
+
+	function scrollCalendarRowIfNeeded(dateStr: string, direction: 1 | -1) {
+		if (!calendarScrollEl) return;
+		const weekIndex = calendarWeekRange.findIndex((week) =>
+			week.some((day) => formatDateString(day) === dateStr)
+		);
+		if (weekIndex === -1) return;
+		const weekEl = calendarWeekEls[weekIndex];
+		if (!weekEl) return;
+		if (calendarAutoScroll) return;
+		const currentTop = calendarScrollEl.scrollTop;
+		const maxTop = calendarScrollEl.scrollHeight - calendarScrollEl.clientHeight;
+		const gapValue = Number.parseFloat(getComputedStyle(weekEl.parentElement ?? weekEl).gap || '0');
+		const rowStep = weekEl.offsetHeight + (Number.isFinite(gapValue) ? gapValue : 0);
+		const baseOffset = calendarBaseOffset();
+		if (baseOffset === null) return;
+		const firstVisibleIndex = Math.round((currentTop - baseOffset) / rowStep) + 1;
+		if (!Number.isFinite(firstVisibleIndex)) return;
+		const lastVisibleIndex = Math.min(calendarWeekEls.length - 1, firstVisibleIndex + 5);
+		if (direction > 0 && weekIndex > lastVisibleIndex) {
+			const nextTop = Math.min(currentTop + rowStep, maxTop);
+			if (nextTop - currentTop > 0.5) {
+				disableCalendarSnap();
+				calendarAutoScroll = true;
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'down',
+					weekIndex
+				});
+				window.setTimeout(() => {
+					calendarAutoScroll = false;
+				}, 120);
+			}
+			return;
+		}
+		if (direction < 0 && weekIndex < firstVisibleIndex) {
+			const nextTop = Math.max(currentTop - rowStep, 0);
+			if (currentTop - nextTop > 0.5) {
+				disableCalendarSnap();
+				calendarAutoScroll = true;
+				calendarScrollEl.scrollTop = nextTop;
+				updateCalendarVisibleMonthFromScroll(nextTop, 'Calendar snap', {
+					direction: 'up',
+					weekIndex
+				});
+				window.setTimeout(() => {
+					calendarAutoScroll = false;
+				}, 120);
+			}
+		}
+	}
+
+	function buildHeatmapWeeks() {
+		const today = new Date();
+		const year = today.getFullYear();
+		const start = new Date(year, 0, 1);
+		const end = new Date(year, 11, 31);
+		const startDay = start.getDay();
+		start.setDate(start.getDate() - startDay);
+		const endDay = end.getDay();
+		end.setDate(end.getDate() + (6 - endDay));
+		const weeks: { days: Date[] }[] = [];
+		let cursor = new Date(start);
+		while (cursor <= end) {
+			const days: Date[] = [];
+			for (let i = 0; i < 7; i += 1) {
+				days.push(new Date(cursor));
+				cursor.setDate(cursor.getDate() + 1);
+			}
+			weeks.push({ days });
+		}
+		return weeks;
+	}
+
+	const heatmapWeeks = $derived(buildHeatmapWeeks());
+	const heatmapMonthLabels = $derived(
+		heatmapWeeks.map((week) => {
+			const firstDay = week.days[0];
+			return firstDay.getDate() <= 7
+				? firstDay.toLocaleDateString(undefined, { month: 'short' })
+				: '';
+		})
+	);
+
+	function mergedMonthStructure() {
+		return MONTH_STRUCTURE.map((month) => ({
+			...month,
+			goal: mergeGoal(month.key),
+			weeks: month.weeks.map((week) => ({
+				...week,
+				goal: mergeGoal(week.key)
+			}))
+		}));
+	}
+
+	function openGoalModal(forceOpen = false) {
+		if (forceOpen) {
+			if (!isGoalModalOpen) {
+				isGoalModalOpen = true;
+			}
+			heatmapOpen = false;
+			return;
+		}
+		const nextOpen = !isGoalModalOpen;
+		isGoalModalOpen = nextOpen;
+		if (nextOpen) {
+			heatmapOpen = false;
+		} else {
+			void saveAllGoals();
+		}
+	}
+
+	function closeGoalModal() {
+		isGoalModalOpen = false;
+	}
+
+	function resetNavG() {
+		pendingNavG = false;
+		if (navGTimeout !== null) {
+			window.clearTimeout(navGTimeout);
+			navGTimeout = null;
+		}
+	}
+
+	function updateGoalDraft(goalKey: string, value: string) {
+		const existing = goalsByKey[goalKey] ?? mergeGoal(goalKey);
+		goalsByKey = {
+			...goalsByKey,
+			[goalKey]: {
+				...existing,
+				title: value,
+				goal_key: goalKey
+			}
+		};
+	}
+
+	function handleGoalKeydown(goalKey: string, event: KeyboardEvent) {
+		if (event.key !== 'Enter') return;
+		event.preventDefault();
+		void saveGoal(goalKey);
+		(event.currentTarget as HTMLInputElement).blur();
+	}
+
+	async function saveGoal(goalKey: string) {
+		if (!viewerId) return;
+		const entry = goalsByKey[goalKey] ?? mergeGoal(goalKey);
+		if (!entry.title.trim()) return;
+		const dueDate = goalDueDateForKey(goalKey);
+		const parts = goalKeyParts(goalKey);
+		savingGoals = { ...savingGoals, [goalKey]: true };
+		try {
+			let existingId: string | null = null;
+			let lookup = supabase
+				.from('goals')
+				.select('id')
+				.eq('user_id', viewerId)
+				.eq('year', CURRENT_YEAR);
+			if (parts.month) {
+				lookup = lookup.eq('month', parts.month);
+			} else {
+				lookup = lookup.is('month', null);
+			}
+			if (parts.week) {
+				lookup = lookup.eq('week', parts.week);
+			} else {
+				lookup = lookup.is('week', null);
+			}
+			const { data: existing, error: lookupError } = await lookup.maybeSingle();
+			if (lookupError) throw lookupError;
+			existingId = (existing?.id as string | null) ?? null;
+
+			const payload = {
+				user_id: viewerId,
+				year: CURRENT_YEAR,
+				month: parts.month,
+				week: parts.week,
+				goal_key: goalKey,
+				title: entry.title.trim(),
+				due_date: dueDate,
+				created_at: formatLocalTimestamp(new Date())
+			};
+
+			const { data, error } = existingId
+				? await supabase
+						.from('goals')
+						.update(payload)
+						.eq('id', existingId)
+						.select('id, title, goal_key, due_date')
+						.single()
+				: await supabase
+						.from('goals')
+						.insert(payload)
+						.select('id, title, goal_key, due_date')
+						.single();
+			if (error) throw error;
+			if (data) {
+				goalsByKey = {
+					...goalsByKey,
+					[goalKey]: {
+						id: data.id as string,
+						title: (data.title ?? '').trim(),
+						goal_key: (data.goal_key ?? goalKey).toString(),
+						due_date: (data.due_date as string | null) ?? dueDate
+					}
+				};
+			}
+		} catch (error) {
+			console.error('goal save error', error);
+		} finally {
+			savingGoals = { ...savingGoals, [goalKey]: false };
+		}
+	}
+
+	async function saveAllGoals() {
+		const keys = Object.keys(goalsByKey);
+		if (keys.length === 0) return;
+		await Promise.all(keys.map((key) => saveGoal(key)));
 	}
 
 	function updateTrackedPlayersFromPeople(list: Person[]) {
@@ -176,14 +1242,14 @@
 		trackedDisplays = next;
 	}
 
-	function emptyHistoryRecord(): Record<TrackedPlayerKey, number | null> {
+	function emptyHistoryRecord(): Record<TrackedPlayerKey, number> {
 		return TRACKED_PLAYERS.reduce(
 			(acc, player) => ({ ...acc, [player.key]: null }),
-			{} as Record<TrackedPlayerKey, number | null>
+			{} as Record<TrackedPlayerKey, number>
 		);
 	}
 
-	function combinedPercent(values: Record<TrackedPlayerKey, number | null>): number {
+	function combinedPercent(values: Record<TrackedPlayerKey, number>): number {
 		const percents = TRACKED_PLAYERS.map((player) => values[player.key]).filter(
 			(pct): pct is number => typeof pct === 'number'
 		);
@@ -265,7 +1331,7 @@
 
 			const { data: hoursRows, error: hoursErr } = await supabase
 				.from('hours')
-				.select('day_id, hour, half, title, todo')
+				.select('day_id, hour, half, title, status, category')
 				.in('day_id', dayIds);
 			if (hoursErr) throw hoursErr;
 
@@ -279,14 +1345,18 @@
 				const hour = Number(row.hour);
 				const half = ((row.half as boolean) ? 1 : 0) as 0 | 1;
 				const title = (row.title as string | null) ?? '';
-				const todo = row.todo as boolean | null;
+				const status = row.status as boolean | null;
+				const category = (row.category as string | null) ?? null;
+
 				if (!dayId || Number.isNaN(hour)) continue;
 				const key = dayToKey.get(dayId);
 				if (!key) continue;
 				if (!blockIsDue(hour, half, currentHour, currentHalf)) continue;
+				if (category === 'bad') continue;
 				const trimmed = title.trim();
-				// todo === false means explicitly incomplete
-				const isComplete = todo === false ? false : trimmed.length > 0 || todo === true;
+				// status === false means explicitly in progress
+				const isComplete = status === false ? false : trimmed.length > 0 || status === true;
+
 				if (!isComplete) continue;
 				filledCounts[key] += 1;
 			}
@@ -297,7 +1367,7 @@
 					const pct = blocksDue > 0 ? Math.round((filled / blocksDue) * 100) : null;
 					return { ...acc, [player.key]: pct };
 				},
-				{} as Record<TrackedPlayerKey, number | null>
+				{} as Record<TrackedPlayerKey, number>
 			);
 
 			currentCombinedPct = combinedPercent(percentageValues);
@@ -332,7 +1402,7 @@
 				.order('date', { ascending: false });
 			if (error) throw error;
 
-			const rows = new Map<string, Record<TrackedPlayerKey, number | null>>();
+			const rows = new Map<string, Record<TrackedPlayerKey, number>>();
 			for (const row of data ?? []) {
 				const date = (row.date as string | null) ?? null;
 				const userId = (row.user_id as string | null) ?? null;
@@ -378,51 +1448,85 @@
 		}
 	}
 
-	async function loadActiveGoal(userId: string | null) {
-		if (!userId) {
-			activeGoal = null;
+	async function loadGoals() {
+		if (!viewerId) {
+			goalsByKey = {};
 			return;
 		}
 		try {
 			const { data, error } = await supabase
 				.from('goals')
-				.select('title, due_date')
-				.order('due_date', { ascending: true })
-				.limit(1)
-				.maybeSingle();
-			if (error) {
-				if (error.code === 'PGRST116') {
-					activeGoal = null;
-					return;
-				}
-				throw error;
+				.select('id, title, goal_key, due_date, year, month, week')
+				.eq('user_id', viewerId)
+				.eq('year', CURRENT_YEAR);
+			if (error) throw error;
+			const next: Record<string, GoalEntry> = {};
+			for (const row of data ?? []) {
+				const rawKey = (row.goal_key as string | null) ?? '';
+				const month = (row.month as number | null) ?? null;
+				const week = (row.week as number | null) ?? null;
+				const computedKey = (() => {
+					if (!month && !week) return 'year';
+					const monthKey = monthKeyFromNumber(month);
+					if (!monthKey) return rawKey || 'year';
+					if (!week) return monthKey;
+					return `${monthKey}-week${week}`;
+				})();
+				const goalKey = normalizeGoalKey(rawKey || computedKey);
+				next[goalKey] = {
+					id: row.id as string,
+					title: (row.title ?? '').trim(),
+					goal_key: goalKey,
+					due_date: (row.due_date as string | null) ?? goalDueDateForKey(goalKey)
+				};
 			}
-			activeGoal = data
-				? { title: (data.title ?? '').trim(), due_date: data.due_date as string }
-				: null;
+			goalsByKey = next;
 		} catch (error) {
 			console.error('goal load error', error);
-			activeGoal = null;
+			goalsByKey = {};
 		}
 	}
 
-	let presenceCounts = $state({ tabs: 0, unique: 0, connected: false });
-
-	$effect(() => {
-		if (!browser) {
-			presenceCounts = { tabs: 0, unique: 0, connected: false };
+	async function loadHeatmap(userId: string | null) {
+		if (!userId) {
+			heatmapByDate = {};
+			heatmapStore.set({ userId: null, byDate: {}, loading: false });
 			return;
 		}
-		const unsubscribe = store.subscribe((v) => {
-			presenceCounts = v;
-			presenceCountsStore.set(v);
-		});
-		return () => unsubscribe();
-	});
+		heatmapLoading = true;
+		heatmapStore.set({ userId, byDate: heatmapByDate, loading: true });
+		const lookbackStart = dateStringNDaysAgo(HEATMAP_LOOKBACK_DAYS);
+		try {
+			const next = await fetchCompletionByDate(
+				supabase,
+				userId,
+				lookbackStart,
+				TOTAL_BLOCKS_PER_DAY,
+				HEATMAP_HOURS_BATCH_SIZE
+			);
+
+			heatmapByDate = next;
+			heatmapStore.set({ userId, byDate: next, loading: false });
+		} catch (error) {
+			console.error('heatmap load error', error);
+			heatmapByDate = {};
+			heatmapStore.set({ userId, byDate: {}, loading: false });
+		} finally {
+			heatmapLoading = false;
+		}
+	}
 
 	onMount(() => {
 		let mounted = true;
 		let currentProgressInterval: number | null = null;
+		let authSubscription: { unsubscribe: () => void } | null = null;
+		let goalRotationInterval: number | null = null;
+		const refreshHeatmap = () => {
+			if (!viewerId) return;
+			void loadHeatmap(viewerId);
+		};
+		const goalRotationIntervalMs = 10000;
+		let lastGoalRotationAt = Date.now();
 
 		const init = async () => {
 			let authUser: User | null = null;
@@ -430,64 +1534,239 @@
 				const { data } = await supabase.auth.getUser();
 				if (!mounted) return;
 				authUser = data.user ?? null;
-				applyUser(authUser);
-				authSet = authUser ? true : false;
-				authSetStore.set(authSet);
+				applyAuthState(authUser);
 			} catch {
 				if (!mounted) return;
-				applyUser(null);
-				authSet = false;
-				authSetStore.set(authSet);
+				applyAuthState(null);
 				authUser = null;
 			}
 			if (!mounted) return;
-			await loadActiveGoal(authUser?.id ?? null);
+			await loadGoals();
+			const serverHeatmap = $page.data?.heatmapByDate as Record<string, number> | null | undefined;
+			const serverHeatmapUserId = $page.data?.heatmapUserId as string | null | undefined;
+			if (authUser && serverHeatmap && serverHeatmapUserId === authUser.id) {
+				heatmapByDate = serverHeatmap;
+				heatmapLoading = false;
+				heatmapStore.set({ userId: authUser.id, byDate: serverHeatmap, loading: false });
+			} else {
+				await loadHeatmap(authUser?.id ?? null);
+			}
 			await refreshTrackedPlayers();
 		};
 
 		void init();
 
-		const { data: authListener } = supabase.auth.onAuthStateChange((_event, authSession) => {
+		const { data } = supabase.auth.onAuthStateChange((_event, session) => {
 			if (!mounted) return;
-			const u = authSession?.user ?? null;
-			applyUser(u);
-			authSet = u ? true : false;
-			authSetStore.set(authSet);
-			void loadActiveGoal(u?.id ?? null);
-			void refreshCurrentCombined();
+			const nextUser = session?.user ?? null;
+			applyAuthState(nextUser);
+			void loadGoals();
+			void loadHeatmap(nextUser?.id ?? null);
+			void refreshTrackedPlayers();
 		});
+		authSubscription = data.subscription;
+
+		window.addEventListener(HEATMAP_REFRESH_EVENT, refreshHeatmap);
 
 		currentProgressInterval = window.setInterval(() => {
 			void refreshCurrentCombined();
 		}, CURRENT_PROGRESS_POLL_MS);
 
-		const handleDocumentClick = (event: MouseEvent) => {
-			if (!dayHistoryOpen || !dateMenuEl) return;
-			if (!dateMenuEl.contains(event.target as Node)) {
-				dayHistoryOpen = false;
+		const rotateGoal = () => {
+			if (pinnedGoalKey) return;
+			if (document.visibilityState !== 'visible') return;
+			const now = Date.now();
+			if (now - lastGoalRotationAt < goalRotationIntervalMs * 0.9) return;
+			lastGoalRotationAt = now;
+			const total = GOAL_ROTATION.length;
+			if (total === 0) return;
+			goalRotationIndex = (goalRotationIndex + 1) % total;
+		};
+
+		const startGoalRotation = () => {
+			if (goalRotationInterval !== null) return;
+			lastGoalRotationAt = Date.now();
+			goalRotationInterval = window.setInterval(rotateGoal, goalRotationIntervalMs);
+		};
+
+		const stopGoalRotation = () => {
+			if (goalRotationInterval === null) return;
+			window.clearInterval(goalRotationInterval);
+			goalRotationInterval = null;
+		};
+
+		const handleGoalVisibility = () => {
+			if (document.visibilityState === 'visible') {
+				startGoalRotation();
+			} else {
+				stopGoalRotation();
 			}
 		};
+
+		handleGoalVisibility();
+		document.addEventListener('visibilitychange', handleGoalVisibility);
+		window.addEventListener('focus', handleGoalVisibility);
+		window.addEventListener('blur', handleGoalVisibility);
+
 		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape' && dayHistoryOpen) {
-				dayHistoryOpen = false;
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				const tag = target.tagName?.toLowerCase();
+				if (tag === 'input' || tag === 'textarea' || target.isContentEditable) return;
+			}
+			const normalized = event.key.toLowerCase();
+			if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+				if (normalized === 'o') {
+					pendingNavG = true;
+					if (navGTimeout !== null) window.clearTimeout(navGTimeout);
+					navGTimeout = window.setTimeout(() => {
+						pendingNavG = false;
+						navGTimeout = null;
+					}, 900);
+					return;
+				}
+				if (pendingNavG && normalized === 'g') {
+					openGoalModal();
+					resetNavG();
+					event.preventDefault();
+					return;
+				}
+			}
+			if (pendingNavG) resetNavG();
+			if (event.key === 'Escape' && heatmapOpen) {
+				heatmapOpen = false;
+				return;
+			}
+			if (event.key === 'Escape' && isGoalModalOpen) {
+				isGoalModalOpen = false;
+				void saveAllGoals();
+				return;
+			}
+			if (!heatmapOpen) return;
+			let handled = true;
+			switch (normalized) {
+				case 'h':
+					moveSelectedByDays(-1);
+					break;
+				case 'l':
+					moveSelectedByDays(1);
+					break;
+				case 'j':
+					moveSelectedByWeeks(1);
+					break;
+				case 'k':
+					moveSelectedByWeeks(-1);
+					break;
+				case 'n':
+					moveSelectedByMonths(1);
+					break;
+				case 'p':
+					moveSelectedByMonths(-1);
+					break;
+				case 'enter':
+					heatmapOpen = false;
+					activeDayDateStore.set(calendarSelectedDate);
+					break;
+				default:
+					handled = false;
+			}
+			if (handled) {
+				event.preventDefault();
 			}
 		};
-		document.addEventListener('click', handleDocumentClick);
 		document.addEventListener('keydown', handleKeyDown);
 
 		return () => {
 			mounted = false;
-			authListener.subscription.unsubscribe();
-			document.removeEventListener('click', handleDocumentClick);
+			window.removeEventListener(HEATMAP_REFRESH_EVENT, refreshHeatmap);
 			document.removeEventListener('keydown', handleKeyDown);
 			if (currentProgressInterval !== null) {
 				window.clearInterval(currentProgressInterval);
 				currentProgressInterval = null;
 			}
+			document.removeEventListener('visibilitychange', handleGoalVisibility);
+			window.removeEventListener('focus', handleGoalVisibility);
+			window.removeEventListener('blur', handleGoalVisibility);
+			stopGoalRotation();
+			authSubscription?.unsubscribe();
 		};
 	});
+	$inspect(authSet);
+	$inspect($session.user);
+	$inspect(currentCombinedPct);
 
-	let { children } = $props();
+	type GoalBarEntry = {
+		displayGoalKey: GoalRotationKey;
+		displayRangeLabel: string;
+		displayGoalEntry: GoalEntry;
+		pinnedGoalKey: GoalRotationKey | null;
+		yearGoalTitle: string;
+		currentRangeLabel: string;
+		viewerId: string | null;
+	};
+
+	type GoalModalState = {
+		isOpen: boolean;
+		selectedMonthKey: string;
+		yearGoalEntry: GoalEntry;
+		monthStructure: ReturnType<typeof mergedMonthStructure>;
+	};
+
+	const goalBarStore = writable<GoalBarEntry>({
+		displayGoalKey,
+		displayRangeLabel,
+		displayGoalEntry,
+		pinnedGoalKey,
+		yearGoalTitle,
+		currentRangeLabel,
+		viewerId
+	});
+
+	setContext('goalBar', goalBarStore);
+	setContext('goalBarActions', {
+		togglePinnedGoal,
+		openGoalModal
+	});
+
+	const goalModalStore = writable<GoalModalState>({
+		isOpen: isGoalModalOpen,
+		selectedMonthKey,
+		yearGoalEntry,
+		monthStructure: mergedMonthStructure()
+	});
+
+	setContext('goalModal', goalModalStore);
+	setContext('goalModalActions', {
+		setSelectedMonthKey: (key: string) => {
+			selectedMonthKey = key;
+		},
+		updateGoalDraft,
+		handleGoalKeydown,
+		saveGoal
+	});
+
+	$effect(() => {
+		goalBarStore.set({
+			displayGoalKey,
+			displayRangeLabel,
+			displayGoalEntry,
+			pinnedGoalKey,
+			yearGoalTitle,
+			currentRangeLabel,
+			viewerId
+		});
+	});
+
+	$effect(() => {
+		goalModalStore.set({
+			isOpen: isGoalModalOpen,
+			selectedMonthKey,
+			yearGoalEntry,
+			monthStructure: mergedMonthStructure()
+		});
+	});
+
+	let { children, suppressSpectator = false, desktopMode = false } = $props();
 </script>
 
 <svelte:head>
@@ -496,99 +1775,18 @@
 	<meta name="application-name" content="founders zoo." />
 </svelte:head>
 
-{#if authSet !== true}
-	<div>
-		<nav
-			class="fixed left-0 z-67 flex h-15 w-full items-center justify-center bg-white pt-5 pb-5 select-none selection:bg-stone-600 selection:text-stone-100"
-			style="font-family: 'Cormorant Garamond', serif"
-		>
-			<a href="/" class="absolute left-5 text-xl tracking-wide text-stone-700"> founders zoo. </a>
-
-			<div class="absolute right-6 flex items-center gap-5 text-sm">
-				<a
-					href="/login"
-					class="text-stone-400 transition-colors duration-200 ease-out hover:text-stone-800"
-				>
-					create account
-				</a>
-				<a
-					href="/login"
-					class="text-stone-700 transition-colors duration-200 ease-out hover:text-stone-900"
-				>
-					log in
-				</a>
-			</div>
-		</nav>
-	</div>
-{:else if $session.user && currentCombinedPct && presenceCounts.connected}
-	<div>
-		<div
-			class="pointer-events-none fixed top-5 left-4 z-50 flex flex-col items-start"
-			bind:this={dateMenuEl}
-		>
-			<div class="pointer-events-auto relative">
-				<button
-					type="button"
-					class="flex w-23 items-center justify-center gap-2 rounded-sm px-1 text-xs text-stone-700 transition hover:bg-stone-200/50"
-					onclick={() => {
-						dayHistoryOpen = !dayHistoryOpen;
-					}}
-					aria-expanded={dayHistoryOpen}
-				>
-					<span>{todayLabel}</span>
-					<div class="w-9 text-end text-xs font-semibold text-stone-800">
-						{currentCombinedPct != null ? `${currentCombinedPct}%` : '—%'}
-					</div>
-				</button>
-				{#if dayHistoryOpen}
-					<div
-						class="absolute top-full left-0 z-50 rounded-sm bg-white text-xs text-stone-700"
-						role="dialog"
-						aria-label="Previous days completion"
-					>
-						{#if dayHistoryRows.length === 0}
-							<div class="text-sm text-stone-500">No recent history yet.</div>
-						{:else}
-							<div class="flex flex-col overflow-y-auto">
-								{#each dayHistoryRows as row}
-									{@const jointPct = combinedPercent(row.values)}
-									<div
-										class="flex w-23 items-center justify-center gap-2 rounded-sm text-xs text-stone-700 transition hover:bg-stone-200/50"
-									>
-										<span>
-											{formatDisplayDate(row.date, {
-												month: 'short',
-												day: 'numeric'
-											})}
-										</span>
-										<div class="w-9 text-end text-xs font-semibold text-stone-800">
-											{jointPct ?? '—'}%
-										</div>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{/if}
-			</div>
-		</div>
-		{#if activeGoal}
-			{@const daysRemaining = daysUntilDue(activeGoal.due_date)}
-			{@const dueLabel = formatDaysUntilText(daysRemaining)}
-			<div class="pointer-events-none fixed top-5 left-1/2 z-40 -translate-x-1/2">
-				<div
-					class="pointer-events-auto flex items-center gap-2 text-xs font-semibold tracking-wide text-stone-800 uppercase"
-				>
-					<span>{activeGoal.title || 'Goal'}</span>
-					{#if dueLabel}
-						<span class="text-xs font-semibold tracking-wide text-stone-500">
-							{dueLabel}
-						</span>
-					{/if}
-				</div>
-			</div>
-		{/if}
-	</div>
+{#if authSet == null}
+	<div></div>
+{:else if !authSet && !suppressSpectator}
+	<div></div>
 {/if}
 
-{@render children()}
+{#if desktopMode}
+	{#if authSet && $session.user}
+		{@render children()}
+	{:else}
+		<GrogathLogin />
+	{/if}
+{:else}
+	{@render children()}
+{/if}
